@@ -202,6 +202,48 @@ shrinks to: applySnap/snapToBeat/gridAnchor, autoChop/autoSliceTransients, the B
 Gate: synthetic click tracks read 120 and 90 BPM; broadband finds impulses within 20 ms; banded finds
 kicks+snares; silence-end lands on the first sound; a <8 s buffer returns 0.
 
+### 2.3/chop-workflow — snap + chop editing + blocks (DONE, pushed)
+- `core/planners/Snap.h`: applySnap / snapToTransient / snapToBeat / gridAnchor (beat grid anchored at the first
+  drum hit, folded into [0,beat); beat modes fall back to transient when bpm is unknown).
+- `Document`: analysis state (bpm + transients, set after decode) + `autoChop(n)` (equal division onto pads
+  0..n-1, one undo step), `sliceAtTime` (split the containing chop at the snapped position onto a target pad,
+  10 ms edge guard, stems carry over).
+- `core/planners/Blocks.h` + `Document.moveBlock`: blockRange / nextSlotForSource / roomAfterBlock /
+  insertPushing / planMoveBlock ported pure (blocks push aside, never overwrite; singles swap). moveBlock
+  rewrites the pad nodes + pad sources + index-keyed route/choke/group overrides from the plan's new->old map and
+  remaps every sequencer step. Gates green on all 4 CI jobs.
+
+## Phase 2 — where it stands (honest boundary, 2026-08-22)
+**DONE and CI-green on Mac arm64 + Intel + RTSan + Windows/MSVC — the engine/model/render CORE:**
+project ValueTree + round-trip of Victor's 8 real projects; undo (UndoManager, 500-deep); the pure planners with
+their TS-test parity (stem masks, trims, swing, live-landing, seq-refit, loop-render, onset/BPM/silence
+detectors, snap, blocks); the rendered crossfade LOOP on the RT sampler; disk-cached waveform peaks (0.79 ms
+cold); ProjectPlanner (patternToEvents) + ProjectRenderer ("export = what you hear"); Document editing
+(pad params, chop boundary, autoChop, sliceAtTime, moveBlock). 90 Catch2 cases + 5 CLI gates, 0 warnings, RTSan
+clean, lipo universal.
+
+**NOT DONE in Phase 2 (the remaining work, in order):**
+- Engine tail: per-source NORM as a per-voice multiplier (today folded into master gain — right for a whole
+  render, not for per-pad NORM independence); stems read from a StemSet in the voice; Signalsmith stretch cache;
+  trims→effective-buffer swap wired into the Document; the disk-streaming source + the ≤ 400 MB idle-RSS gate
+  (needs the streaming AudioFormatReader source + a real-song RSS measurement on Victor's machine); the analysis
+  thread that runs the detectors on load; the remaining pure planners (chopPadSource*, movePad singles,
+  padClipboard, autoSliceTransients by the knob).
+- **2.4 EngineClient + the `ui/` React copy (≈26k lines) + pnpm gate** — a big mechanical port; the typed
+  EngineClient interface (NativeEngineClient over the JUCE bridge / WebAudioEngineClient over the existing engine)
+  is designed in the plan but not written.
+- **2.5 boot ChopperView in the WebView** against the native engine (LOAD/WAVEFORM/PADS, sample browser, themes/
+  help). Needs 2.4 + a Vite dev server; the Phase-1 static page already proves the WebView/bridge/engine path.
+- **2.6 packaged build #1.**
+These UI-integration steps are a different kind of work from the headless engine ports and are best done as their
+own focused session(s); they also carry Victor's owed device pass (below).
+
+## Phases 3–9 — NOT STARTED
+Transport/sequencers/MIDI (3), mixer/FX/console/PDC (4), recording (5), plugins (6), stems native (7),
+persistence/library/exports (8), ship (9). Each is 6–18 sessions in the plan. The Phase-2 planners already lay
+groundwork for 3 (patternToEvents, swing, refit, the transport-agnostic Engine) and 8 (the ValueTree ⇄
+ChopPreset reader/writer is the persistence core).
+
 ### Latent bug found while porting### Latent bug found while porting (flagged, not yet fixed in the Electron app)
 - `refitSeqStorage` (ChopperEngine.ts): when INPUT Q < 100 raises the storage `floor` above the lossless
   resolution, the Electron code scales note indices only by the lossless factor, not by `next/old` — so notes
