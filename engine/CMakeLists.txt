@@ -1,5 +1,6 @@
 # libterminator — the engine. UI-free. RT-safe core (engine/include/terminator/core) is JUCE-free;
-# io/ wraps juce_audio_devices, render/ uses juce_audio_formats for WAV. Nothing here knows about
+# io/ wraps juce_audio_devices, render/ uses juce_audio_formats for WAV, model/ is the ValueTree project
+# (juce_core + juce_data_structures). Nothing here knows about
 # React, JUCE GUI, or the app shell.
 add_library(terminator_engine STATIC
     include/terminator/Version.h
@@ -24,6 +25,8 @@ add_library(terminator_engine STATIC
     include/terminator/io/SampleStore.h
     include/terminator/io/Settings.h
     include/terminator/render/OfflineRenderer.h
+    include/terminator/model/Ids.h
+    include/terminator/model/ProjectModel.h
     src/core/Engine.cpp
     src/core/Sampler.cpp
     src/io/AudioIO.cpp
@@ -31,7 +34,8 @@ add_library(terminator_engine STATIC
     src/io/SampleLoader.cpp
     src/io/SampleStore.cpp
     src/io/Settings.cpp
-    src/render/OfflineRenderer.cpp)
+    src/render/OfflineRenderer.cpp
+    src/model/ProjectModel.cpp)
 add_library(terminator::engine ALIAS terminator_engine)
 
 target_include_directories(terminator_engine PUBLIC include)
@@ -52,6 +56,7 @@ endif()
 target_link_libraries(terminator_engine
     PUBLIC
         juce::juce_core
+        juce::juce_data_structures
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats
