@@ -33,6 +33,7 @@ add_library(terminator_engine STATIC
     include/terminator/model/Document.h
     include/terminator/model/ProjectPlanner.h
     include/terminator/analysis/WaveformPeaks.h
+    include/terminator/analysis/EffectiveBuffer.h
     include/terminator/core/planners/Onsets.h
     include/terminator/core/planners/Snap.h
     include/terminator/core/planners/Blocks.h
@@ -50,7 +51,8 @@ add_library(terminator_engine STATIC
     src/model/Document.cpp
     src/model/ProjectPlanner.cpp
     src/analysis/WaveformPeaks.cpp
-    src/analysis/Onsets.cpp)
+    src/analysis/Onsets.cpp
+    src/analysis/EffectiveBuffer.cpp)
 add_library(terminator::engine ALIAS terminator_engine)
 
 target_include_directories(terminator_engine PUBLIC include)
