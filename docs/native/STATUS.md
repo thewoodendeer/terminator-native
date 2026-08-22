@@ -297,6 +297,10 @@ in ChopperView still play through Web Audio in the WebView — do not judge late
    RECORD minimal. 3. Engine-tail leftovers (stretch, streaming + RSS gate, analysis thread). 4. 2.6 naming/
    versions, then Phase 3.
 
+## CI — GREEN on all 4 jobs for the third-session tip (run 32599001143, `be94482`)
+mac universal ✅ (ui gate + probe: ChopperView + Preferences window) · mac Intel ✅ · mac RTSan ✅ · Windows/MSVC ✅
+(ui gate + the merged engine tail compiled and tested under MSVC).
+
 ## Phase 2 — where it stands (2026-08-22, end of the third session)
 DONE + CI-green: the engine/model/render core + the engine tail above (115 Catch2 cases + 5 CLI gates); the real
 React UI boots in the native shell with a native host (`window.terminator`) and a native Preferences window.
