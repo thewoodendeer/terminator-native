@@ -140,7 +140,7 @@ TEST_CASE("ChopSequencer: note length ends at the next same-group hit (3 ms fade
     REQUIRE(out[47000] == Approx(0.1f).epsilon(1e-3)); // still ringing 1000 samples (21 ms) before
     REQUIRE(out[48000] == Approx(0.2f).epsilon(1e-3)); // pad 1 alone, exactly at the hit: pad 0 faded out already
     REQUIRE(out[47999] < 0.1f * 0.05f + 1e-4f);        // the fade ended at the hit
-    SECTION("a poly pad (chokeGroup −2) alone on steps 0 and 2 ends at its own next hit")
+    SECTION("a poly pad (chokeGroup -2) alone on steps 0 and 2 ends at its own next hit")
     {
         Rig r2(480);
         auto s = r2.bindPad(0, -2);
@@ -156,7 +156,7 @@ TEST_CASE("ChopSequencer: note length ends at the next same-group hit (3 ms fade
     }
 }
 
-TEST_CASE("ChopSequencer: swing is applied live — odd 16ths land late by seqSwingOffsetSec, downbeats never move",
+TEST_CASE("ChopSequencer: swing is applied live - odd 16ths land late by seqSwingOffsetSec, downbeats never move",
           "[seq]")
 {
     Rig r(480);
@@ -302,7 +302,7 @@ TEST_CASE("ChopSequencer: block-size invariant (64 vs 512), pause/resume keeps t
     }
 }
 
-TEST_CASE("ChopSequencer: ten minutes at 120 BPM / 16ths — no drift (4800 hits, the last exactly on its sample)",
+TEST_CASE("ChopSequencer: ten minutes at 120 BPM / 16ths - no drift (4800 hits, the last exactly on its sample)",
           "[seq][long]")
 {
     Rig r(512);
