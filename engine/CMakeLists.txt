@@ -26,6 +26,7 @@ add_library(terminator_engine STATIC
     include/terminator/io/SampleStore.h
     include/terminator/io/Settings.h
     include/terminator/render/OfflineRenderer.h
+    include/terminator/render/ProjectRenderer.h
     include/terminator/model/Ids.h
     include/terminator/model/ProjectModel.h
     include/terminator/model/EditHistory.h
@@ -40,6 +41,7 @@ add_library(terminator_engine STATIC
     src/io/SampleStore.cpp
     src/io/Settings.cpp
     src/render/OfflineRenderer.cpp
+    src/render/ProjectRenderer.cpp
     src/model/ProjectModel.cpp
     src/model/EditHistory.cpp
     src/model/Document.cpp
