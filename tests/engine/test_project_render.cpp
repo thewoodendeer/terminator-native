@@ -10,6 +10,9 @@
 #include "terminator/model/Ids.h"
 #include "terminator/model/ProjectModel.h"
 #include "terminator/render/ProjectRenderer.h"
+#ifndef M_PI
+#define M_PI 3.14159265358979323846 // MSVC does not define M_PI without _USE_MATH_DEFINES
+#endif
 
 using namespace terminator;
 using namespace terminator::render;

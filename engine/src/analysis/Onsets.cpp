@@ -1,6 +1,9 @@
 #include "terminator/core/planners/Onsets.h"
 
 #include <algorithm>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846 // MSVC does not define M_PI without _USE_MATH_DEFINES
+#endif
 
 namespace terminator::onsets
 {
