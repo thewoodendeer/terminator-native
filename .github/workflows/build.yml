@@ -34,7 +34,7 @@ jobs:
       - name: Build
         run: cmake --build --preset mac-release-universal -j4
       - name: Test
-        run: ctest --preset mac-release-universal
+        run: ctest --preset mac-release-universal --timeout 300 --output-on-failure
       - name: Verify universal binaries (lipo)
         run: |
           set -e
@@ -77,7 +77,7 @@ jobs:
       - name: Build
         run: cmake --build --preset mac-release -j4
       - name: Test
-        run: ctest --preset mac-release
+        run: ctest --preset mac-release --timeout 300 --output-on-failure
       - name: Arch check
         run: |
           CLI="build/mac-release/tools/terminator-render/terminator-render_artefacts/Release/terminator-render"
@@ -100,7 +100,7 @@ jobs:
       - name: Build
         run: cmake --build --preset mac-rtsan -j4
       - name: Test under RTSan
-        run: ctest --preset mac-rtsan
+        run: ctest --preset mac-rtsan --timeout 300 --output-on-failure
 
   windows:
     name: Windows x64 (MSVC)
@@ -147,7 +147,7 @@ jobs:
         run: cmake --build --preset win-release -j4
       - name: Test
         shell: pwsh
-        run: ctest --preset win-release
+        run: ctest --preset win-release --timeout 300 --output-on-failure
       - name: "Smoke — launch the app, probe the WebView2 + bridge + engine (soft — runner may lack WebView2/audio)"
         shell: pwsh
         continue-on-error: true
