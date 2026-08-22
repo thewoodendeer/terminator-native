@@ -62,6 +62,11 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   3-worker batch, cancel, error mapping, the 403 re-run); `libraryNative.ts` runs the import job (the Electron
   main.ts `library:youtubeImport` logic) and `downloadYouTube` (the `pullYouTube` GET SAMPLE path → the library's
   YouTube folder → `cacheUrl` = the shell's `/lib/b64/` URL). No edits to the shared renderer for this.
+- **Asset store + `.tprojz` bundles (2.5d, 2026-08-22):** NEW `src/renderer/native/assetsNative.ts` (`assetPut/
+  assetGet/assetHas` on `<dataDir>/assets/<hash>.<ext>` + `<hash>.json` — the Electron layout — with a READ
+  FALLBACK into the Electron app's store on the same machine, `readBinaryFile`/`writeBinaryFile` helpers, the probe
+  self-test); `ipc-native.ts` reads `.tprojz` bytes (`readProjectFile` → `bundle`), `saveProjectBundle`, and
+  `saveProjectFile` trashes a stale bundle twin like Electron. No shared-renderer edits.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

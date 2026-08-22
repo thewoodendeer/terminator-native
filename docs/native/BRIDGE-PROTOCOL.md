@@ -146,10 +146,13 @@ the page holds the bytes; chunked appends from JS) · `openPath` {path} (open a 
 `serveRoots` {roots:[…]} (what `/lib/b64/` may serve — the page's library module registers the library root + its
 linked folders after every load/save; nothing is servable before). `list` entries also carry `createdAt`.
 
+`readBinary` {path} → {ok, url:"/blob/<token>", bytes, name} — the file's bytes through the resource provider
+(one-shot token, 60 s; `.tprojz` bundles, the asset store, anything big — never bytes through `complete()`).
+
 **Resource URLs the shell serves (GET through the page's origin):** `/lib/b64/<base64url(absolute path)>` → the
 file's bytes + MIME, ONLY if it sits under a registered root and exists (else 404 — the probe asserts `/etc/hosts`
 is refused); WebKit's `<audio>` preview streams it (probe `audioCanPlay: true`). `/blob/<token>` → a LARGE native-
-function reply (see below), one-shot, 60 s expiry.
+function reply (see below) or a `readBinary` file stash, one-shot, 60 s expiry.
 
 **LARGE REPLIES (gotcha, found 2026-08-22):** JUCE's `emitEvent` escapes every C++→JS payload into a JS string
 literal with `String::replace("\\", …)` — QUADRATIC in the payload; a 230 KB `readText` (library.json) stalled the

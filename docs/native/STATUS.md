@@ -370,9 +370,26 @@ Links and playlists pull through the BUNDLED yt-dlp, into the library's YouTube 
   in the LOAD section → the song pulls into YOUTUBE and loads. Known: the first launch after a fresh install pays
   macOS's one-time code-signature validation of yt-dlp's ~100 dylibs (seconds), then 0.3 s per pull.
 
+### 2.5d — ASSET STORE + `.tprojz` BUNDLES are native (DONE, 2026-08-22 fourth session)
+Projects that carry their own samples (`asset:<sha1>` ids, `.tprojz` bundles, TRANSFER payloads) load and save
+natively. `ui/src/renderer/native/assetsNative.ts`: `assetPut/assetGet/assetHas` on `<dataDir>/assets/<hash>.<ext>`
++ `<hash>.json` (the Electron layout, verbatim), **with a read fallback into the Electron app's asset store on
+the same machine** (macOS `~/Library/Application Support/terminator/terminator-presets/assets`, Windows
+`%APPDATA%/terminator/terminator-presets/assets`) — so Terminator 2.x projects open with their samples without
+copying hundreds of MB (the full settings/presets import stays Phase 8). Bundles: `readProjectFile` returns
+`.tprojz` bytes (`terminatorFs readBinary` → a one-shot `/blob/<token>` the page fetches), `saveProjectBundle`
+writes them (chunked `writeBinary`), `saveProjectFile` trashes a stale bundle twin like Electron.
+- **Gate evidence:** probe: put → has → get (70,000 B byte-identical through /blob/) → removed; the Electron
+  fallback store found with 43 assets on this Mac. ui gate green, build 0 warnings, clang-format clean.
+- **Victor's pass:** OPEN… → pick one of your Terminator 2.x projects (they live in `~/Library/Application
+  Support/terminator/terminator-presets/` — or Preferences → FOLDERS → point the projects folder there so the OPEN
+  list shows them) → the pads' own samples (assets) come back; SAVE AS a `.tprojz` and re-open it; TRANSFER TO
+  DEVICE still uses the browser-shim session store (the relay is fine).
+
 ### 2.5 / 2.6 — PARTIAL / NOT STARTED
 2.5: ChopperView boots natively with the real UI, Preferences native, **the pads sound through the native engine
-(2.5a)**, **the sample library is native (2.5b)**, **YouTube import is native (2.5c)**. Missing: RECORD SAMPLE
+(2.5a)**, **the sample library is native (2.5b)**, **YouTube import is native (2.5c)**, **the asset store +
+bundles are native (2.5d)**. Missing: RECORD SAMPLE
 (the page's recorder saves through `librarySaveRecording` — native capture is Phase 5), the sequencer/drums/bass
 through the engine (Phase 3), library/YouTube loads by PATH (no PCM upload). 2.6: the CI artifact
 (`Terminator-mac-universal-unsigned.zip`) is an unsigned universal .app with the UI bundled; "the chopper's pads
