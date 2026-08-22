@@ -41,7 +41,8 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `src/renderer/native/ipc-native.ts` (the native `window.terminator` overlay — what is native vs. browser-shim vs.
   undefined is listed at the top of that file).
 - `src/renderer/chopper/ChopperEngine.ts` (**the ONLY engine edit**): a `voiceSink` hook (start/stop/release of
-  live-hit voices — called at the end of `startVoice`, in `stopVoice`, in `releasePad`'s gate branch) +
+  live-hit voices — called at the end of `startVoice`, in `stopVoice`, in `releasePad`'s gate branch; `start` carries
+  a `nativeOwned` flag threaded from `triggerPad(…, { nativeOwned })` for hits the native engine already played) +
   `mutePadVoices` / `padVoiceOut()` (the live-hit voices of `startVoice`/`restemVoice` connect to a silent bus
   instead of `busFor()` when the native shadow is attached; the sequencer's scheduled voices are untouched).
   Null/false outside the shell = byte-for-byte the Electron behaviour.

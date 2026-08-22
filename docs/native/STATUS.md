@@ -386,6 +386,17 @@ writes them (chunked `writeBinary`), `saveProjectFile` trashes a stale bundle tw
   list shows them) → the pads' own samples (assets) come back; SAVE AS a `.tprojz` and re-open it; TRANSFER TO
   DEVICE still uses the browser-shim session store (the relay is fine).
 
+### 2.5e — MIDI from a controller reaches the page too (DONE, 2026-08-22 fourth session)
+The direct path stays (MidiHub → lock-free queue → audio thread, sub-ms): that is the sound. New: `MidiHub.onNote`
+mirrors every note on/off to the message thread → `terminator.midiNote` → the shadow runs the same hit through the
+TS engine as `triggerPad(pad, vel, …, { nativeOwned: true })` (the one-line `nativeOwned` flag threaded to
+`voiceSink.start`) — so the pad LEDs, the waveform playhead, the TS choke bookkeeping and STEP/LIVE recording all
+work from a controller, and the shadow does NOT trigger the pad a second time. Note → pad = the engine's default
+map (note − 36); the page's learned MIDI pad map is not honoured natively yet (Phase 3 MIDI). Known: a LIVE-record
+"quantize what I hear" early hit sounds immediately natively (the direct path can't delay) while the note is still
+written on the line. Probe: `terminatorMidi inject` note 98 → engine hit pad 62 directly (`lastTriggeredPad 62`),
+the page mirrored it (`midiMirrored`), no double trigger. ctest 115/115 after the MidiHub change.
+
 ### 2.5 / 2.6 — PARTIAL / NOT STARTED
 2.5: ChopperView boots natively with the real UI, Preferences native, **the pads sound through the native engine
 (2.5a)**, **the sample library is native (2.5b)**, **YouTube import is native (2.5c)**, **the asset store +

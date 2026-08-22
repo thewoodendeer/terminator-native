@@ -189,6 +189,12 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
   "midiMessages": 0, "midiLagMs": 0, "midiLast": "" }
 ```
 ### `terminator.devicesChanged` (Device object) — hot-plug / device error · `terminator.midiChanged` (MIDI reply) · `terminator.settingsChanged` (the `app` settings object, after a `set`)
+### `terminator.midiNote` {note, velocity, on, channel} — every note on/off a device sent (2.5e)
+The engine already played it on the direct MidiHub → engine path (driver thread → lock-free queue → audio thread,
+note − 36 = pad); this event mirrors it to the page on the message thread so the UI runs the same hit through its
+engine marked `nativeOwned` (LEDs, playhead, chokes, step/live record — no second native trigger). The page has no
+Web MIDI inside the WebView. `terminatorMidi {verb:"inject", note, velocity, on, channel}` feeds a note as if it
+arrived on port 0 (engine queue + this event) — the probe's MIDI check.
 
 ## Project v0 (terminator-render input)
 ```json
