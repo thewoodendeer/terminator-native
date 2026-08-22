@@ -80,9 +80,22 @@ TEST_CASE("SpscQueue: producer/consumer threads preserve order and lose nothing"
             while (seen.size() < kItems)
             {
                 if (q.pop(c))
+                {
                     seen.push_back(c.sequence);
-                else if (done.load(std::memory_order_acquire) && !q.pop(c))
-                    std::this_thread::yield();
+                    continue;
+                }
+                if (done.load(std::memory_order_acquire))
+                {
+                    // the producer finished: drain what is left, then stop — never spin on a lost item (the
+                    // old loop popped on the `done` branch and DROPPED that item → it hung on a slow runner)
+                    if (q.pop(c))
+                    {
+                        seen.push_back(c.sequence);
+                        continue;
+                    }
+                    break;
+                }
+                std::this_thread::yield();
             }
         });
     for (std::uint32_t i = 0; i < kItems;)
