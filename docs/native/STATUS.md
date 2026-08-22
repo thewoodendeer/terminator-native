@@ -82,6 +82,58 @@ Verdict: ☐ pending
 - Settings file is the native app's own (`~/Library/Application Support/Terminator3/settings.json`); Electron
   settings import = Phase 8.
 
+## Phase 2 — Sampler engine parity + bridge + the real UI boots — IN PROGRESS (started 2026-08-22)
+
+### 2.0 CI + warnings cleanup (DONE, pushed)
+- The 10 cosmetic `-Wfunction-effects` warnings are gone: every RT definition in `Engine.cpp`/`Sampler.cpp` now
+  carries `TERMINATOR_NONBLOCKING` matching its declaration, and the calibration click table is a
+  namespace-scope `const` (no function-local static guard on the callback). `mac-debug` builds **0 warnings**.
+- CI run **32589905778** (the Windows stack-overflow fix): 3 mac jobs green; the **mac-universal Test step hung**
+  on `engine.SpscQueue: producer/consumer threads` — the consumer popped an item on its `done` branch and then
+  DROPPED it, spinning forever waiting for it on a slow Release runner. Fixed (record every pop, stop once the
+  producer is done and the queue is drained). Also added `ctest --timeout 300` to every CI job so a hang fails
+  by name instead of stalling the run for hours. (Two intermediate runs show "cancelled/failure" — that is
+  `concurrency: cancel-in-progress` superseding them on rapid pushes, not a real failure.)
+
+### 2.1 Project model on ValueTree + undo + ChopPreset round-trip (DONE, pushed)
+- `engine/include/terminator/model/` + `engine/src/model/`: the project is a **`juce::ValueTree`** whose shape
+  mirrors the Electron `ChopPreset` JSON with field names unchanged (`ProjectModel.h` documents the tree).
+  `projectFromJson` accepts every legacy shape `loadPreset` does (no version field, single-pattern seq fields,
+  `drums._inputQuantize` migration, resolution validation, mask normalisation); `projectToJson` emits the
+  current `getPresetData()` shape **+ `version: 2`** (additive — the Electron loader ignores unknown fields).
+  chops/pads/pad-sources/routes/groups/choke/sourceFx/sourceNorm/sequences/master/extraFX/trims/stems/
+  sourceStems are structured nodes; `drums`/`bass`/`mixer`/`assets`/`timeline` stay opaque `var` blobs until
+  their engines land (Phases 3/4) — they round-trip losslessly and undo replaces them whole.
+- **Undo = `juce::UndoManager` over the tree** (`EditHistory` + `Document`), with the Electron semantics on top:
+  500 ms coalescing by group key (`pad-pitch-N`, `pad-fade-N`, `chop-boundary-<id>-<side>`), begin/end batch
+  collapses paste/dup/move to one step, sample audio referenced by the tree (source ids) never copied.
+- **The pure planners are ported** (`engine/include/terminator/core/planners/`), JUCE-free, with the TS gates as
+  Catch2 cases: stem masks + ready ranges (`stemMask.ts`), trims (file↔effective, region merge, kept ranges,
+  effective buffer with 3 ms seam ramps, the three time maps — `trimRegions.ts`), 16T swing (`swing.ts` +
+  `seqSwingOffsetSec`), live landing / INPUT Q (`liveLanding`), and the sequencer refit / "the grid is a lens"
+  (`refitSeqStorage`, resolutions, `clampVel`). `js::round`/`roundToInt` reproduce `Math.round` so the ports
+  hold bit-for-bit.
+
+**Gate evidence (local, M1 Max):**
+- `mac-debug` build **0 warnings**, `ctest` **64/64** green; `mac-rtsan` **65/65** green (the model/planner tests
+  are pure C++ so they run under RTSan too); `mac-release-universal` 59/59 in 1.9 s, lipo = x86_64 arm64.
+- **Round-trip gate:** Victor's **8 real `.tproj` projects** (fixtures `tests/fixtures/projects/p1..p8`, home
+  path scrubbed — they carry only R2/YouTube ids, no local paths) parse → serialise and every key the Electron
+  writer emitted comes back equal (numbers within 1e-9, key order ignored, null grid rows == empty rows); our
+  output re-parses to an **identical** tree (fixed point) and adds only `version`/`viewResolution`/`velGrid`.
+- **Undo gate:** a real project (p4) survives **600 pitch edits** and returns byte-identical after undoing them
+  all; ≥ 500 steps kept; deep history bounded (UndoManager unit cap).
+
+### 2.1 needs Victor
+- Nothing yet — this is headless model work. His ear/hands pass is owed at 2.5 (ChopperView boots) and on the
+  Phase 1 items still pending (see below).
+
+### Latent bug found while porting (flagged, not yet fixed in the Electron app)
+- `refitSeqStorage` (ChopperEngine.ts): when INPUT Q < 100 raises the storage `floor` above the lossless
+  resolution, the Electron code scales note indices only by the lossless factor, not by `next/old` — so notes
+  can land on the wrong step the first time the floor kicks in. The C++ port does the full `next/old` scaling
+  (test `seq refit`), so native is correct; worth a one-line fix in the web engine in a separate session.
+
 ## Phase 2 — Sampler engine parity + bridge + the real UI boots — NEXT (handoff written 2026-08-22)
 
 ### Design decisions already taken (planning session, folded into the plan — do not re-litigate)
