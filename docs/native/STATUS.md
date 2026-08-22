@@ -272,12 +272,71 @@ kicks+snares; silence-end lands on the first sound; a <8 s buffer returns 0.
   the asset store (binary transport), library/drums/stems/YouTube, native menus/shortcuts/Recent/open-with-file,
   drag-out, licence, cloud presets stay browser-shim or hidden.
 
+### 2.5a — AUDIO THROUGH THE NATIVE ENGINE: the EngineClient SHADOW (DONE, 2026-08-22 fourth session)
+**The pads now sound through the C++ engine in the real app.** Design = the planned shadow: the TS `ChopperEngine`
+keeps owning chops/pads/sources/params/undo/sequencer/playhead/LEDs; `ui/src/renderer/native/nativeEngineShadow.ts`
+sits beside it and mirrors the pads into the native engine, and the TS engine's LIVE-HIT voices are routed into a
+silent bus (`mutePadVoices`) so what you hear is the native sampler.
+- **Bridge:** `terminatorSamples` (`begin/chunk/end` = chunked base64 float32 interleaved → planar `SampleBuffer` in
+  the `SampleStore` under a page key; `loadFile {key, path}`; `release` unbinds pads then retires through the
+  quarantine; `list`) + JSON commands `setPadSample {pad, key, startSec, endSec}` and `setPadLoop {pad, key,
+  startSec, endSec, fadeInSec, fadeOutSec, reverse | clear}` (the shell renders the crossfade loop with
+  `render::renderPadLoop` — now exported from ProjectRenderer.h so live + offline share one render) and
+  `setPadParams.gate`. `app/src/SampleRegistry.{h,cpp}` owns key → store id, pad → key, pad → loop render id.
+- **Engine:** `PadParams::gate` (NOTE ON in any mode — a gated LOOP loops while held; `PadMode::gate` implies it;
+  the voice carries `gate`, `release()` honours it, the 5 ms release floor follows it) + pitch clamp widened to
+  ±48 (pad PITCH ±24 + source PITCH ±24 summed by the UI). Tests: gated one-shot / gated LOOP / un-gated LOOP
+  ignores note-off / +36 st = rate 8 + clamp at 48 (`test_sampler`).
+- **The shadow (TS):** per pad a descriptor from `resolvePadSource` (main chop, pad source, or the stem-mix SLICE
+  — so stem masks play natively as plain samples), `sourceSettings` (pitch/fine/attack), `reversedFor`,
+  `chokeGroupOf` (→ stable ints; 'none' = poly), CHOP level × NORM (main: `normalizeGain`, sources: `sourceNorm`),
+  mode/gate/loop fades, master RELEASE; diffed against the last sent, applied in order per pad (setPadSample on
+  region/key change, setPadParams on param change, setPadLoop on loop change); buffers uploaded once per
+  AudioBuffer (3 MB float32 chunks, base64 via FileReader off the main thread), refcounted across pads, released
+  2 s after the last reference; `ChopperEngine.voiceSink` (start/stop/release — the only engine edit, listed in
+  ui/README) → `triggerPad` (a hit first re-syncs its pad synchronously, then fires after the pad's pending
+  apply; `when` in the future → a timer; a per-hit reverse override flips `setPadParams` around the trigger),
+  `stopPad`, `releasePad`; `setMasterGain` = master volume. Detach clears every native pad + releases keys.
+- **Gate evidence (M1 Max, mac-debug):** `tools/ci/probe-app.sh` now asserts the shadow: `attached`, self-test
+  `upload` → `storeFrames 12000` → `bind` → `loop` (native render) → `trigger` → **`lastTriggeredPad 63` on the
+  audio thread** (device present), `release`; AND the REAL path: `engine.loadPadBuffer(62)` + `setPadPitch(62, 3)`
+  → `syncBound` with `pitch 3`, `engine.triggerPad(62)` → the sink fired natively (`lastTriggeredPad 62`),
+  `removePadBuffer` → `syncUnbound`. ctest mac-debug **115/115**, mac-rtsan **116/116**, ui gate baseline 5 / 0 new,
+  clang-format clean, build 0 warnings.
+- **CMake gotcha fixed:** the UI bundling was a `POST_BUILD` step of the app target, which only fires when the app
+  RELINKS — a UI-only rebuild (`npm run gate` + `cmake --build`) kept serving yesterday's dist (the probe caught
+  it: "no shadow"). Now `TerminatorBundleUi` is an always-run target depending on `Terminator`.
+- **HONEST boundary (what still plays through Web Audio in the WebView):** the chop SEQUENCER's scheduled voices
+  (`scheduleSeqStepAudio` — its own ctx-clock path; native transport = Phase 3), drums, bass, metronome, the
+  mixer strips + master FX chain (Phase 4 — native pads go dry to outs 1/2, `setMasterGain` = master volume).
+  Not mirrored yet: time-STRETCH (dry natively), the one-shot fade-OUT tail (no RT field), live re-stem of a
+  ringing voice (the next hit plays the new mix), per-hit reverse of a rendered LOOP, MIDI: the WebView has no
+  Web MIDI so native `MidiHub` plays note−36 straight into the engine — it sounds, but the page's LEDs/playhead
+  don't know (Phase 3 reads `activePads` from the snapshot; the 20 Hz snapshot now carries `activePads[]` because
+  `padActiveMask` loses bits ≥ 53 in JS). Memory: the C++ side holds a copy of every buffer the page holds (the
+  shadow's cost — goes away when ownership moves to the Document + disk streaming).
+- **Next (ownership moves native, in order):** peaks via resource URLs so the page stops needing the PCM; the
+  main buffer/pad sources decoded by PATH (library/yt/recordings/assets) so uploads vanish for files; the chop
+  sequencer on the native transport (Phase 3) with `triggerPadAtSample`; LEDs/playhead from the snapshot.
+
 ### 2.5 / 2.6 — PARTIAL / NOT STARTED
-2.5: ChopperView boots natively with the real UI, Preferences native (the device pass can happen in the real app —
-below). Missing: audio through the native engine (the EngineClient binding — next), the sample browser on
-`~/Music/Terminator/library.json` (read-only), yt-dlp pulls, RECORD SAMPLE minimal. 2.6: the CI artifact
-(`Terminator-mac-universal-unsigned.zip`) is already an unsigned universal .app with the UI bundled, but "the
-chopper works natively" is not true until the engine binding lands — not claimed.
+2.5: ChopperView boots natively with the real UI, Preferences native, **the pads sound through the native engine
+(2.5a above)**. Missing: the sample browser on `~/Music/Terminator/library.json` (read-only), yt-dlp pulls,
+RECORD SAMPLE minimal, the sequencer/drums/bass through the engine (Phase 3). 2.6: the CI artifact
+(`Terminator-mac-universal-unsigned.zip`) is an unsigned universal .app with the UI bundled; "the chopper's pads
+work natively" is now true, "the chopper works natively" (sequencer, mixer) is not yet — not claimed.
+
+### Victor's pass — THE PADS ARE NATIVE NOW (2.5a, 2026-08-22)
+Open the app (CI artifact for the shadow commit or a local build): get a sample in the way you do in the web
+build — a local WAV/MP3/M4A as the main track, or onto a pad (YouTube pulls and `.tprojz` bundles are not native
+yet). Then: hit the pad from the mouse / keys / your controller — **the sound is the C++ engine now** (set AUDIO to the
+Model 16 at 64/48k first in Preferences): judge the latency feel; try PITCH ±, the source PITCH/FINE knob, ATTACK,
+RELEASE (master), NOTE ON (gate) + release, LOOP with fades (the native crossfade render), REV, a mute GROUP,
+NORM on a source. **What will sound different/missing and is KNOWN:** the chop SEQUENCER plays through the old
+Web Audio path (so SEQ vs a live hit can differ in level — the native pad goes dry to outs 1/2, bypassing the
+mixer strip/FX), STRETCH is dry, the one-shot fade-OUT is not applied, stem toggles on a ringing pad apply on the
+next hit, MIDI hits sound natively but the pad LED/playhead don't move for them. Tell me: the feel, and anything
+that sounds wrong that is NOT on this list.
 
 ### Victor's pass (possible NOW in the real app — Phase 0/1 items)
 Open `Terminator.app` (CI artifact or `build/mac-release-universal/app/Terminator_artefacts/Release/`): accept the
@@ -301,11 +360,23 @@ in ChopperView still play through Web Audio in the WebView — do not judge late
 mac universal ✅ (ui gate + probe: ChopperView + Preferences window) · mac Intel ✅ · mac RTSan ✅ · Windows/MSVC ✅
 (ui gate + the merged engine tail compiled and tested under MSVC).
 
-## Phase 2 — where it stands (2026-08-22, end of the third session)
-DONE + CI-green: the engine/model/render core + the engine tail above (115 Catch2 cases + 5 CLI gates); the real
-React UI boots in the native shell with a native host (`window.terminator`) and a native Preferences window.
-NOT DONE: audio through the native engine (EngineClient), library/yt-dlp/RECORD, stretch, streaming + RSS gate,
-analysis thread, packaged build #1 claim.
+## Phase 2 — where it stands (2026-08-22, fourth session)
+DONE: the engine/model/render core + the engine tail (115 Catch2 cases + 5 CLI gates, RTSan 116); the real React
+UI boots in the native shell with a native host (`window.terminator`) and a native Preferences window; **the pads
+sound through the native engine (2.5a EngineClient shadow, probe-proven)**.
+NOT DONE: library/yt-dlp/RECORD (2.5), the sequencer/drums/bass/mixer through the engine (Phases 3/4), stretch,
+streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #1 claim (2.6).
+
+### Next session (in order)
+1. `gh run list` — confirm CI is green for the 2.5a commits (mac-universal probe asserts the shadow; Windows/MSVC
+   compiles SampleRegistry + the gate flag). Then Victor's pad pass above (his latency verdict decides how much
+   of Phase 3 goes first).
+2. 2.5 tail: library read-only (`~/Music/Terminator/library.json` via the resource provider + `terminatorSamples
+   loadFile` by path so library pulls never upload PCM), yt-dlp child process, RECORD minimal.
+3. Ownership moves native: peaks via resource URLs; pad sources by PATH; chop seq on the native transport
+   (Phase 3 start); LEDs/playhead from `activePads`/`lastTriggeredPadPositionSec`.
+4. **Phase 4 is now specced to Victor's brief** (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" + decision
+   #7): premium JUCE effects + accurate summing + free routing — read it before the mixer sessions.
 
 ## Phases 3–9 — NOT STARTED
 Transport/sequencers/MIDI (3), mixer/FX/console/PDC (4), recording (5), plugins (6), stems native (7),

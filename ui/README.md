@@ -40,6 +40,14 @@ cd ui && npm ci && npm run gate      # = tsc --noEmit (baseline below) + vite bu
   npm package, 1.0.0 — AGPL-3.0 OR the JUCE licence, same terms as the framework we build on) and
   `src/renderer/native/ipc-native.ts` (the native `window.terminator` overlay — what is native vs. browser-shim vs.
   undefined is listed at the top of that file).
+- `src/renderer/chopper/ChopperEngine.ts` (**the ONLY engine edit**): a `voiceSink` hook (start/stop/release of
+  live-hit voices — called at the end of `startVoice`, in `stopVoice`, in `releasePad`'s gate branch) +
+  `mutePadVoices` / `padVoiceOut()` (the live-hit voices of `startVoice`/`restemVoice` connect to a silent bus
+  instead of `busFor()` when the native shadow is attached; the sequencer's scheduled voices are untouched).
+  Null/false outside the shell = byte-for-byte the Electron behaviour.
+- NEW `src/renderer/native/nativeEngineShadow.ts` (audio through the C++ engine — see its header) and the one-line
+  `useEffect(() => attachNativeEngineShadow(engine), [engine])` in `chopper/ChopperView.tsx` + `chopper/HardwareView.tsx`
+  (+ their import). `juceBridge.ts` grew `native.samples` (`terminatorSamples`).
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 
@@ -51,6 +59,13 @@ session autosave, reveal/open-external/clipboard — over `terminatorFs` / `term
 hosting `preferences.html` with native AUDIO/MIDI panes). Still browser-shim or undefined: `.tprojz` bundles + the
 asset store (binary transport), library/drums/stems/YouTube, native menu shortcuts / Recent submenu /
 open-with-file, drag-out, licence, cloud presets.
-The copied `ChopperEngine.ts` still plays through Web Audio INSIDE the WebView. The native AUDIO binding lands
-as `EngineClient` (typed interface) with `NativeEngineClient` over `juceBridge.ts` and `WebAudioEngineClient`
-wrapping the existing engine — docs/native/BRIDGE-PROTOCOL.md, STATUS.md §2.4.
+**The pads sound through the native C++ engine (2.5 shadow, 2026-08-22):** `native/nativeEngineShadow.ts` mirrors
+every pad's buffer/region/params into the engine (`terminatorSamples` uploads + `setPadSample`/`setPadParams`/
+`setPadLoop`) and every live hit/stop/note-off (`triggerPad`/`stopPad`/`releasePad`); the TS engine's live-hit
+voices are muted. Still Web Audio inside the WebView: the chop SEQUENCER's scheduled voices, drums, bass, the
+mixer/master FX, metronome (Phases 3/4). Not mirrored yet: time-stretch (dry natively), the one-shot fade-OUT
+tail, live re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered LOOP, MIDI
+LEDs for hits that arrive natively (no Web MIDI in the WebView — native MidiHub plays note−36 directly). Probe:
+`window.__terminatorNativeShadow.stats()` / `.selfTest()` (tools/ci/probe-app.sh asserts both).
+Dev loop for the engine work: `TERMINATOR_UI_URL=http://localhost:5173` (Vite HMR) — note HMR of ChopperView
+re-mounts it, which detaches/re-attaches the shadow (pads re-upload).

@@ -189,6 +189,47 @@ tempo map, comping, freeze, Link, MIDI-out tracks, sandboxed plugins, iOS sharin
 
 **CHANGED (better):** exact integer PDC; real oversampling; N-channel strips + hardware out routing; true-peak limiter option; meters computed on the audio thread (no analysers); plugin inserts in the same chain (B8); 64-bit summing bus as a Preferences option (default off).
 
+**VICTOR'S PHASE-4 BRIEF (2026-08-22, verbatim intent — this is the bar the mixer/FX sessions build to; the
+parity ports above stay as the compatibility layer so old projects load and sound the same, and THESE are the
+new premium stock devices built on top):**
+- **Summing**: the mixer must be very accurate and sound great when summing — 64-bit summing bus ON by default,
+  sample-accurate PDC, no hidden gain stages, null tests against a reference sum, dither only at the export edge.
+- **Rebuild the effects in JUCE, premium quality, using everything `juce::dsp` offers** (oversampling with proper
+  polyphase halfbands, `ProcessorChain`, `IIR`/`FIR`/`StateVariableTPT`, `Convolution`, `LadderFilter` as a
+  starting point, `BallisticsFilter`, `DelayLine` with interpolation, `Compressor`/`Limiter` as references — and go
+  beyond them where the emulation needs it).
+- **CONSOLE stage per mixer track**: the per-track saturation that emulates three consoles — **SSL, NEVE, API** —
+  must sound premium / high quality (the current worklet chain is the parity floor; re-model transformer/
+  op-amp/discrete behaviour with oversampling, per-channel tolerances kept).
+- **Analog Filter** (replaces FILTER): classic **Moog** transistor-ladder filters as used on analog synths (4-pole
+  24 dB/oct with resonance self-oscillation, drive, 2-pole/1-pole modes, zero-delay/TPT or oversampled).
+- **Reverb**: emulates the classic **Lexicon 224** digital reverb (its algorithms/character: hall/plate programs,
+  pre-delay, bass/treble decay multipliers, diffusion, the 224's dark modulated tails).
+- **EQ**: works like **FabFilter Pro-Q 4** (unlimited dynamic bands, bell/shelf/cut/notch/tilt/flat-tilt, per-band
+  L/R / M/S, slopes 6–96 dB/oct, linear-phase/natural/zero-latency modes, spectrum analyser, spectrum grab,
+  band solo, gain-Q interaction, match/auto-gain where sensible).
+- **Delay**: replicates a **Galaxy tape echo** (Roland RE-201 Space Echo-style — 3 heads, motor speed/wow/flutter,
+  tape saturation + head bump, repeat rate/intensity self-oscillation, spring reverb option).
+- **Compressor**: emulates a **Distressor** (Empirical Labs EL8 — ratios 1:1/2/3/4/6/10/20/Nuke, detector HP/band
+  emphasis, Dist 2/Dist 3 harmonics modes, British mode, attack/release ranges/curves, the opto-style shape).
+- **Channel strip**: emulates an **SSL 4000 G** channel (HPF/LPF filters, 4-band EQ with the E/G bell choices, the
+  G-series compressor/gate-expander dynamics section, routing to dynamics pre/post EQ).
+- **Saturation/distortion**: emulates **Soundtoys Decapitator** (styles A/E/N/T/P — tube/transistor/transformer
+  flavours, Drive, Punish, Tone, HP/LP, mix, auto-gain).
+- **Retro tape module**: emulates **XLN RC-20 Retro Color** — Noise (vinyl/tape/static), Wobble (wow/flutter),
+  Distortion, Digital (bit/rate crush), Space, Magnetic (tape) — **with a LOT of different saturation and
+  distortion options inside it** (many tape/tube/transistor/fuzz/diode/foldback algorithms selectable per stage).
+- **Limiter**: emulates **FabFilter Pro-L 4** (styles transparent/punchy/dynamic/allround/aggressive/bus/safe,
+  look-ahead, true-peak, oversampling, unity-gain monitoring, channel linking, loudness metering).
+- **Mid/side everywhere**: every effect (and the EQ per band) can process Mid or Side (or L/R); proper M/S encode/
+  decode on the strip with width control; "good mid/side processing".
+- **Routing**: any channel can route to any channel to create **groups and busses** (free routing graph with
+  cycle guard, sends + direct outs), plus **multi-select several mixer tracks → group them into a bus** in one
+  gesture (a new bus strip, selected strips re-routed to it, colour/name inherited).
+- "Put a good amount of work into the mixer and effects" — budget Phase 4 as the longest phase after the
+  sampler core; each device ships with a golden/measurement gate (THD/IMD, frequency response, null against
+  the reference curve where public, A/B against the plugin it emulates by Victor's ear).
+
 **Gates (C++ ports of the existing contracts):** console.test (THD/level/tilt numbers in dossier §6), peak-meter exactness, export-flac bit-identity, norm-per-source, PDC alignment (SAT-on-kick both channels same sample; COMP-on-send single impulse), NY-comp dry/wet flat 60 Hz–8 kHz, MB SAT flat at 0 drive, master impulse == stem impulse sample, WetDry crossfade law, every FX default-patch golden render vs the current Web Audio engine (tolerance −60 dB where algorithms are identical; listed exceptions where the Chromium oversampler differs).
 
 ## B5. STEMS (native spec)
@@ -348,8 +389,14 @@ Conventions: each phase ends with (a) green gates, (b) a packaged build Victor c
 **Gate:** all B2/B3 gates; 10-minute drift test; UI-freeze test; golden render of full projects (chops+drums+bass+swing) vs Electron `exportMaster`.
 **Victor's pass:** sequencer feel (live record, INPUT Q, count-in), drums swing/repeat, bass patch sounds vs Electron, MIDI clock against his MPC both directions.
 
-### PHASE 4 — Mixer, FX, console, meters, PDC (≈ 10–14 sessions)
-4.1 Strip/Master/Send topology, routing to hardware outs, pristine-strip rules, auto-created `sampleN`/lane strips, gain match, mute/solo law, fader taper, sends.
+### PHASE 4 — Mixer, FX, console, meters, PDC (≈ 18–26 sessions — grew with Victor's 2026-08-22 brief, see B4)
+4.0 **Read B4 "VICTOR'S PHASE-4 BRIEF" first.** Parity ports are the floor (old projects load + sound the same);
+    the premium devices (Moog filter, Lexicon-224 reverb, Pro-Q-4-style EQ, Galaxy tape echo, Distressor comp,
+    SSL 4000 G strip, Decapitator-style saturator, RC-20-style retro tape with many saturation/distortion
+    flavours, Pro-L-4-style limiter, premium SSL/NEVE/API console stage, full mid/side, any-to-any routing +
+    multi-select → bus) are the deliverable. 64-bit summing default ON; a null-test gate on the sum.
+4.1 Strip/Master/Send topology, **free routing graph** (any channel → any channel, groups/busses, cycle guard,
+    multi-select → new bus), routing to hardware outs, pristine-strip rules, auto-created `sampleN`/lane strips, gain match, mute/solo law, fader taper, sends, M/S encode/decode + width per strip.
 4.2 FX ports in this order (each with its golden test vs Electron): utility, eq, filter, pan, wide, mseq, delay, reverb, comp (Blink kernel port), sccomp, clip/wave/sat/mbsat (+ real oversampling), phaser, flanger, vinyl; console stage; legacy chopper master chain (filter/EQ3/comp/delay/reverb/clip/limiter) for the `sample` route + the 9 extra FX (keep — decide UI exposure with Victor).
 4.3 Meters (peak/RMS per strip, LUFS/TP/LRA/corr/spectrum on master), clip latches, LoudnessPopup on the bridge.
 4.4 PDC two-tier integer plan; offline renderer parity (stems per strip, master head-trim, tail seconds).
@@ -436,5 +483,11 @@ Conventions: each phase ends with (a) green gates, (b) a packaged build Victor c
 4. **Export formats:** WAV, FLAC and MP3, highest quality available; the export flow is a dialog modelled on Ableton's *Export Audio/Video* (spec in B10 "Export dialog").
 5. Hidden engine features (ARP, auto-slice knob, drum-only detector, extra FX): expose them (default accepted). CLAP: later. Windows code-signing cert: at Phase 9.
 6. **Preferences** take Ableton's layout as the reference for AUDIO / PLUG-INS / RECORD (specs in B9).
+7. **(2026-08-22, during the fourth build session) The mixer + effects bar** — recorded verbatim-in-intent in B4
+   "VICTOR'S PHASE-4 BRIEF": accurate summing; all effects rebuilt in JUCE at premium quality; per-track SSL/NEVE/API
+   console saturation; Moog analog filter; Lexicon 224 reverb; Pro-Q-4-style EQ; Galaxy tape echo; Distressor
+   compressor; SSL 4000 G channel strip; Decapitator-style saturator; RC-20-style retro tape with many saturation/
+   distortion options; Pro-L-4-style limiter; mid/side everywhere; any-to-any routing with groups/busses and
+   multi-select → bus. Phase 4 is budgeted up accordingly.
 
 ## NEXT: start the build in a new chat — Phase 0 (see Part C). Kick-off prompt is in the memory note `project_native_build_question.md`.

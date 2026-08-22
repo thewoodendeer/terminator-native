@@ -45,7 +45,9 @@ headless smoke mode (see tools/ci/probe-app.sh) — the probe also reports `uiMo
 | `releasePad` | `pad` | note-off (gate pads release over max(5 ms, release); one-shots ignore) |
 | `stopPad` | `pad` | 3 ms fade on that pad's voices |
 | `setNoteMap` | `note` 0..127, `pad` (−1 = unmapped) | MIDI note → pad table (default note−36) |
-| `setPadParams` | `pad`, `pitch` ±24, `fine` ±50, `attack` 0..0.5, `release` 0..0.5, `gain` 0..4, `outputPair`, `mode` oneshot|gate|loop, `reverse`, `chokeGroup` (−1 own pad · −2 poly · ≥0 group), `interpolation` hermite|linear | RT pad params |
+| `setPadParams` | `pad`, `pitch` ±48 (pad PITCH ±24 + its source's PITCH ±24, summed by the UI), `fine` ±50, `attack` 0..0.5, `release` 0..0.5, `gain` 0..4, `outputPair`, `mode` oneshot|gate|loop, `gate` bool (NOTE ON: note-off ends the voice in ANY mode — a gated LOOP loops while held; `mode: gate` implies it), `reverse`, `chokeGroup` (−1 own pad · −2 poly · ≥0 group), `interpolation` hermite|linear | RT pad params |
+| `setPadSample` | `pad`, `key` (a `terminatorSamples` key; "" / missing = clear), `startSec`, `endSec` (≤ 0 = to the end) — seconds of THAT buffer | binds the pad to a region of an uploaded/loaded buffer (`SampleRegistry` → `Command::setPadSample`); clearing also drops the pad's loop render |
+| `setPadLoop` | `pad`, `key`, `startSec`, `endSec`, `fadeInSec`, `fadeOutSec`, `reverse` — or `clear: true` | the shell renders the region's crossfade loop (`render::renderPadLoop`, reverse baked in — the same code the offline renderer uses) into a fresh store buffer and attaches it (`setPadLoopBuffer`); no fades → detached (raw hard-wrap). The old render is retired through the quarantine |
 | `setPadLoopBuffer` *(engine-internal, not a JSON verb)* | `pad`, loop buffer + steady `[loopStart,loopEnd)` frames | attaches a pre-rendered crossfade loop (`loop::renderCrossfadeLoop`) so a LOOP pad plays a seamless period; the shell renders it on the loader thread when a pad's fades/region change (Phase 2.3). Null clears it → raw hard-wrap of the region |
 | `setPadStems` *(engine-internal, not a JSON verb)* | `pad`, `planes[4]` (drums/bass/other/vocals SampleBuffers, each the base buffer's length/rate; null = absent), `mask` 4-bit | attaches the pad's decoded stem planes + mask (Phase 2.3 stems-in-the-voice). A voice with a partial mask SUMS its lit planes while reading (= `mixMaskChannels`); mask 0/15, no planes, or a lit plane missing → the ORIGINAL plays (never silence). Arriving while the pad rings = a LIVE re-stem: a twin voice at the same position/rate/envelope reads the new set with a 12 ms linear fade-in while the old one fades out over 12 ms (`restemVoice`). Send after `setPadSample` (a new sample clears the planes; the mask stays) |
 
@@ -85,6 +87,23 @@ attack, release, gain, outputPair, mode, reverse, chokeGroup}], samplesLive, byt
 (native file chooser → decode on the message thread → `SampleStore` → `setPadSample`) · `loadFile` {`pad`,
 `path`} · `clear` {`pad`}. Previous samples are retired through the quarantine (SampleStore) — never freed
 while a voice could still read them.
+
+## `terminatorSamples(req)` — the page's audio into the SampleStore (Phase 2.5, EngineClient shadow)
+The bridge carries JSON only, so decoded audio the page holds (Web Audio `AudioBuffer`s — the main track, pad
+sources, stem-mix slices) travels as **chunked base64 float32**; files the shell can read itself go by PATH.
+Keys are page-chosen, single-use strings (`main:N` / `src:N` / `probe:N`); the shell keeps key → store id.
+- `begin` {`key`, `sampleRate`, `channels` 1..32, `frames`} → allocates (cap 400 M floats) · `chunk` {`key`,
+  `offset` frames, `data` base64 of INTERLEAVED float32 frames} → de-interleaved into the planar buffer ·
+  `end` {`key`} → installs into the `SampleStore` (refused if frames are missing) → `{ ok, key, frames, sampleRate,
+  channels, durationSec }` · `loadFile` {`key`, `path`} → decode natively (SampleLoader) → same reply ·
+  `release` {`key`} → every pad bound to it is unbound first (sample + loop render), then the buffer is retired
+  through the quarantine · `list`/`stats` → `{ keys:[…], pads:[{pad,key,loop}], pending, chunks, bytes,
+  storeLive, storeRetired, storeBytes }`.
+- The UI side is `ui/src/renderer/native/nativeEngineShadow.ts`: uploads once per AudioBuffer (3 MB float32 chunks
+  ≈ 4 MB base64 each, base64 via FileReader off the main thread), refcounts keys across pads, releases unreferenced
+  buffers after a 2 s grace; `setPadSample`/`setPadParams`/`setPadLoop` are diffed per pad and sent in order; a
+  hit re-syncs its pad synchronously before `triggerPad`. A 4-minute 44.1k stereo song ≈ 42 MB float32 → ≈ 14
+  chunks, ~1–2 s, pads on that buffer wait for `end` before their first native hit.
 
 ## `terminatorFs(req)` — the `window.terminator` shim's file/dialog backend (Phase 2.4b)
 Generic, message-thread verbs the React app composes into the Electron-era IPC surface in
@@ -129,7 +148,7 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
 { "prepared": true, "sampleRate": 48000, "blockSize": 64, "outputs": 2, "inputs": 2, "playing": false,
   "playheadSamples": 0, "blocksProcessed": 1234, "masterGain": 0.5, "testToneEnabled": false, "testToneFrequencyHz": 440,
   "peakL": 0.0, "peakR": 0.0, "outputPeaks": [0,0], "inputPeaks": [0,0], "commandsApplied": 3, "commandsDropped": 0,
-  "cpuLoad": 0.01, "xruns": 0, "activeVoices": 0, "voiceStealing": 0, "padActiveMask": 0, "lastTriggeredPad": -1,
+  "cpuLoad": 0.01, "xruns": 0, "activeVoices": 0, "voiceStealing": 0, "padActiveMask": 0, "activePads": [], "lastTriggeredPad": -1,
   "lastTriggeredPadPositionSec": 0, "calibrationState": 0, "calibrationSamples": -1, "calibrationMs": -1,
   "midiMessages": 0, "midiLagMs": 0, "midiLast": "" }
 ```
@@ -151,9 +170,13 @@ events are placed sample-accurately (`triggerPadAtSample` / `releasePadAtSample`
 invariant (test `[invariance]`). Phase 2 replaces this with the real `.tproj/.tprojz` reader (plan §B10) —
 the `terminatorProject` version field stays.
 
-## Roadmap for the bridge (Phase 2 → EngineClient, the next step)
+## Roadmap for the bridge (Phase 2 → EngineClient)
 Landed: `terminatorFs` / `terminatorSettings` / `terminatorWindow` + the native `window.terminator` shim + the
-native Preferences window. NEXT = **audio through the native engine** (`EngineClient`):
+native Preferences window; **2026-08-22 (fourth session): the EngineClient SHADOW landed** — `terminatorSamples`
++ `setPadSample`/`setPadLoop`/`gate`, `nativeEngineShadow.ts` (the TS engine mirrors pads/params/hits into the
+C++ engine, its live-hit voices muted), proven by the probe (upload → bind → trigger on the audio thread, and the
+real `loadPadBuffer` path). Still to do from the list below: peaks via resource URLs, ownership moving to the
+C++ Document, batched commands, the snapshot-driven UI reads. Original plan:
 - Typed `EngineClient` interface in TypeScript (the ChopperEngine public surface, docs/native/ENGINECLIENT-SURVEY.md);
   `NativeEngineClient` over `juceBridge.ts`, `WebAudioEngineClient` = the existing engine. Start as a SHADOW: the TS
   engine keeps its state, every pad/chop/param change is mirrored to `setPadSample`/`setPadParams`/
