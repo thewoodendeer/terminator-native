@@ -147,7 +147,7 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --preset win-release
-      - name: Smoke — launch the app, probe the WebView2 + bridge + engine (soft: runner may lack WebView2/audio)
+      - name: "Smoke — launch the app, probe the WebView2 + bridge + engine (soft — runner may lack WebView2/audio)"
         shell: pwsh
         continue-on-error: true
         timeout-minutes: 3
