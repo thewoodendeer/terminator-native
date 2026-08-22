@@ -77,4 +77,67 @@ Verdict: ☐ pending
 - Settings file is the native app's own (`~/Library/Application Support/Terminator3/settings.json`); Electron
   settings import = Phase 8.
 
-## Phase 2 — Sampler engine parity + bridge + the real UI boots — NEXT
+## Phase 2 — Sampler engine parity + bridge + the real UI boots — NEXT (handoff written 2026-08-22)
+
+### Design decisions already taken (planning session, folded into the plan — do not re-litigate)
+- **Undo = `juce::ValueTree` + `UndoManager` from the first Phase 2 commit.** The project model IS the undo
+  model and serialises to the `ChopPreset` JSON with field names unchanged. Preserve: 500 ms coalescing by
+  group key (`pad-pitch-N`, `pad-fade-N`, `chop-boundary-<id>-<side>`, `auto-slice`), begin/end batch
+  (paste/dup/move/clearBlock = one step), sample buffers referenced never copied. Close the Electron gap:
+  padRoutes/sourceRoutes + knob drags ARE in history.
+- **Disk streaming + `AudioThumbnail` land in 2.3, not later.** Pads keep a resident head; the rest streams
+  on the loader thread; fully-resident mode for short one-shots + offline render. Peaks = AudioThumbnail
+  cached to disk. Gates: idle RSS with a 4-minute song + stems ≤ 400 MB; cold waveform draw ≤ 100 ms;
+  undo/redo 500 deep bounded.
+- **Phase 11 (plugin) constraint:** `libterminator` never assumes it owns the clock, the device, the window
+  or the filesystem — transport/I-O/paths are injected (Phase 1 already obeys: Engine::process takes the
+  block + host time; AudioIO is outside the core).
+- The React UI is COPIED into `ui/` (from `terminator/src/renderer`, minus `mpc/` + `board/`, keep
+  `finishhim/`), binds through a typed `EngineClient` (NativeEngineClient over @juce-framework/webview,
+  WebAudioEngineClient wrapping the existing ChopperEngine for dev/testing).
+
+### What was read for Phase 2 (so the next session does not re-read blindly)
+Dossiers: chopper-core (all), shell-ui §2/§4/§6, persistence §1/§2.1, sequencing-midi §4/§5. Electron
+sources read in full: `lib/swing.ts`, `chopper/stemMask.ts`, `lib/audioClock.ts`, `chopper/trimRegions.ts`,
+`chopper/padClipboard.ts`, `chopper/bpmDetect.ts`; `ChopperEngine.ts` lines 140–560 (types,
+renderCrossfadeLoop, liveLanding, ChopperState), 1300–1700 (sources/blocks/rearrange/insertPushing/
+moveBlock/planMoveBlock/resolvePadSource/padRenderPlan), 2100–2200 (addTrim/restoreTrims),
+3000–3420 (detectSilenceEnd/autoChop/autoSliceTransients/getPresetData/loadPreset), 3420–3880
+(setChopBoundary/applySnap/snapToBeat/gridAnchor/transient detectors/slice fns), 3988–4330 (clearPad/
+setPad*/triggerPad/triggerPadAt/_doTrigger). NOT yet read: 4330–4760 (startVoice/restemVoice/release/stop/
+chokeGroup/loopBufferFor), 2400–2540 (routes/busFor/chokeGroupOf/sourceSettings/attackFor/pitchFor/
+reversedFor/normGainFor), 1700–2000 (stem slice buffers), 1120–1300 (ensurePad/chopPadSource/
+autoChopPadSource/movePad/assignChopToPad/cloneChop/reviveChop/unassignPad/loadPadBuffer/setPadTrim/
+clearBlock), 4760–4870 (stretch), 6858–6900 (patternToEvents), stemsController.ts.
+A read-only survey agent was started for the ChopperEngine public API × UI call sites (EngineClient
+extraction) — re-run it if its result is not in the handoff memory note.
+
+### Victor's real projects (for golden renders)
+8 `.tproj` in `~/Library/Application Support/terminator/terminator-presets/` (+ 86 assets, 538 MB). Main
+tracks are R2 ids (e.g. `688b1ef70ddbb8c05cbdbcfe`) — NOT on disk; pad sources via `padBufferMeta`; the
+YouTube folder holds 7 cached m4a. Golden-render harness is still an open question: the Electron
+`fake-web-audio` harness is a proxy (no real DSP), so reference WAVs need a real Web Audio render (headless
+Chromium / the web build in a browser) — decide in Phase 2.1; until then port planners with their TS tests
+(exact math) and validate DSP per feature against synthetic references.
+
+### Phase 2 work order (proposed)
+2.1 `Project` model on ValueTree (+ UndoManager wrapper with group coalescing/batching) ↔ ChopPreset JSON
+    reader/writer; round-trip Victor's 8 projects (parse → serialise → deep-compare). Tests.
+2.2 Port the pure planners as C++ with the TS tests: trims (fileToEff/effToFile/addTrimRegion/keptRanges/
+    buildEffectiveBuffer/cutTimes/mapTimesFileToEff/mapFileRangesToEff), stemMask (+ ready ranges), swing,
+    liveLanding, refit (gcd/lcm), blocks (blockRange/insertPushing/rearrange/moveBlock/planMoveBlock/
+    nextSlotForSource/roomAfterBlock/chopPadSource*), applySnap/snapToBeat/gridAnchor/snapToTransient,
+    detectTransients (broadband + drum-only, exact params), estimateBPM, detectSilenceEnd, autoChop/
+    autoSliceTransients, renderCrossfadeLoop, clearPad merge rules, setChopBoundary coupling, padClipboard.
+2.3 Voice engine parity on the Phase 1 sampler: per-voice region from chops (main) or pad sources, per-source
+    fx (attack/pitch/fine/reverse), NORM (0.891/peak), velocity×NORM, rendered crossfade LOOP (period/warm-up
+    math), one-shot fades, release anchored on raw velocity, choke = source identity default / 'none' / grpN,
+    120 ms one-owner window (Phase 3), restem crossfade 12 ms, chop-while-playing (playhead = samplesRendered
+    − outputLatency + chopOffsetMs → snap), stretch cache (Signalsmith via FetchContent) with dry fallback,
+    stem masks from StemSet (FLAC stem assets from the cache), trims → effective buffer swap on the loader
+    thread, streaming source + AudioThumbnail (2.3 of the plan), analysis thread.
+2.4 EngineClient (TS) + NativeEngineClient + WebAudioEngineClient; `ui/` copy + pnpm; waveform peaks via
+    resource URLs; batched commands; binary meter stream.
+2.5 Boot ChopperView in the WebView (LOAD/WAVEFORM/PADS), sample browser on `~/Music/Terminator/library.json`
+    (read-only first), yt-dlp pulls, RECORD SAMPLE minimal, themes/help/tooltips.
+2.6 Packaged build #1.
