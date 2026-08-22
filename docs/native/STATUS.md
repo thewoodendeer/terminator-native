@@ -170,10 +170,7 @@ These are pure and portable the same way; they were not on the critical path for
   gate** (needs the real large-file streaming `AudioFormatReader` source + a device/real-song RSS measurement —
   see "needs Victor"); the analysis thread wiring (detectors above are still TS-only).
 
-### 2.4 / 2.5 / 2.6 — NOT STARTED
-EngineClient (TS interface) + NativeEngineClient/WebAudioEngineClient, the `ui/` copy of the React app (26k
-lines) + pnpm gate, booting ChopperView in the WebView, and the packaged build. The Phase 1 static page + bridge
-v1 already prove the WebView/bridge/engine path end to end (probe); 2.4+ swap the static page for the real UI.
+### 2.4 / 2.5 / 2.6 — see the third-session sections below (2.4 DONE, 2.5 partial, 2.6 not started)
 
 ## CI — GREEN on all 4 jobs (2026-08-22, run 32594435703)
 mac universal ✅ · mac Intel ✅ · mac RTSan ✅ · **Windows/MSVC ✅**. The whole Phase-2 engine/model/render batch
@@ -213,30 +210,98 @@ kicks+snares; silence-end lands on the first sound; a <8 s buffer returns 0.
   rewrites the pad nodes + pad sources + index-keyed route/choke/group overrides from the plan's new->old map and
   remaps every sequencer step. Gates green on all 4 CI jobs.
 
-## Phase 2 — where it stands (honest boundary, 2026-08-22)
-**DONE and CI-green on Mac arm64 + Intel + RTSan + Windows/MSVC — the engine/model/render CORE:**
-project ValueTree + round-trip of Victor's 8 real projects; undo (UndoManager, 500-deep); the pure planners with
-their TS-test parity (stem masks, trims, swing, live-landing, seq-refit, loop-render, onset/BPM/silence
-detectors, snap, blocks); the rendered crossfade LOOP on the RT sampler; disk-cached waveform peaks (0.79 ms
-cold); ProjectPlanner (patternToEvents) + ProjectRenderer ("export = what you hear"); Document editing
-(pad params, chop boundary, autoChop, sliceAtTime, moveBlock). 90 Catch2 cases + 5 CLI gates, 0 warnings, RTSan
-clean, lipo universal.
+### 2.3 engine tail (DONE, 2026-08-22 third session — two parallel worktrees, merged linear)
+- **Stems in the RT voice** (`Command::setPadStems(pad, planes[4], mask)`): a pad carries up to 4 stem planes + a
+  4-bit mask; a voice with a partial mask SUMS its lit planes while reading (exact per-sample sum; reverse/varispeed
+  identical to the base path); mask 0/15/missing plane = the original (never silence); a mask change on a ringing
+  pad re-stems LIVE (twin voice, 12 ms linear crossfade like TS `restemVoice`). Allocation-free, RTSan green.
+- **ProjectRenderer parity**: per-source NORM (`SourceNorm['src:<videoId>']` → the voice gain; main chops 1, the
+  master gain carries chopVolume×main NORM), one-shot attack = max(source attack, fadeIn/2^(semis/12)), release =
+  Master.release, LOOP pads render `loop::renderCrossfadeLoop` of their (reversed, stem-mixed) region, masked pads
+  attach decoded stem planes when the span is inside the tree's readyRanges (`SampleBank` grew `mainStems` +
+  `stemsBySourceVideoId`; `RenderPadSpec` grew loop + stems).
+- **`analysis::buildEffectiveBuffer(file, trims)`** (+ `effectiveOrSame`, `buildEffectiveStems`): the message-thread
+  trims→effective audio rebuild (3 ms seam ramps, same object for zero trims).
+- **Document** (model): `movePad` (singles move/swap, routes+choke travel, PadGroups pinned like TS, seq steps
+  remapped), `clearPad` (all merge rules + SourceStems prune) / `clearBlock` (one batch), `unassignPad`,
+  `assignChopToPad`, `cloneChop`, `reviveChop`, `setPadSource` (loadPadBuffer's tree half + `ensureSourceRoute`),
+  `hasPadContent`, `setPadsReverse`; `roomAfterBlock`, `chopPadSource`, `chopPadSourceTo`, `autoChopPadSource`,
+  `autoChopPadSourceAtTransients`, `padSourceChops`; `autoSliceTransients(sens)` (strengths in `Analysis`,
+  `js::round`, slivers, stems carry-over, "auto-slice" coalescing); trims `addTrim`/`restoreTrims` (+
+  `trimList`, `effToFile`/`fileToEff`, `trims::effectiveDurationSec`); `core/planners/PadClipboard.h` +
+  `copyPads/pastePads/clearPads/cutPads/duplicatePads`. A shared `rearrange()` (snapSlot/placeSlot/origin map/step
+  remap) backs moveBlock, chopPadSource* and movePad.
+- **Gate:** `mac-debug` 0 warnings, `ctest` **115/115** (89 → +10 voice-tail + 16 pad-ops). RTSan: voice-tail ran
+  green in its worktree (100/100); the merged tree's `mac-rtsan` run is in this session's log / CI.
+- **Brief-vs-code notes (ported as TS does unless stated):** TS restem is linear (kept); TS anchors release on raw
+  velocity not NORM-scaled (native fades from the current level — not reproduced); one-shot `fadeOut` tail has no
+  RT field yet; stems are full-length planes in place (TS: chop-length slices + LRU); restem of a rendered LOOP
+  voice leaves the ringing voice (re-render + re-send); `setPadStems` must follow `setPadSample`. Document: stems +
+  reverse TRAVEL with pad content on movePad (TS pins them to the index — deliberate deviation, consistent with
+  moveBlock); vacated pads keep pitch/mode/gate/fades (TS parity); `addTrimRegion` dedupes swallowed chops by id
+  (latent TS under-grow on restore, mirrored); `remapSteps` splices `grid` only (velGrid/revGrid positional, as TS);
+  analysis arrays are not undo-tracked (the analysis thread re-maps from the original).
+- **STILL OPEN in the engine tail:** Signalsmith stretch cache (design note: a message-thread render cache keyed
+  (buffer, start, end, ratio) handed over like the loop render; hit path compute-free, warm async); the
+  **disk-streaming source + the ≤ 400 MB idle-RSS gate** (design: chunked `SampleBuffer` with a resident head +
+  chunk table, loader prefetch from per-voice cursors in the snapshot, quarantine-pinned, a "starved" counter);
+  the analysis thread (detectors on load, trims re-map); the trims→effective swap wired from the Document into the
+  loader; the one-shot fadeOut tail.
 
-**NOT DONE in Phase 2 (the remaining work, in order):**
-- Engine tail: per-source NORM as a per-voice multiplier (today folded into master gain — right for a whole
-  render, not for per-pad NORM independence); stems read from a StemSet in the voice; Signalsmith stretch cache;
-  trims→effective-buffer swap wired into the Document; the disk-streaming source + the ≤ 400 MB idle-RSS gate
-  (needs the streaming AudioFormatReader source + a real-song RSS measurement on Victor's machine); the analysis
-  thread that runs the detectors on load; the remaining pure planners (chopPadSource*, movePad singles,
-  padClipboard, autoSliceTransients by the knob).
-- **2.4 EngineClient + the `ui/` React copy (≈26k lines) + pnpm gate** — a big mechanical port; the typed
-  EngineClient interface (NativeEngineClient over the JUCE bridge / WebAudioEngineClient over the existing engine)
-  is designed in the plan but not written.
-- **2.5 boot ChopperView in the WebView** against the native engine (LOAD/WAVEFORM/PADS, sample browser, themes/
-  help). Needs 2.4 + a Vite dev server; the Phase-1 static page already proves the WebView/bridge/engine path.
-- **2.6 packaged build #1.**
-These UI-integration steps are a different kind of work from the headless engine ports and are best done as their
-own focused session(s); they also carry Victor's owed device pass (below).
+### 2.4 the real UI in the native shell (DONE, 2026-08-22 third session)
+- **`ui/`** = the Electron renderer copied (terminator@0af0dbe; minus `mpc/`, `board/`, `test/`; plus `src/mixer` +
+  the `board/sim/net` subset projectTransfer needs), its own `npm run gate` (**tsc baseline 5** = the renderer's
+  five, `scripts/typecheck.mjs` fails only on NEW errors; `vite build --mode native`), bundled into the app after
+  every CMake build (`Contents/Resources/ui`, Windows `ui/` next to the exe) and served by the shell's resource
+  provider at `juce://juce.backend/` (a secure context with AudioWorklet). The only source edits vs the copy are
+  listed in `ui/README.md` (flag, unlocked gating, ipc-native import, prefs panes).
+- **The native `window.terminator`** (`ui/src/renderer/native/ipc-native.ts` over `terminatorFs` /
+  `terminatorSettings` / `terminatorWindow`, `app/src/ShellServices.cpp`): settings (+ the synchronous boot read via
+  a user script), EULA (local; Supabase insert joins the licence flow), recents, projects folder + `.tproj`
+  open/save/list/delete (Trash) with native dialogs, layout / MIDI-map / bass-patch files, presets + named presets +
+  session autosave (JSON under `~/Library/Application Support/Terminator3/`), reveal / open-external / clipboard,
+  **Preferences = a second JUCE window** hosting `preferences.html` with **native AUDIO (Ableton layout) + MIDI
+  panes** over `terminatorAudio`/`terminatorMidi`. `juceBridge.ts` = the typed face on the official
+  `@juce-framework/webview` 1.0.0 package.
+- **Gate evidence (M1 Max, mac-debug):** `tools/ci/probe-app.sh` → `uiMode react`, **`chopperView true`**, 32 pads,
+  `errors []`, `asyncChecks` (settings/EULA/projects dir/list/layout round-trips through the real shim) `done`,
+  **`prefsWindow true` + `prefsReady true`** (the Preferences window opened from the UI and its page loaded). CI
+  builds the UI on the mac-universal / mac-intel / Windows jobs and the mac probe asserts all of it.
+- **NOT native yet (honest):** the copied `ChopperEngine.ts` still plays through **Web Audio inside the WebView** —
+  pads sound, but NOT through the C++ engine, so latency/feel is not the native engine's yet. `.tprojz` bundles +
+  the asset store (binary transport), library/drums/stems/YouTube, native menus/shortcuts/Recent/open-with-file,
+  drag-out, licence, cloud presets stay browser-shim or hidden.
+
+### 2.5 / 2.6 — PARTIAL / NOT STARTED
+2.5: ChopperView boots natively with the real UI, Preferences native (the device pass can happen in the real app —
+below). Missing: audio through the native engine (the EngineClient binding — next), the sample browser on
+`~/Music/Terminator/library.json` (read-only), yt-dlp pulls, RECORD SAMPLE minimal. 2.6: the CI artifact
+(`Terminator-mac-universal-unsigned.zip`) is already an unsigned universal .app with the UI bundled, but "the
+chopper works natively" is not true until the engine binding lands — not claimed.
+
+### Victor's pass (possible NOW in the real app — Phase 0/1 items)
+Open `Terminator.app` (CI artifact or `build/mac-release-universal/app/Terminator_artefacts/Release/`): accept the
+EULA once → ChopperView. Click **Preferences** (the gear) → **AUDIO** is the native device page: Driver CoreAudio,
+Model 16 in + out, 48 kHz, buffer 64 → **Apply**; Input/Output Config list all 16/14 → **Enable all** → Apply;
+**Test tone ON** on pair 3/4 (and 5/6, 7/8); cable out 1 → in 1, Measure out 0 → in 0 → the round trip in samples/ms
+(tell me the number). **MIDI** tab: your controller appears under native inputs with the lag meter. Caveat: the PADS
+in ChopperView still play through Web Audio in the WebView — do not judge latency feel yet.
+
+### Next session (in order)
+1. **EngineClient — audio through the native engine**: sample loading by PATH (`terminatorPads loadFile` exists;
+   library/yt/recordings are files) → SampleStore; pads/chops regions + params mirrored to `setPadSample`/
+   `setPadParams`/`setPadLoopBuffer`/`setPadStems`; pad hits → `triggerPad`; waveform peaks via resource URLs
+   (`analysis/WaveformPeaks`); the TS engine's voices muted. Start as a shadow of the TS state, move ownership to
+   the C++ Document section by section.
+2. Library read-only (`~/Music/Terminator/library.json` served via the resource provider), yt-dlp child process,
+   RECORD minimal. 3. Engine-tail leftovers (stretch, streaming + RSS gate, analysis thread). 4. 2.6 naming/
+   versions, then Phase 3.
+
+## Phase 2 — where it stands (2026-08-22, end of the third session)
+DONE + CI-green: the engine/model/render core + the engine tail above (115 Catch2 cases + 5 CLI gates); the real
+React UI boots in the native shell with a native host (`window.terminator`) and a native Preferences window.
+NOT DONE: audio through the native engine (EngineClient), library/yt-dlp/RECORD, stretch, streaming + RSS gate,
+analysis thread, packaged build #1 claim.
 
 ## Phases 3–9 — NOT STARTED
 Transport/sequencers/MIDI (3), mixer/FX/console/PDC (4), recording (5), plugins (6), stems native (7),
