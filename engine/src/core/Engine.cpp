@@ -60,6 +60,7 @@ void Engine::prepare(const Config& config)
     toneIm_ = 0.0;
     setTestToneFrequency(toneFrequencyHz_);
     sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels);
+    seq_.prepare(config_.sampleRate);
     calibState_ = 0;
     prepared_ = true;
     publish(0);
@@ -69,6 +70,7 @@ void Engine::release()
 {
     prepared_ = false;
     sampler_.reset();
+    seq_.reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -170,6 +172,32 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         if (c.payload.noteMap.note < 128)
             noteToPad_[c.payload.noteMap.note] = c.payload.noteMap.pad;
         break;
+    case CommandType::seqSetPattern:
+        seq_.setPattern(static_cast<const SeqPattern*>(c.payload.seq.pattern));
+        break;
+    case CommandType::seqQueuePattern:
+        seq_.queuePattern(static_cast<const SeqPattern*>(c.payload.seq.pattern));
+        break;
+    case CommandType::seqPlay:
+        seq_.play(c.payload.seq.atSample, samplesProcessed_);
+        playing_ = true;
+        break;
+    case CommandType::seqStop:
+        seq_.stop();
+        playing_ = false;
+        break;
+    case CommandType::seqPause:
+        seq_.pause(samplesProcessed_, sampler_);
+        break;
+    case CommandType::seqResume:
+        seq_.resume(samplesProcessed_);
+        break;
+    case CommandType::seqSetBpm:
+        seq_.setBpm(c.payload.seq.value);
+        break;
+    case CommandType::seqSetLoop:
+        seq_.setLoop(c.payload.seq.value != 0.0);
+        break;
     case CommandType::startCalibration:
     {
         const auto& k = c.payload.calibration;
@@ -258,6 +286,16 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.padActiveMask = sampler_.padActiveMask();
     s.lastTriggeredPad = sampler_.lastTriggeredPad();
     s.lastTriggeredPadPositionSec = sampler_.lastTriggeredPadPositionSec();
+    s.seqPlaying = seq_.playing() ? 1u : 0u;
+    s.seqPaused = seq_.paused() ? 1u : 0u;
+    s.seqLoop = seq_.loop() ? 1u : 0u;
+    s.seqStep = seq_.playing() ? seq_.currentStep() : -1;
+    s.seqStepCount = seq_.stepCount();
+    s.seqPatternIndex = seq_.patternIndex();
+    s.seqStepPhase = seq_.stepPhase(samplesProcessed_);
+    s.seqBpm = seq_.bpm();
+    s.seqLoopStartSample = seq_.loopStartSample();
+    s.seqHitsFired = seq_.hitsFired();
     s.calibrationState = calibState_;
     s.calibrationId = calibId_;
     snapshot_.publish(s);
@@ -281,6 +319,10 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
 
     drainCommands(numSamples);
     drainMidi(numSamples);
+    seq_.process(samplesProcessed_, numSamples, sampler_); // this block's sequenced hits + note ends
+    if (!seq_.playing() && playing_ && seqWasPlaying_)
+        playing_ = false; // the sequencer stopped itself (loop off): the transport follows
+    seqWasPlaying_ = seq_.playing();
 
     // ---- input peaks + calibration capture ----
     const int nIn = std::min(numIn, kMaxInputChannels);

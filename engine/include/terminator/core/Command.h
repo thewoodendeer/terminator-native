@@ -9,6 +9,7 @@ namespace terminator
 {
 
 struct SampleBuffer;
+struct SeqPattern;
 
 enum class CommandType : std::uint32_t
 {
@@ -31,6 +32,15 @@ enum class CommandType : std::uint32_t
     setPadLoopBuffer,   // padLoop — attach/clear a pad's pre-rendered crossfade-loop buffer + its steady bracket
     setPadStems,        // padStems — attach the pad's stem planes (drums/bass/other/vocals) + its 4-bit mask; a ringing
                         // voice re-stems live (12 ms crossfade)
+    // ---- the chop sequencer on the native transport (Phase 3.1, core/ChopSequencer.h) ----
+    seqSetPattern,   // seq — live replace: the steps not fired yet read the new pattern (pointer owned by the shell)
+    seqQueuePattern, // seq — switch at the next step 0 (the loop boundary); not playing = take it now
+    seqPlay,         // seq — start at atSample (0 = the start of the next block); restarts when playing
+    seqStop,         // —
+    seqPause,        // — freeze the position
+    seqResume,       // — continue from the frozen position
+    seqSetBpm,       // seq.value — 20..300, applies at the next step
+    seqSetLoop,      // seq.value — 0/1
 };
 
 enum class PadMode : std::uint8_t
@@ -125,6 +135,13 @@ struct Command
             std::uint16_t pad;
             std::uint8_t mask; // bit i = plane i lit; 0 / 15 / a lit plane missing = the base buffer plays
         } padStems;
+
+        struct Seq
+        {
+            const SeqPattern* pattern; // lifetime owned by the shell (a ring keeps retired patterns alive)
+            std::uint64_t atSample;
+            double value;
+        } seq;
 
         struct Calibration
         {
@@ -254,6 +271,62 @@ struct Command
         c.payload.padStems.mask = mask;
         for (int i = 0; i < 4; ++i)
             c.payload.padStems.planes[i] = planes != nullptr ? planes[i] : nullptr;
+        return c;
+    }
+    static Command seqSetPattern(const SeqPattern* pattern) noexcept
+    {
+        Command c;
+        c.type = CommandType::seqSetPattern;
+        c.payload.seq.pattern = pattern;
+        c.payload.seq.atSample = 0;
+        c.payload.seq.value = 0.0;
+        return c;
+    }
+    static Command seqQueuePattern(const SeqPattern* pattern) noexcept
+    {
+        Command c = seqSetPattern(pattern);
+        c.type = CommandType::seqQueuePattern;
+        return c;
+    }
+    static Command seqPlay(std::uint64_t atSample = 0) noexcept
+    {
+        Command c;
+        c.type = CommandType::seqPlay;
+        c.payload.seq.pattern = nullptr;
+        c.payload.seq.atSample = atSample;
+        c.payload.seq.value = 0.0;
+        return c;
+    }
+    static Command seqStop() noexcept
+    {
+        Command c = seqPlay();
+        c.type = CommandType::seqStop;
+        return c;
+    }
+    static Command seqPause() noexcept
+    {
+        Command c = seqPlay();
+        c.type = CommandType::seqPause;
+        return c;
+    }
+    static Command seqResume() noexcept
+    {
+        Command c = seqPlay();
+        c.type = CommandType::seqResume;
+        return c;
+    }
+    static Command seqSetBpm(double bpm) noexcept
+    {
+        Command c = seqPlay();
+        c.type = CommandType::seqSetBpm;
+        c.payload.seq.value = bpm;
+        return c;
+    }
+    static Command seqSetLoop(bool loop) noexcept
+    {
+        Command c = seqPlay();
+        c.type = CommandType::seqSetLoop;
+        c.payload.seq.value = loop ? 1.0 : 0.0;
         return c;
     }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,

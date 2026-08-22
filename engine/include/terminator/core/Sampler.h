@@ -125,7 +125,9 @@ class Sampler
     void trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
     void release(std::uint16_t pad, std::int32_t offsetInBlock = 0) noexcept TERMINATOR_NONBLOCKING;
     void stopPad(std::uint16_t pad) noexcept TERMINATOR_NONBLOCKING; // 3 ms fade
-    void stopAll() noexcept TERMINATOR_NONBLOCKING;                  // 3 ms fade on everything (panic)
+    /// The same 3 ms fade, starting at `offsetInBlock` of the current block (the sequencer's note ends).
+    void stopPadAt(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
+    void stopAll() noexcept TERMINATOR_NONBLOCKING; // 3 ms fade on everything (panic)
 
     /// Adds every active voice into outputs[0..numOutputChannels). Outputs must already hold whatever the
     /// caller wants to sum with (the engine clears/fills them first).

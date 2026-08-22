@@ -378,6 +378,13 @@ void Sampler::release(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TE
     }
 }
 
+void Sampler::stopPadAt(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
+{
+    for (auto& v : voices_)
+        if (v.active() && v.pad == pad && v.stage != Voice::Stage::fading && v.fadeOffset < 0)
+            beginFade(v, kStopFadeSec, offsetInBlock);
+}
+
 void Sampler::stopPad(std::uint16_t pad) noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)

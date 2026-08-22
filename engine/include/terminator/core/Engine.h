@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "terminator/core/ChopSequencer.h"
 #include "terminator/core/Command.h"
 #include "terminator/core/CommandQueue.h"
 #include "terminator/core/HostClock.h"
@@ -106,11 +107,13 @@ class Engine
     std::vector<MidiQueue> midiQueues_;
     SnapshotPublisher<StateSnapshot> snapshot_;
     Sampler sampler_;
+    ChopSequencer seq_; // the chop sequencer on the sample clock (Phase 3.1)
 
     // RT state (owned by the audio thread after prepare)
     float masterGainTarget_ = 1.0f;
     float masterGainCurrent_ = 1.0f;
     bool playing_ = false;
+    bool seqWasPlaying_ = false;
     std::uint64_t playheadSamples_ = 0;
     std::uint64_t blocksProcessed_ = 0;
     std::uint64_t samplesProcessed_ = 0;
@@ -138,7 +141,7 @@ class Engine
     std::uint32_t calibTarget_ = 0;   // frames to record
     std::uint32_t calibRecorded_ = 0; // frames recorded so far
     std::uint32_t calibClickPos_ = 0; // frames of the click emitted so far
-    std::vector<float> calibCapture_;  // kCalibrationMaxFrames, allocated in the constructor
+    std::vector<float> calibCapture_; // kCalibrationMaxFrames, allocated in the constructor
 };
 
 } // namespace terminator

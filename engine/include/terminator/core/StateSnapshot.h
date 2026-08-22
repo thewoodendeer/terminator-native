@@ -47,6 +47,18 @@ struct StateSnapshot
     std::int32_t lastTriggeredPad = -1;
     double lastTriggeredPadPositionSec = 0.0; // position inside that pad's region (its buffer's seconds)
 
+    // chop sequencer (Phase 3.1)
+    std::uint32_t seqPlaying = 0;
+    std::uint32_t seqPaused = 0;
+    std::uint32_t seqLoop = 1;
+    std::int32_t seqStep = -1; // the step the playhead is in (−1 = stopped)
+    std::int32_t seqStepCount = 0;
+    std::int32_t seqPatternIndex = -1;
+    double seqStepPhase = 0.0; // 0..1 inside that step at the block end
+    double seqBpm = 120.0;
+    std::uint64_t seqLoopStartSample = 0; // engine sample of the current pass's step 0
+    std::uint64_t seqHitsFired = 0;
+
     // calibration
     std::uint32_t calibrationState =
         0; // 0 idle · 1 running · 2 done (buffer readable) · 3 failed (channel out of range)

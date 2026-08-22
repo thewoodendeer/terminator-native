@@ -40,6 +40,7 @@ add_library(terminator_engine STATIC
     include/terminator/core/planners/PadClipboard.h
     src/core/Engine.cpp
     src/core/Sampler.cpp
+    src/core/ChopSequencer.cpp
     src/io/AudioIO.cpp
     src/io/MidiHub.cpp
     src/io/SampleLoader.cpp
