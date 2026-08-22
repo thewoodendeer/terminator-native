@@ -29,7 +29,7 @@ JUCE window with a WebView showing a static page; `lipo` shows arm64+x86_64.
   `window.__JUCE__` present, `@juce-framework/webview` loaded, `terminatorInfo()` → "Terminator 3.0.0-alpha.0 ·
   JUCE 9.0.1 · arm64", device "CoreAudio · MacBook Pro Speakers · 44100 Hz", snapshot "prepared … blocks 7876 …
   cmds 1/0 dropped · xruns 0". PROBE OK.
-- `mac-asan-ubsan`: see the commit that lands it (run at the end of the session).
+- `mac-asan-ubsan` (Apple clang): 0 warnings, `ctest` **24/24** green.
 **Remaining for the gate:** first push → CI green on all 4 jobs (needs go-ahead); Windows build/WebView2
 unverified until then (no Windows machine in this session).
 
