@@ -66,7 +66,7 @@ constexpr int viewStepCount(int bars, int viewResolution) noexcept
 {
     return std::min(kSeqMaxViewSteps, bars * viewResolution);
 }
-constexpr int columnStride(int resolution, int viewResolution) noexcept
+inline int columnStride(int resolution, int viewResolution) noexcept
 {
     const double r = static_cast<double>(resolution) / static_cast<double>(viewResolution < 1 ? 1 : viewResolution);
     const auto s = static_cast<int>(js::roundToInt(r));
