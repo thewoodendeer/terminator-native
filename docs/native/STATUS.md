@@ -463,6 +463,10 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 4. **Phase 4 is now specced to Victor's brief** (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" + decision
    #7): premium JUCE effects + accurate summing + free routing — read it before the mixer sessions.
 
+## CI — GREEN on all 4 jobs for `cc41547` (run 32603121764, 2026-08-22): 2.5a–e + the fadeOut tail + the Phase 3
+design — mac universal (probe incl. the real YouTube pull) ✅ · mac Intel ✅ · mac RTSan ✅ · Windows/MSVC ✅ (ProvisionTools
+on Windows, ProcessHub/readBinary under MSVC, the library test with backslash paths).
+
 ## Phase 3 — 3.1 DONE (the chop sequencer on the sample clock, headless + bridge), 2026-08-22 fourth session
 `engine/include/terminator/core/ChopSequencer.h` + `src/core/ChopSequencer.cpp`: the chop step sequencer as a native
 EventSource inside the Engine — the audio callback asks it every block for the hits in [blockStart, blockEnd) and
