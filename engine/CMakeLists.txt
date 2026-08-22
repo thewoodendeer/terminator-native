@@ -19,6 +19,7 @@ add_library(terminator_engine STATIC
     include/terminator/core/planners/Swing.h
     include/terminator/core/planners/LiveLanding.h
     include/terminator/core/planners/SeqRefit.h
+    include/terminator/core/planners/LoopRender.h
     include/terminator/io/AudioIO.h
     include/terminator/io/MidiHub.h
     include/terminator/io/SampleLoader.h

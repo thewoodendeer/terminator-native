@@ -28,6 +28,7 @@ enum class CommandType : std::uint32_t
     stopPad,            // trigger — stop the pad's voices (3 ms fade)
     setNoteMap,         // noteMap — MIDI note → pad (−1 = unmapped)
     startCalibration,   // calibration — emit a click on out channel, record in channel
+    setPadLoopBuffer,   // padLoop — attach/clear a pad's pre-rendered crossfade-loop buffer + its steady bracket
 };
 
 enum class PadMode : std::uint8_t
@@ -100,6 +101,14 @@ struct Command
             std::uint8_t note;
             std::int16_t pad; // −1 = unmapped
         } noteMap;
+
+        struct PadLoop
+        {
+            const SampleBuffer* sample; // the rendered loop buffer (nullptr = clear)
+            std::int64_t loopStart;     // steady period bracket, frames of `sample`
+            std::int64_t loopEnd;
+            std::uint16_t pad;
+        } padLoop;
 
         struct Calibration
         {
@@ -208,6 +217,17 @@ struct Command
         c.type = CommandType::setNoteMap;
         c.payload.noteMap.note = note;
         c.payload.noteMap.pad = pad;
+        return c;
+    }
+    static Command setPadLoopBuffer(std::uint16_t pad, const SampleBuffer* sample, std::int64_t loopStart,
+                                    std::int64_t loopEnd) noexcept
+    {
+        Command c;
+        c.type = CommandType::setPadLoopBuffer;
+        c.payload.padLoop.pad = pad;
+        c.payload.padLoop.sample = sample;
+        c.payload.padLoop.loopStart = loopStart;
+        c.payload.padLoop.loopEnd = loopEnd;
         return c;
     }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,

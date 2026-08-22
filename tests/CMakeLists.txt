@@ -14,7 +14,8 @@ add_executable(terminator-tests
     engine/test_offline_renderer.cpp
     engine/test_planners_core.cpp
     engine/test_project_roundtrip.cpp
-    engine/test_undo.cpp)
+    engine/test_undo.cpp
+    engine/test_loop_render.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

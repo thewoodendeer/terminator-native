@@ -7,6 +7,7 @@
 #include "AllocationCounter.h"
 #include "TestSamples.h"
 #include "terminator/core/Engine.h"
+#include "terminator/core/planners/LoopRender.h"
 
 using namespace terminator;
 using Catch::Approx;
@@ -382,4 +383,71 @@ TEST_CASE("Sampler: replacing a pad's sample fades voices that read the old one;
     r.engine.commands().push(Command::triggerPad(0, 1.0f)); // nothing to play
     r.run(2);
     REQUIRE(r.engine.snapshot().activeVoices == 0);
+}
+
+TEST_CASE("Sampler: a rendered crossfade-loop buffer plays warm-up then the steady period seamlessly",
+          "[sampler][loop]")
+{
+    // Build a loop render off a non-integer-cycle region, hand it to a pad, and confirm the voice (a) plays it,
+    // (b) after the warm-up stays inside [loopStart, loopEnd) forever, and (c) never has a seam discontinuity.
+    Rig r(2, 256);
+    const int N = 4096;
+    auto src = std::make_shared<SampleBuffer>();
+    src->allocate(1, N, 48000.0);
+    for (int i = 0; i < N; ++i)
+        src->channel(0)[i] = static_cast<float>(std::sin(2.0 * M_PI * 61.7 * i / 48000.0));
+    // render a crossfade loop of the whole buffer
+    auto lr = terminator::loop::renderCrossfadeLoop({src->channel(0)}, 0, N, 512, 512);
+    auto loopBuf = std::make_shared<SampleBuffer>();
+    loopBuf->allocate(1, static_cast<std::int64_t>(lr.frames[0].size()), 48000.0);
+    std::copy(lr.frames[0].begin(), lr.frames[0].end(), loopBuf->channel(0));
+
+    PadParams p = r.params(0);
+    p.mode = PadMode::loop;
+    p.interpolation = Interpolation::linear;
+    r.engine.commands().push(Command::setPadParams(p));
+    r.engine.commands().push(Command::setPadSample(0, src.get()));
+    r.engine.commands().push(Command::setPadLoopBuffer(0, loopBuf.get(), lr.loopStart, lr.loopStart + lr.period));
+    r.engine.commands().push(Command::triggerPad(0, 1.0f));
+
+    // render a few seconds and gather the mono output
+    std::vector<float> out;
+    for (int b = 0; b < 400; ++b)
+    {
+        r.run();
+        out.insert(out.end(), r.data[0].begin(), r.data[0].end());
+    }
+    CHECK(r.engine.snapshot().activeVoices == 1); // a loop never ends on its own
+    // it must actually be producing sound
+    double energy = 0;
+    for (float v : out)
+        energy += static_cast<double>(v) * static_cast<double>(v);
+    CHECK(energy > 1.0);
+    // no seam click: the biggest sample-to-sample step in the steady region is close to the audio's own
+    double natural = 0, maxstep = 0;
+    for (int i = 1; i < N; ++i)
+        natural = std::max(
+            natural, std::abs(static_cast<double>(src->channel(0)[i]) - static_cast<double>(src->channel(0)[i - 1])));
+    for (std::size_t i = static_cast<std::size_t>(lr.loopStart) + 100; i + 1 < out.size(); ++i)
+        maxstep = std::max(maxstep, std::abs(static_cast<double>(out[i]) - static_cast<double>(out[i - 1])));
+    CHECK(maxstep <= natural * 2.0);
+}
+
+TEST_CASE("Sampler: setPadLoopBuffer + a looping voice do not allocate on the callback", "[sampler][loop][rt]")
+{
+    Rig r(2, 128);
+    auto src = test::sine(2000, 100.0);
+    auto lr = terminator::loop::renderCrossfadeLoop({src->channel(0)}, 0, 2000, 256, 256);
+    auto loopBuf = std::make_shared<SampleBuffer>();
+    loopBuf->allocate(1, static_cast<std::int64_t>(lr.frames[0].size()), 48000.0);
+    std::copy(lr.frames[0].begin(), lr.frames[0].end(), loopBuf->channel(0));
+    PadParams p = r.params(0);
+    p.mode = PadMode::loop;
+    r.engine.commands().push(Command::setPadParams(p));
+    r.engine.commands().push(Command::setPadSample(0, src.get()));
+    r.engine.commands().push(Command::setPadLoopBuffer(0, loopBuf.get(), lr.loopStart, lr.loopStart + lr.period));
+    r.engine.commands().push(Command::triggerPad(0, 1.0f));
+    r.run(4); // drain commands, start the voice
+    const auto allocs = test::allocationsDuring([&] { r.run(200); });
+    CHECK(allocs == 0);
 }

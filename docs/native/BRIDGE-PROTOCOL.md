@@ -42,6 +42,7 @@ server with HMR in Phase 2). Env `TERMINATOR_PROBE_FILE=<path>` = headless smoke
 | `stopPad` | `pad` | 3 ms fade on that pad's voices |
 | `setNoteMap` | `note` 0..127, `pad` (−1 = unmapped) | MIDI note → pad table (default note−36) |
 | `setPadParams` | `pad`, `pitch` ±24, `fine` ±50, `attack` 0..0.5, `release` 0..0.5, `gain` 0..4, `outputPair`, `mode` oneshot|gate|loop, `reverse`, `chokeGroup` (−1 own pad · −2 poly · ≥0 group), `interpolation` hermite|linear | RT pad params |
+| `setPadLoopBuffer` *(engine-internal, not a JSON verb)* | `pad`, loop buffer + steady `[loopStart,loopEnd)` frames | attaches a pre-rendered crossfade loop (`loop::renderCrossfadeLoop`) so a LOOP pad plays a seamless period; the shell renders it on the loader thread when a pad's fades/region change (Phase 2.3). Null clears it → raw hard-wrap of the region |
 
 Refused with `ok:false` when: not an object, unknown `type`, or the command queue is full (1023 pending —
 a UI bug, never expected).

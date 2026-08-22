@@ -18,6 +18,12 @@ struct Pad
     std::int64_t startFrame = 0;
     std::int64_t endFrame = 0; // exclusive
     PadParams params{};
+    // Rendered crossfade LOOP (message thread renders it via loop::renderCrossfadeLoop and hands it over like a
+    // sample): when set and mode==loop, a hit plays THIS buffer from frame 0 (the warm-up), then loops the
+    // steady period [loopStartFrame, loopEndFrame). Null = a raw hard-wrap of the region (Phase 1 behaviour).
+    const SampleBuffer* loopSample = nullptr;
+    std::int64_t loopStartFrame = 0;
+    std::int64_t loopEndFrame = 0;
 
     bool hasSample() const noexcept { return sample != nullptr && endFrame > startFrame; }
     std::int64_t lengthFrames() const noexcept { return endFrame - startFrame; }
@@ -56,8 +62,11 @@ struct Voice
     PadMode mode = PadMode::oneShot;
     Interpolation interpolation = Interpolation::hermite;
     std::int16_t chokeGroup = -1;
-    bool released = false;    // gate note-off received
-    bool tailStarted = false; // one-shot reached the region end → release tail running
+    bool released = false;     // gate note-off received
+    bool tailStarted = false;  // one-shot reached the region end → release tail running
+    bool loopRendered = false; // playing a rendered crossfade-loop buffer (wrap loopLo→loopHi, not the region)
+    std::int64_t loopLo = 0;   // steady period bracket in the loop buffer's frames
+    std::int64_t loopHi = 0;
 
     bool active() const noexcept { return stage != Stage::idle; }
 };
@@ -76,6 +85,10 @@ class Sampler
     // --- commands (called from Engine::apply on the audio thread) ---
     void setPadSample(std::uint16_t pad, const SampleBuffer* sample, std::int64_t startFrame,
                       std::int64_t endFrame) noexcept TERMINATOR_NONBLOCKING;
+    /// Attach (or clear with sample==nullptr) a pre-rendered crossfade-loop buffer for a pad; loopStart/loopEnd
+    /// bracket the steady period in that buffer's frames. A ringing loop voice keeps its old render until re-hit.
+    void setPadLoopBuffer(std::uint16_t pad, const SampleBuffer* sample, std::int64_t loopStart,
+                          std::int64_t loopEnd) noexcept TERMINATOR_NONBLOCKING;
     void setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING;
     void trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
     void release(std::uint16_t pad, std::int32_t offsetInBlock = 0) noexcept TERMINATOR_NONBLOCKING;

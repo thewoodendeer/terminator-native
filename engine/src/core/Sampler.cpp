@@ -77,6 +77,22 @@ void Sampler::setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING
     pads_[p.pad].params = q;
 }
 
+void Sampler::setPadLoopBuffer(std::uint16_t pad, const SampleBuffer* sample, std::int64_t loopStart,
+                               std::int64_t loopEnd) noexcept TERMINATOR_NONBLOCKING
+{
+    if (pad >= kMaxPads)
+        return;
+    auto& p = pads_[pad];
+    p.loopSample = sample;
+    if (sample == nullptr)
+    {
+        p.loopStartFrame = p.loopEndFrame = 0;
+        return;
+    }
+    p.loopStartFrame = std::clamp<std::int64_t>(loopStart, 0, sample->numFrames);
+    p.loopEndFrame = std::clamp<std::int64_t>(loopEnd, p.loopStartFrame + 1, sample->numFrames);
+}
+
 Voice* Sampler::allocateVoice() noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
@@ -174,10 +190,16 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     v->stage = Voice::Stage::attack;
     v->pad = pad;
     v->serial = nextSerial_++;
-    v->sample = p.sample;
-    v->startFrame = p.startFrame;
-    v->endFrame = p.endFrame;
-    v->reverse = p.params.reverse;
+    // A LOOP pad with a rendered crossfade-loop buffer plays THAT buffer from frame 0 (warm-up), then wraps its
+    // steady period; reverse is baked into the loop render on the message side, so the voice reads it forward.
+    const bool useLoopRender = p.params.mode == PadMode::loop && p.loopSample != nullptr;
+    v->loopRendered = useLoopRender;
+    v->sample = useLoopRender ? p.loopSample : p.sample;
+    v->startFrame = useLoopRender ? 0 : p.startFrame;
+    v->endFrame = useLoopRender ? p.loopSample->numFrames : p.endFrame;
+    v->loopLo = p.loopStartFrame;
+    v->loopHi = p.loopEndFrame;
+    v->reverse = useLoopRender ? 0 : p.params.reverse;
     v->mode = p.params.mode;
     v->interpolation = p.params.interpolation;
     v->outputPair = p.params.outputPair;
@@ -186,7 +208,7 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     v->gain = v->velocity * p.params.gain;
     const double semis = static_cast<double>(p.params.pitchSemitones) + static_cast<double>(p.params.fineCents) / 100.0;
     v->rate = std::pow(2.0, semis / 12.0) * (p.sample->sampleRate > 0.0 ? p.sample->sampleRate / sampleRate_ : 1.0);
-    v->position = v->reverse ? static_cast<double>(p.endFrame) - 1.0 : static_cast<double>(p.startFrame);
+    v->position = v->reverse ? static_cast<double>(v->endFrame) - 1.0 : static_cast<double>(v->startFrame);
     v->startOffset = std::max(0, offsetInBlock);
     const int atk = static_cast<int>(static_cast<double>(p.params.attackSec) * sampleRate_);
     if (atk > 0)
@@ -299,12 +321,24 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
         }
 
         // ---- position / end handling ----
-        bool pastEnd = v.reverse ? (v.position < regionStart) : (v.position >= regionEnd);
+        bool pastEnd = v.loopRendered ? (v.position >= static_cast<double>(v.loopHi))
+                                      : (v.reverse ? (v.position < regionStart) : (v.position >= regionEnd));
         if (pastEnd)
         {
-            if (v.mode == PadMode::loop && regionLen > 0.0)
+            if (v.mode == PadMode::loop && v.loopRendered)
             {
-                // wrap (Phase 2 adds the rendered equal-power crossfade loop; Phase 1 = hard wrap)
+                // rendered crossfade loop: the steady period is [loopLo, loopHi); after the warm-up the position
+                // wraps within it, so every pass is the identical crossfaded period (no seam click)
+                const double period = static_cast<double>(v.loopHi - v.loopLo);
+                if (period > 0.0 && v.position >= static_cast<double>(v.loopHi))
+                {
+                    v.position -= period;
+                    pastEnd = false;
+                }
+            }
+            else if (v.mode == PadMode::loop && regionLen > 0.0)
+            {
+                // raw hard wrap of the region (no fades set → no render)
                 if (v.reverse)
                     v.position += regionLen;
                 else

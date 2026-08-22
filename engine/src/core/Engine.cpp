@@ -134,6 +134,10 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::setPadParams:
         sampler_.setPadParams(c.payload.padParams);
         break;
+    case CommandType::setPadLoopBuffer:
+        sampler_.setPadLoopBuffer(c.payload.padLoop.pad, c.payload.padLoop.sample, c.payload.padLoop.loopStart,
+                                  c.payload.padLoop.loopEnd);
+        break;
     case CommandType::triggerPad:
         sampler_.trigger(c.payload.trigger.pad, c.payload.trigger.velocity,
                          offsetForHostTime(c.payload.trigger.hostTimeNs, numSamples));
