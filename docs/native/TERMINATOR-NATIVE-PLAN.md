@@ -102,7 +102,8 @@ Two viable routes; recommendation is **B for v1**, with A kept open per-section 
 6. **Export = what you hear** by construction (offline render runs the same engine), fixes the drum
    per-step-graph export gap.
 7. **Stems** in-process with a background queue, split-on-load, GPU EPs measured per platform, no IPC race.
-8. **App**: ~1 s launch, ~1/4 the memory, universal binary, native menus/dialogs/drag-drop/file associations
+8. **Terminator becomes a plugin too**: the same engine compiles as VST3/AU/AUv3, so Terminator runs inside Ableton/FL/Logic — a second product from one codebase (Phase 11).
+9. **App**: ~1 s launch, ~1/4 the memory, universal binary, native menus/dialogs/drag-drop/file associations
    (.tprojz), Sparkle updates, signed+notarised, Mac App Store possible later.
 
 ## A6. Parity contract (what must NOT change)
@@ -133,9 +134,10 @@ tempo map, comping, freeze, Link, MIDI-out tracks, sandboxed plugins, iOS sharin
 - `Project` (pure data, serialisable) ↔ `Engine` (RT). Data classes mirror the TS types 1:1 (same field names in JSON): `Source{id, key, AudioData(float32 planar, N ch, sr), title, fx{attack,pitch,fine,reverse}, norm, stems?}`, `Chop`, `Pad`, `Block` (derived), `Route`, `ChokeGroup`, `Trim`, `Sequence`… The planner functions (`rearrange`, `insertPushing`, `moveBlock`, `planMoveBlock`, `chopPadSource*`, `nextSlotForSource`, `roomAfterBlock`, `refitSeqStorage`, `liveLanding`, `swingOffsetSec`, `applySnap`, transient/BPM detectors, `renderCrossfadeLoop`, `buildEffectiveBuffer`, `padClipboard`) are **pure functions today** → port them as pure C++ with the SAME tests (they are the bulk of the harness gates) — or keep them in TypeScript in the UI layer where they are UI-side logic (pad clipboard, planMoveBlock preview) — decision per function: anything that affects AUDIO or PROJECT STATE goes to C++; pure-UI planning can stay TS.
 - **Voice engine**: preallocated `VoicePool` (e.g. 256 voices, one active per pad but sequencer tails + choke fades + restem crossfades need overlap), each voice = sample-accurate start offset within the block, resampling varispeed (4-point Hermite or windowed-sinc quality setting; Chromium's is linear-ish — we get BETTER by default), attack/release/fade envelopes in REAL seconds (same constants: attack default 3 ms, 5 ms seq fade to 1e-4, 3 ms stop ramp, 12 ms restem crossfade), reverse = read backwards (no mirrored copy; saves RAM; positions map identically), loop = runtime equal-power crossfade loop with identical `period`/warm-up math (golden-render test vs `renderCrossfadeLoop`), stems = read from `StemSet` planes with the pad mask (sum on the fly or cached slice — keep the LRU slice for CPU), stretch = Signalsmith Stretch offline cache (same key) + NEW real-time mode option, pitch = varispeed (kept) + NEW "preserve formant/length" mode via Stretch.
 - **Choke/mute groups**, one-owner-per-hit 120 ms window, gate pads, LOOP toggle-off on re-hit, tempo precedence, empty-chop recovery, blocks push-never-overwrite, `free` chops — all preserved (checklist §10).
-- Analysis thread: transients (both detectors, same params), BPM, waveform peak pyramids (mip levels for the UI — replaces the UI's 256-bucket cache), silence-end detection (RMS 0.015 / 256 frames).
+- Analysis thread: transients (both detectors, same params), BPM, waveform peak pyramids, silence-end detection (RMS 0.015 / 256 frames). **Peaks use JUCE `AudioThumbnail`: multi-resolution and cached TO DISK**, so a song's waveform is drawn instantly on re-open and the sample browser scrubs without recomputing — replaces the UI's 256-bucket in-memory cache.
+- **Disk streaming (NEW — fixes a measured problem).** Today every source is fully decoded into RAM; the Electron renderer idles at **1.3–2.1 GB RSS** and stems add ~140 MB/song. Native uses `AudioFormatReader` + a buffering/streaming source: pads hold a *reference* to a file plus a small resident head (so a hit is instant), the rest streams on the loader thread. Consequences: memory drops by an order of magnitude, long files open immediately, the 600 s stems input cap can rise, and the 128 MB stretch LRU + stem-slice LRU stop competing for the same RAM. Fully-resident mode stays available for short one-shots and for offline render.
 - Trims/effective buffer: keep the effective-time model; build the effective buffer once per edit on the loader thread, swap atomically.
-- Undo: same snapshot semantics, project-level, with a memory cap; sample buffers ref-counted (no copies).
+- **Undo = JUCE `ValueTree` + `UndoManager` (NEW — decided up front, because retrofitting undo is painful).** Today undo is 100 whole-state snapshots, deliberately capped at 2 sample buffers so it doesn't eat RAM. A `ValueTree` shares structure instead of copying, records every property change, and serialises directly — so the project model IS the undo model: effectively unlimited history at a fraction of the memory, and the same tree writes out as the `ChopPreset` JSON (field names unchanged, B10). The existing semantics are preserved on top of it: 500 ms coalescing by group key (`pad-pitch-N`, `chop-boundary-<id>-<side>`…), begin/end batch for composite edits (paste/dup/move/clearBlock = one step), and audio buffers referenced, never copied. Known gap to close while we're here: routes/knob-drags that undo history doesn't carry today.
 - Latency math becomes trivial: `playhead = samplesRendered − outputLatencySamples`; the 20 ms Safari estimate and the `outputLatency` dance disappear; chopOffsetMs (TRIM) kept as a user offset, default 0, plus the measured round-trip from calibration (B7).
 
 **CHANGED (better):** higher-quality varispeed interpolation (switchable; "CLASSIC" = linear to match old renders), real-time stretch, no mirrored reverse copies, 24+-bit/any-rate sources without resampling at load, unlimited undo of samples by ref, per-pad polyphony option, velocity curves (linear kept as default), ARP + transient auto-slice knob + drum-only detector are ENGINE features already — expose them in the UI (decision: yes, they were built and tested).
@@ -296,9 +298,10 @@ tempo map, comping, freeze, Link, MIDI-out tracks, sandboxed plugins, iOS sharin
 3. **Routing**: cue/headphone mix, external FX insert (hardware send/return with latency ping), group buses, VCA-style ganging.
 4. **Sync**: Ableton Link, MMC, MTC; MIDI-out tracks per strip; virtual MIDI ports; MPC hardware templates (pad lights/colour feedback via MIDI out).
 5. **Sound**: true-peak limiter, convolution reverb IR loader, 64-bit summing option, oversampled saturators, real-time Stretch per pad, formant pitch.
-6. **Plugin sandboxing**, AUv3 on iOS later — the same `libterminator` compiles on iOS; the Swift app can adopt it (one engine, three platforms).
+6. **Plugin sandboxing** (hosting other people's plugins out-of-process).
 7. **Stems**: 6-stem model, per-stem gain masks, split-on-load, Windows GPU, precomputed R2 catalogue for web/mobile.
 8. **Collab**: the 8-char transfer becomes project sync; The Shared Board session idea carried over.
+9. **TERMINATOR AS A PLUGIN — VST3 / AU / AUv3** (see Phase 11; the biggest product opportunity the architecture opens).
 Each item gets its own spec when scheduled; none are parity requirements.
 
 ---
@@ -328,12 +331,12 @@ Conventions: each phase ends with (a) green gates, (b) a packaged build Victor c
 
 ### PHASE 2 — Sampler engine parity + bridge + the real UI boots (≈ 12–18 sessions)
 2.1 Port the data model + pure planners (B1) with their tests; project JSON reader for `.tproj/.tprojz` (B10) — open his existing projects headless via `terminator-render` and render `exportMaster` → compare with the Electron export (first golden-render diff).
-2.2 Voice engine complete: sources/chops/pads/blocks/routes/choke/groups/REV/LOOP/gate/fades/NORM/pitch/fine/stretch cache (Signalsmith)/stems masks (read from `StemSet` — stems themselves come in Phase 7; until then load the FLAC stem assets from the cache)/trims/undo.
-2.3 Analysis thread: transients (both detectors), BPM, peak pyramids, silence-end.
+2.2 Voice engine complete: sources/chops/pads/blocks/routes/choke/groups/REV/LOOP/gate/fades/NORM/pitch/fine/stretch cache (Signalsmith)/stems masks (read from `StemSet` — stems themselves come in Phase 7; until then load the FLAC stem assets from the cache)/trims; **undo on `ValueTree`/`UndoManager` from the first commit of this phase**.
+2.3 Analysis thread: transients (both detectors), BPM, silence-end; **`AudioThumbnail` disk-cached peaks and the streaming source layer land here, not later** — they set the memory profile everything else is measured against.
 2.4 Bridge v1: `EngineClient` interface in TS (extract from `ChopperEngine.ts`: every public method + `getState()/activity/emit` becomes commands/events); `WebAudioEngineClient` (wraps the existing engine — keeps the web build alive in this repo's `ui/` for dev/testing) and `NativeEngineClient` (JUCE bridge); waveform view reads peak tiles via resource URLs.
 2.5 Boot the full ChopperView in the JUCE webview against the native engine: LOAD/WAVEFORM/PADS sections working, sample browser reading the same `~/Music/Terminator` library (B10), yt-dlp pulls, RECORD SAMPLE minimal (Phase 5 completes it), themes/help/tooltips/layout all alive.
 2.6 Packaged build #1 (unsigned is fine) — "the chopper works natively".
-**Gate:** all B1 gates green; golden renders within −60 dB in CLASSIC-interp mode for 20 of his real projects (pads/chops/reverse/loop/pitch/NORM/stems masks); UI parity checklist (dossier shell §2 rows 1–10) ticked.
+**Gate:** all B1 gates green; **idle RSS with a 4-minute song + stems loaded ≤ 400 MB (vs 1.3–2.1 GB today)** and a cold waveform draw ≤ 100 ms from the thumbnail cache; undo/redo 500 deep with bounded memory; golden renders within −60 dB in CLASSIC-interp mode for 20 of his real projects (pads/chops/reverse/loop/pitch/NORM/stems masks); UI parity checklist (dossier shell §2 rows 1–10) ticked.
 **Victor's pass:** chop-while-playing by ear, snap, TRIM, blocks/move, stems chips (from cached stems), REV, LOOP, pitch/stretch; latency feel.
 
 ### PHASE 3 — Transport, sequencers, MIDI (≈ 10–14 sessions)
@@ -389,6 +392,20 @@ Conventions: each phase ends with (a) green gates, (b) a packaged build Victor c
 **Gate:** smoke test of the packaged app (the 8-second rule), updater end-to-end from beta-1 → beta-2, checklist in RELEASE-CYCLES-NATIVE.md.
 
 ### PHASE 10 — Beyond parity (B11) — scheduled after Phase 9 ships.
+
+### PHASE 11 — TERMINATOR AS A PLUGIN: VST3 / AU / AUv3 (≈ 8–12 sessions, after 9 ships)
+*Why it is cheap: JUCE builds standalone apps and plugins from ONE codebase, and the plan already forces `libterminator` to be a UI-free engine with no knowledge of windows, files-on-disk or the transport clock. Most of this phase is adapting, not rewriting.*
+11.1 `TerminatorProcessor : juce::AudioProcessor` wrapping the engine; formats VST3 + AU (Mac) + AUv3 (iOS/iPadOS), standalone target kept building from the same source so there is one truth.
+11.2 **Host sync**: the host is the clock — `AudioPlayHead` drives our `Transport` (tempo, ppq position, play state, loop), so chops, drum grid, bass and swing lock to the host's grid. Our internal transport becomes a fallback for standalone.
+11.3 **Buses**: stereo out for the simple case, plus a multi-out variant (one bus per SAMPLE strip / drum lane) so producers can route pads to separate DAW tracks — the same routing model as B4's hardware outs, pointed at host buses instead.
+11.4 **Parameters + automation**: expose pad pitch/level/attack/release/mask, strip faders/pans/sends, every FX param as `AudioProcessorParameter`s so the host can automate and record them; MIDI learn stays for hardware.
+11.5 **State**: `getStateInformation` = the same project tree (B10) minus device settings; large samples referenced by `asset:<sha1>` with an "embed samples in host project" option (sessions must survive being emailed to someone else).
+11.6 **UI in a plugin window**: the same React UI in the WebView, resizable, with the host's scaling rules; plugin windows have no menu bar, so menu-only actions get in-UI equivalents.
+11.7 **Not in the plugin**: yt-dlp pulls and app-level licence UI (host sandboxes make network + browser sign-in hostile); stems run but are gated behind an explicit user action (a 2-second-per-chunk job must never stall a host's render thread).
+11.8 Validation: `pluginval` at strict level on VST3/AU, Ableton + Logic + FL smoke tests, offline bounce == live render, sample-accurate host-sync test (host at 96 BPM with a tempo change mid-bar → our grid follows within 0 samples).
+**Gate:** pluginval clean, bounce parity, host-tempo-change test. **Victor's pass:** run it on a track in Ableton next to his own DAW-made beat.
+
+*Product note: this is a second SKU from one codebase — the standalone DAW for making the beat, the plugin for using Terminator inside the DAW people already produce in.*
 
 ---
 
