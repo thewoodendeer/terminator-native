@@ -1,0 +1,40 @@
+# build output
+build/
+out/
+cmake-build-*/
+.cache/
+*.o
+*.obj
+*.a
+*.lib
+*.dSYM/
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.swp
+.DS_Store
+CMakeUserPresets.json
+
+# ui (Phase 2+)
+ui/node_modules/
+ui/dist/
+
+# never
+.env
+.env.*
+Secrets.*
+*.p8
+*.p12
+*.cer
+*.mobileprovision
+
+# fetched SDKs (never committed — licence)
+third_party/asiosdk*/
+third_party/_fetched/
+
+# local build/test logs + probe outputs
+*.log
+probe*.json
