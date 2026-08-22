@@ -30,6 +30,7 @@ add_library(terminator_engine STATIC
     include/terminator/model/ProjectModel.h
     include/terminator/model/EditHistory.h
     include/terminator/model/Document.h
+    include/terminator/analysis/WaveformPeaks.h
     src/core/Engine.cpp
     src/core/Sampler.cpp
     src/io/AudioIO.cpp
@@ -40,7 +41,8 @@ add_library(terminator_engine STATIC
     src/render/OfflineRenderer.cpp
     src/model/ProjectModel.cpp
     src/model/EditHistory.cpp
-    src/model/Document.cpp)
+    src/model/Document.cpp
+    src/analysis/WaveformPeaks.cpp)
 add_library(terminator::engine ALIAS terminator_engine)
 
 target_include_directories(terminator_engine PUBLIC include)
