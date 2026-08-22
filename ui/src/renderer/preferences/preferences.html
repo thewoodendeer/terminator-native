@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Strict CSP: local bundle only. The prefs window enumerates audio/MIDI
+         devices via the renderer APIs (no network) so 'self' is enough. -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self' blob: data:;
+                   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                   font-src 'self' https://fonts.gstatic.com data:;
+                   img-src 'self' data: blob:;
+                   script-src 'self' 'unsafe-inline';
+                   connect-src 'self';
+                   object-src 'none';
+                   base-uri 'none';" />
+    <title>Terminator Preferences</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #0a0a0a;
+        --bg2: #141414;
+        --bg3: #1d1d1d;
+        --text: #d6f5e3;
+        --text-dim: #6f8a7c;
+        --neon: #00ff96;
+        --border: #1f3a2c;
+      }
+      * { box-sizing: border-box; }
+      html, body, #root { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Share Tech Mono', ui-monospace, monospace;
+        font-size: 13px;
+        -webkit-user-select: none;
+        user-select: none;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./PreferencesWindow.tsx"></script>
+  </body>
+</html>

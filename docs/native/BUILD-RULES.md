@@ -1,8 +1,9 @@
 # BUILD RULES — terminator-native (C++20 / JUCE 9.0.1)
 
-This repo is a native C++ repo. **None of the [WEB] or [IOS] rules apply here** — no tsc baseline, no
-service worker, no CSP, no Vite bundle deploy, no XcodeGen. `ui/` (Phase 2) is a copied React app with its
-own pnpm gate, documented there when it lands.
+This repo is a native C++ repo. **None of the [WEB] or [IOS] rules apply here** — no service worker, no Vite
+bundle DEPLOY, no XcodeGen. The one web-shaped corner is `ui/` (the copied React app, Phase 2.4): its own
+`npm run gate` (tsc baseline **5** = the Electron renderer's five + `vite build --mode native` → `ui/dist`),
+documented in `ui/README.md`; CMake bundles `ui/dist` into the app when it exists.
 
 ## Repo
 - `~/Developer/terminator-native` · private GitHub `thewoodendeer/terminator-native` · **linear commits on
@@ -40,6 +41,8 @@ for `mac-rtsan`.
 1. `mac-debug` builds with **zero warnings** (`-Werror` is on for our targets: engine/app/tools/tests;
    JUCE itself is exempt). MSVC: `/W4 /WX`.
 2. `ctest` green on `mac-debug` (Catch2 suites `engine.*` + `cli.render.*`).
+2b. `cd ui && npm run gate` green (tsc at its 5-error baseline, zero new; vite build) whenever `ui/` changed;
+    the app probe (`tools/ci/probe-app.sh`) then asserts ChopperView rendered with no page errors.
 3. `mac-rtsan` ctest green — no RT violation on the callback path.
 4. `mac-release-universal`: `lipo -info` on `Terminator.app/Contents/MacOS/Terminator` and
    `terminator-render` shows `x86_64 arm64`.

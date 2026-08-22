@@ -49,3 +49,18 @@ target_link_libraries(Terminator PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags)
 terminator_set_warnings(Terminator)
+
+# The built React UI (ui/dist — `cd ui && npm ci && npm run gate`) rides inside the app: macOS bundle
+# Resources/ui, Windows next to the exe. Copied after every build IF it exists, so an engine-only checkout still
+# builds (the shell then serves the embedded Phase-1 page). See ui/README.md + docs/native/BUILD-RULES.md.
+set(TERMINATOR_UI_DIST "${PROJECT_SOURCE_DIR}/ui/dist" CACHE PATH "Built React UI to bundle (ui/dist)")
+if(APPLE)
+    set(_terminator_ui_dest "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Resources/ui")
+else()
+    set(_terminator_ui_dest "$<TARGET_FILE_DIR:Terminator>/ui")
+endif()
+add_custom_command(TARGET Terminator POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -DSRC=${TERMINATOR_UI_DIST} -DDST=${_terminator_ui_dest}
+            -P "${PROJECT_SOURCE_DIR}/cmake/CopyDirIfExists.cmake"
+    COMMENT "Bundling the React UI from ${TERMINATOR_UI_DIST} (if built)"
+    VERBATIM)

@@ -1,0 +1,825 @@
+/* DAW Mixer — Terminator hardware theme. Desktop ChopperView only.
+ *
+ * Every color is routed through var(--hw-<role>, <original literal>). With no
+ * Minimal (Baethoven) palette active the --hw-* vars are unset → the fallbacks
+ * render → pixel-identical to the original green/navy hardware look. When the
+ * ChopperView root carries data-palette + the --hw-* vars, they cascade in here
+ * (the mixer is in-tree) and the whole strip retints. Per-channel inline accents
+ * + the canvas VU meters are recolored in MixerSection.tsx (CSS can't reach a
+ * canvas / an inline style); alarms (mute, clip) intentionally stay red. */
+.mx-mixer {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--hw-panel, #1a2035);
+  border: 1px solid var(--hw-border, rgba(187, 184, 178, 0.18));
+  border-radius: 6px;
+  margin: 0;               /* parent .chopper-view supplies the 10px flex gap — match every other section (no extra top margin) */
+  padding: 8px 10px 12px;
+  font-family: 'DM Mono', monospace;
+  color: var(--hw-text, #c9d4e2);
+}
+.mx-mixer-title {
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: var(--hw-muted, #8899aa);
+  margin: 0 0 6px 2px;     /* tighter label→strips gap, matches the 6px section-header padding density */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Auto gain match toggle — sits in the mixer title row, off by default. */
+.mx-gainmatch {
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--hw-muted, #8899aa);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.14);
+}
+.mx-gainmatch:hover { color: #cfe3f5; border-color: rgba(255,255,255,0.28); }
+.mx-gainmatch.on {
+  /* Ink = the palette's panel: on a light palette the accent face is dark and
+     the panel light; on a dark palette the reverse — either way it reads. The
+     hardcoded #06131b was 1.0–1.3:1 on every light palette (dark on dark). No
+     palette → the original navy on phosphor. */
+  color: var(--hw-panel, #06131b);
+  background: var(--neon, #35ff69);
+  border-color: var(--neon, #35ff69);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--neon, #35ff69) 55%, transparent);
+}
+
+.mx-strips {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.mx-divider {
+  flex: 0 0 1px;
+  align-self: stretch;
+  background: var(--hw-border, rgba(187, 184, 178, 0.3));
+  margin: 0 6px;
+}
+
+/* ── strip shell ── */
+.mx-strip {
+  flex: 9 1 76px;
+  min-width: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 0 4px 4px;
+  border-right: 1px solid var(--hw-border, rgba(187, 184, 178, 0.08));
+}
+.mx-strip:last-child { border-right: none; }
+/* Drag handle on the strip's right edge — resizes the strip (all selected
+   strips together). Invisible until hovered. */
+.mx-strip { position: relative; }
+.mx-strip-resize {
+  position: absolute; top: 0; bottom: 0; right: -3px; width: 6px;
+  cursor: col-resize; z-index: 3; touch-action: none;
+}
+.mx-strip-resize:hover, .mx-strip-resize:active {
+  background: color-mix(in srgb, var(--neon, #35ff69) 45%, transparent);
+}
+.mx-head { cursor: pointer; user-select: none; -webkit-user-select: none; }
+.mx-strip-send { flex: 8 1 74px; min-width: 74px; }
+.mx-strip-master { flex: 11 1 96px; min-width: 96px; }
+
+/* ── strip sizing ──
+   M is the default: strips flex-grow to fill the mixer's width, as before.
+   S and L pin an EXPLICIT width instead (flex-grow 0) — changing only the
+   flex-basis did nothing, because with room to spare the strips just grew back
+   to fill it and every size looked identical. Pinning the width is what
+   actually lets a crowded mixer fit, and the container already scrolls. */
+.mx-size-s .mx-strip        { flex: 0 0 58px;  min-width: 58px; }
+.mx-size-s .mx-strip-send   { flex: 0 0 56px;  min-width: 56px; }
+.mx-size-s .mx-strip-master { flex: 0 0 76px;  min-width: 76px; }
+.mx-size-l .mx-strip        { flex: 0 0 132px; min-width: 132px; }
+.mx-size-l .mx-strip-send   { flex: 0 0 128px; min-width: 128px; }
+.mx-size-l .mx-strip-master { flex: 0 0 152px; min-width: 152px; }
+/* Collapsed sends stay pinned narrow at every size. */
+.mx-sends-collapsed .mx-strip-send,
+.mx-size-s.mx-sends-collapsed .mx-strip-send,
+.mx-size-l.mx-sends-collapsed .mx-strip-send { flex: 0 0 34px; min-width: 34px; }
+
+/* ── collapsed sends ──
+   Sends are usually the first thing you're NOT using, so this reclaims their
+   width: keep the name and the fader (the two things you'd still reach for)
+   and drop the FX chain, pan, M/S row and meter. */
+.mx-sends-collapsed .mx-strip-send { flex: 0 0 34px; min-width: 34px; }
+.mx-sends-collapsed .mx-strip-send .mx-fx-chain,
+.mx-sends-collapsed .mx-strip-send .mx-pan,
+.mx-sends-collapsed .mx-strip-send .mx-ms-row,
+.mx-sends-collapsed .mx-strip-send .mx-meter { display: none; }
+.mx-sends-collapsed .mx-strip-send .mx-head-name {
+  font-size: 8px;
+  letter-spacing: 0;
+}
+
+/* ── multi-select ── */
+.mx-strip-sel {
+  background: color-mix(in srgb, var(--neon, #35ff69) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--neon, #35ff69) 55%, transparent);
+}
+.mx-marquee {
+  border: 1px solid var(--neon, #35ff69);
+  background: color-mix(in srgb, var(--neon, #35ff69) 14%, transparent);
+  pointer-events: none;
+  z-index: 40;
+}
+.mx-size-ctl { display: inline-flex; gap: 2px; }
+.mx-size-btn { min-width: 18px; padding: 2px 4px; }
+/* CONSOLE flavour + amount — shown only while CONSOLE is on. */
+.mx-console-ctl { display: inline-flex; align-items: center; gap: 2px; }
+.mx-console-amt {
+  width: 64px; height: 10px; margin: 0 2px 0 6px;
+  accent-color: var(--neon, #35ff69);
+  cursor: pointer;
+}
+.mx-console-amt-val {
+  font-size: 9px; letter-spacing: 1px; min-width: 18px; text-align: right;
+  color: var(--hw-muted, #8899aa);
+}
+.mx-sel-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--neon, #35ff69);
+}
+
+/* ── header ── */
+.mx-head {
+  width: 100%;
+  height: 22px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* A raised button: a lit top edge, a shadow under the bottom edge, and it
+     sits 1px proud of the strip. Selecting the strip PRESSES it in (below). */
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+    0 2px 0 rgba(0, 0, 0, 0.55),
+    0 3px 4px rgba(0, 0, 0, 0.35);
+  transform: translateY(-1px);
+  transition: transform 60ms ease-out, box-shadow 60ms ease-out, filter 60ms ease-out;
+}
+.mx-head:hover { filter: brightness(1.08); }
+/* Selected = pushed in: no drop shadow, a dark inset lip at the top, 1px lower,
+   slightly darker — the same read as a pressed hardware button, so several
+   selected strips show as several pushed-in caps at a glance. */
+.mx-strip-sel .mx-head {
+  transform: translateY(1px);
+  filter: brightness(0.82) saturate(1.1);
+  box-shadow:
+    inset 0 2px 3px rgba(0, 0, 0, 0.55),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 0 0 rgba(0, 0, 0, 0);
+}
+.mx-strip-sel .mx-head:hover { filter: brightness(0.9) saturate(1.1); }
+.mx-head-name {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--hw-bg, #10131c);
+  text-transform: uppercase;
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  padding: 0 3px;
+}
+.mx-head-name-master { color: var(--hw-bg, #10131c); }
+.mx-head-edit {
+  width: 90%;
+  border: none;
+  background: rgba(0, 0, 0, 0.2);
+  font-family: inherit;
+  font-size: 9px;
+  text-align: center;
+  color: var(--hw-bg, #10131c);
+  outline: none;
+}
+
+/* ── FX insert chain ── */
+.mx-fx-chain {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: relative;   /* anchor the floating drag ghost + drop line */
+}
+.mx-fx-slot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--hw-bg, #1a2a1a);
+  border: 1px solid var(--hw-border, rgba(53, 255, 105, 0.6));
+}
+.mx-fx-slot.open { box-shadow: 0 0 0 1px var(--hw-accent, #35ff69); }
+.mx-fx-slot.bypassed { background: var(--hw-bg, #1a1a1a); border-color: var(--hw-border, #333); }
+.mx-fx-slot.bypassed .mx-fx-name { opacity: 0.4; }   /* dim name confirms bypass */
+/* bypass square: ON (active) = filled with the track colour (set inline);
+ * OFF (bypassed) = empty with a dim border only. */
+.mx-fx-sq {
+  flex: 0 0 auto;
+  width: 10px; height: 10px;
+  padding: 0;
+  border: 1px solid var(--hw-border, #445566);
+  border-radius: 2px;
+  background: none;
+  cursor: pointer;
+}
+.mx-fx-name {
+  flex: 1; min-width: 0;
+  font-size: 8px; color: var(--hw-accent, #35ff69); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mx-fx-rm {
+  border: none; background: none; cursor: pointer; padding: 0;
+  color: var(--hw-muted, #ff7766); font-size: 8px; line-height: 1;
+}
+.mx-fx-add {
+  width: 100%;
+  height: 16px;
+  font-family: inherit;
+  font-size: 8px;
+  color: var(--hw-muted, rgba(53, 255, 105, 0.5));
+  background: var(--hw-bg, #0a0e1a);
+  border: 1px dashed var(--hw-border, #2a3a4a);
+  border-radius: 2px;
+  cursor: pointer;
+  outline: none;
+}
+.mx-fx-add:hover { color: var(--hw-accent, #35ff69); border-color: var(--hw-accent, #35ff69); }
+
+/* ── FX chain drag-to-reorder ── */
+.mx-fx-grip {
+  flex: 0 0 auto;
+  width: 8px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--hw-faint, #445566);
+  font-size: 9px; line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.mx-fx-grip:active { cursor: grabbing; }
+.mx-fx-slot.dragging {            /* floating ghost following the pointer */
+  opacity: 0.4;
+  pointer-events: none;
+  transform: scale(0.98);
+  z-index: 5;
+}
+.mx-fx-slot.placeholder {         /* gap left in the dragged slot's home spot */
+  background: none;
+  border-style: dashed;
+  border-color: var(--hw-border, rgba(53, 255, 105, 0.4));
+}
+.mx-fx-drop-line {                /* where the slot will land */
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--hw-accent, #35ff69);
+  border-radius: 1px;
+  box-shadow: 0 0 4px rgba(53, 255, 105, 0.7);
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* ── meter + fader (side-by-side, Ableton layout) ── */
+.mx-meter-fader-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;   /* the fader column stretches to the meter's height */
+  gap: 4px;
+  width: 100%;
+}
+.mx-meter {
+  background: var(--hw-bg, #0a0e1a);
+  border-radius: 2px;
+  cursor: pointer;
+  height: 196px;          /* definite → flexbox won't stretch/scale the canvas buffer */
+  flex: 0 0 auto;         /* keep the canvas's natural width (42 / 48); meter ≈ 60% of the row */
+}
+
+/* ── knob ── */
+.mx-knob {
+  position: relative;
+  width: 26px; height: 26px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+/* Machined dial (same language as the MPC Extractor's knobs): a domed cap with
+   a highlight off-centre, sitting in a 270° groove ring; the value arc lights
+   the groove from the stop (or from 12 o'clock for a bipolar knob). */
+.mx-knob-dial {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 28%,
+    color-mix(in srgb, var(--hw-panel, #3a4258) 78%, white) 0%,
+    color-mix(in srgb, var(--hw-panel, #3a4258) 90%, black) 55%,
+    color-mix(in srgb, var(--hw-panel, #3a4258) 72%, black) 100%);
+  border: 1px solid color-mix(in srgb, black 38%, var(--hw-border, #2a3142));
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  position: relative;
+}
+.mx-knob::before, .mx-knob::after {
+  content: ''; position: absolute; inset: -3.5px; border-radius: 50%; pointer-events: none;
+  -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(closest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+}
+.mx-knob::before { background: conic-gradient(from -135deg, color-mix(in srgb, var(--hw-text, #c9d4e2) 14%, transparent) 0 270deg, transparent 270deg 360deg); }
+.mx-knob::after { background: conic-gradient(from var(--a0, -135deg), var(--arc-col, var(--neon, #35ff69)) 0 var(--asw, 0deg), transparent var(--asw, 0deg) 360deg); }
+.mx-knob-dot {
+  position: absolute;
+  width: 2.5px; height: 9px;
+  left: 50%; top: 2px;
+  margin-left: -1.25px;
+  border-radius: 2px;
+  transform-origin: 50% 11px;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
+}
+.mx-knob-bubble, .mx-fader-bubble, .mx-param-val .mx-knob-bubble {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 3px;
+  background: var(--hw-bg, #0a0e1a);
+  border: 1px solid var(--hw-accent, #35ff69);
+  border-radius: 3px;
+  color: var(--hw-accent, #35ff69);
+  font-size: 8px;
+  padding: 1px 4px;
+  white-space: nowrap;
+  z-index: 30;
+  pointer-events: none;
+}
+
+/* ── horizontal pan fader (replaces the rotary pan knob) ── */
+.mx-pan {
+  position: relative;
+  width: 100%;
+  height: 18px;
+}
+.mx-pan-lbl {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: 'DM Mono', monospace;
+  font-size: 8px;
+  color: var(--hw-faint, #445566);
+  pointer-events: none;
+  z-index: 1;
+}
+.mx-pan-lbl-l { left: 1px; }
+.mx-pan-lbl-r { right: 1px; }
+/* full-height (18px) hit area, inset between the L / R labels */
+.mx-pan-track {
+  position: absolute;
+  left: 14px; right: 14px; top: 0; bottom: 0;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.mx-pan-track::before {            /* the 2px groove */
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 50%;
+  height: 2px; margin-top: -1px;
+  background: var(--hw-bg, #0a0e1a);
+  border-radius: 1px;
+  box-shadow: inset 0 0 2px rgba(0, 0, 0, 0.8);
+}
+.mx-pan-center {                   /* centre tick — brighter than the groove */
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 1px; height: 8px;
+  margin-top: -4px;
+  transform: translateX(-50%);
+  background: var(--hw-faint, rgba(187, 184, 178, 0.4));
+}
+.mx-pan-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px; height: 18px;
+  margin-top: -9px; margin-left: -7px;
+  background: linear-gradient(var(--hw-pad, #cfccc4), var(--hw-muted, #8a877f));
+  border-top: 2px solid var(--hw-accent, #35ff69);   /* channel colour set inline */
+  border-radius: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.mx-pan-bubble {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 3px;
+  transform: translateX(-50%);
+  background: var(--hw-bg, #0a0e1a);
+  border: 1px solid var(--hw-accent, #35ff69);
+  border-radius: 3px;
+  color: var(--hw-accent, #35ff69);
+  font-size: 8px;
+  padding: 1px 4px;
+  white-space: nowrap;
+  z-index: 30;
+  pointer-events: none;
+}
+
+/* ── fader (right side of the meter+fader row; matches the meter height) ── */
+.mx-fader-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;            /* take the remaining ≈ 40% of the meter+fader row width */
+  min-width: 0;
+}
+.mx-fader {
+  position: relative;
+  width: 100%;        /* fill the fader column; track + thumb stay centered */
+  flex: 1;            /* fill the row height so it spans the same area as the meter */
+  min-height: 0;
+  margin: 0 auto;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.mx-fader-track {
+  position: absolute;
+  left: 50%; top: 7px; bottom: 7px;
+  width: 5px;
+  margin-left: -2.5px;
+  /* Recessed groove — mixed toward black so it reads as a recess on any theme. */
+  background: color-mix(in srgb, var(--hw-bg, #0a0e1a) 55%, black);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+/* Lit fill from the bottom up to the cap. */
+.mx-fader-fill {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  border-radius: 3px;
+}
+/* Hairline at 0 dB. */
+.mx-fader-unity {
+  position: absolute; left: -4px; right: -4px; height: 1px;
+  background: color-mix(in srgb, var(--hw-text, #c9d4e2) 30%, transparent);
+  pointer-events: none;
+}
+/* Machined capsule cap — deliberately theme-independent, like real hardware. */
+.mx-fader-thumb {
+  position: absolute;
+  left: 50%;
+  width: 22px; height: 14px;
+  margin-left: -11px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #4a4f48 0%, #33372f 45%, #272b24 55%, #31352e 100%);
+  border: 1px solid rgba(0, 0, 0, 0.6);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+.mx-fader-thumb::after {
+  content: ''; position: absolute; left: 3px; right: 3px; top: 50%; height: 1.5px;
+  margin-top: -1px; border-radius: 1px;
+  background: var(--cap-line, var(--hw-accent, #35ff69));
+  box-shadow: 0 0 4px color-mix(in srgb, var(--cap-line, var(--hw-accent, #35ff69)) 60%, transparent);
+}
+.mx-fader-bubble { bottom: auto; top: -2px; }
+.mx-fader-menu {
+  position: absolute;
+  top: 4px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  background: var(--hw-panel, #111827);
+  border: 1px solid var(--hw-border, #2a3a4a);
+  border-radius: 3px;
+  display: flex; flex-direction: column;
+}
+.mx-fader-menu button {
+  background: none; border: none; color: var(--hw-text, #c9d4e2);
+  font-family: inherit; font-size: 9px; padding: 4px 8px; cursor: pointer; white-space: nowrap;
+}
+.mx-fader-menu button:hover { background: var(--hw-bg, #1f2a3d); color: var(--hw-accent, #35ff69); }
+.mx-menu-backdrop { position: fixed; inset: 0; z-index: 35; }
+
+/* ── mute / solo ── */
+/* Full strip width: two 45% buttons pushed to the edges (10% gap between). */
+.mx-ms-row { display: flex; justify-content: space-between; gap: 0; width: 100%; }
+.mx-ms {
+  width: 45%; height: 18px;
+  font-family: inherit; font-size: 10px; font-weight: 700;
+  border: 1px solid var(--hw-border, #2a3a4a);
+  border-radius: 2px;
+  background: var(--hw-bg, #141a28);
+  color: var(--hw-muted, #6c7a8c);
+  cursor: pointer;
+}
+/* mute = alarm → stays red in every theme */
+.mx-mute.on {
+  color: #fff; background: #5a1620; border-color: #ff4444;
+  box-shadow: inset 0 0 6px rgba(255, 68, 68, 0.8);
+}
+.mx-solo.on {
+  color: var(--hw-bg, #10131c); background: var(--hw-accent, #e7a977); border-color: var(--hw-accent, #ffce9e);
+  box-shadow: inset 0 0 6px rgba(231, 169, 119, 0.9);
+}
+
+/* ── sends ── */
+/* Single horizontal row of 4 half-size (~16px) send knobs, full strip width. */
+.mx-sends {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2px;
+}
+.mx-send { display: flex; flex-direction: column; align-items: center; flex: 1; min-width: 0; }
+/* ~16px dial; dot sized in % so it keeps pivoting on the dial centre at any
+ * size (top 2px / h 7px / origin 8px on the 20px base → 10% / 35% / 114% of the
+ * dot box, scale-independent). */
+.mx-send .mx-knob { width: 16px; height: 16px; }
+.mx-send .mx-knob-dial { width: 16px; height: 16px; }
+.mx-send .mx-knob-dot { top: 10%; height: 35%; transform-origin: 50% 114%; }
+.mx-send-lbl { font-size: 7px; color: var(--hw-muted, #8899aa); }
+
+/* Master clipper (drive) knob — chopper-engine param threaded into the mixer. */
+.mx-clip-row {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 2px; margin-top: 4px;
+}
+.mx-clip-lbl { font-size: 7px; color: var(--hw-muted, #8899aa); letter-spacing: 0.05em; }
+
+/* ── LUFS panel (master) ── */
+.mx-lufs {
+  width: 100%;
+  background: var(--hw-bg, #06090f);
+  border: 1px solid var(--hw-border, #1d2942);
+  border-radius: 3px;
+  padding: 3px 4px;
+  font-size: 8px;
+  color: var(--hw-accent, #35ff69);
+}
+.mx-lufs-row { display: flex; align-items: center; gap: 4px; line-height: 1.5; }
+.mx-lufs-k { color: var(--hw-muted, #6c7a8c); width: 14px; }
+.mx-lufs-tp { color: var(--hw-accent, #e7a977); }
+.mx-lufs-tp .mx-lufs-k { color: var(--hw-muted, #8a6a4a); }
+.mx-lufs-reset {
+  margin-left: auto; border: none; background: none; cursor: pointer;
+  color: var(--hw-muted, #6c7a8c); font-size: 9px; padding: 0;
+}
+.mx-lufs-reset:hover { color: var(--hw-accent, #35ff69); }
+
+/* ── device panels (below strips) ── */
+.mx-devices {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 2px 2px;
+  border-top: 1px solid var(--hw-border, rgba(187, 184, 178, 0.18));
+  overflow-x: auto;
+}
+.mx-device {
+  flex: 0 0 auto;
+  min-width: 150px;
+  height: auto;             /* size to content — no fixed height, no max-height cap */
+  min-height: 48px;         /* just enough for the header */
+  background: var(--hw-panel, #111827);
+  border: 1px solid var(--hw-border, #2a3a4a);
+  border-radius: 4px;
+  display: flex; flex-direction: column;
+}
+.mx-device-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--hw-border, #1d2942);
+}
+.mx-device-title { font-size: 10px; font-weight: 700; color: var(--hw-accent, #e7a977); letter-spacing: 1px; }
+.mx-device-sub { font-size: 8px; color: var(--hw-muted, #6c7a8c); }
+.mx-device-close { margin-left: auto; border: none; background: none; color: var(--hw-muted, #8899aa); cursor: pointer; font-size: 10px; }
+.mx-device-close:hover { color: #ff7766; }
+.mx-device-body {
+  display: flex; flex-wrap: wrap; gap: 8px 10px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  align-content: flex-start;
+}
+
+/* ── collapsed device → thin vertical tab. Panels auto-size (height:auto), and
+ * .mx-devices stretches every panel to the tallest sibling, so collapsing a
+ * panel while a taller one stays open is shift-free; collapsing the only/tallest
+ * panel lets the row shrink to content (expected with auto height). ── */
+.mx-device.collapsed {
+  min-width: 0;
+  width: 28px;
+  cursor: pointer;
+}
+.mx-device.collapsed .mx-device-head {
+  flex: 1;                  /* fill the fixed panel height */
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border-bottom: none;
+}
+.mx-device.collapsed .mx-device-close {
+  margin-left: 0;
+  order: -1;                /* close button stays accessible at the top */
+}
+.mx-device.collapsed .mx-device-title {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;  /* effect name reads vertically; track colour kept inline */
+}
+.mx-device.collapsed .mx-device-sub { display: none; }
+
+/* ── one param control ── */
+.mx-param {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 40px;
+}
+.mx-param-label { font-size: 7px; letter-spacing: 0.5px; color: var(--hw-muted, #8899aa); text-transform: uppercase; }
+.mx-param-val { font-size: 8px; color: var(--hw-text, #c9d4e2); }
+.mx-param-select, .mx-param-toggle {
+  font-family: inherit; font-size: 9px;
+  background: var(--hw-bg, #0a0e1a); color: var(--hw-accent, #35ff69);
+  border: 1px solid var(--hw-border, #2a3a4a); border-radius: 2px;
+  padding: 2px 4px; cursor: pointer; outline: none;
+}
+.mx-param-toggle.on { background: var(--hw-bg, #1a2a1a); color: var(--hw-accent, #35ff69); border-color: var(--hw-accent, #35ff69); box-shadow: inset 0 0 5px rgba(53, 255, 105, 0.5); }
+.mx-param-toggle:disabled, .mx-param-select:disabled, .mx-param-slider input:disabled { opacity: 0.5; cursor: default; }
+.mx-param-slider { min-width: 110px; }
+.mx-param-slider input[type="range"] { width: 100px; accent-color: var(--hw-accent, #35ff69); }
+
+/* ── MIDI learn (FX device-panel knobs / sliders) ── */
+/* learning: pulsing amber ring (outline → not clipped by the panel) */
+.mx-param-learning {
+  outline: 2px solid var(--hw-accent, #e7a977);
+  outline-offset: 1px;
+  border-radius: 4px;
+  animation: mx-midi-pulse 0.9s ease-in-out infinite;
+}
+@keyframes mx-midi-pulse {
+  0%, 100% { outline-color: rgba(231, 169, 119, 0.95); }
+  50%      { outline-color: rgba(231, 169, 119, 0.2); }
+}
+.mx-midi-wait { font-size: 7px; color: var(--hw-accent, #e7a977); letter-spacing: 0.3px; }
+/* mapped indicator: 5×5 amber square by the param label */
+.mx-midi-dot {
+  display: inline-block;
+  width: 5px; height: 5px;
+  margin-left: 3px;
+  vertical-align: middle;
+  background: var(--hw-accent, #e7a977);
+  border-radius: 1px;
+}
+/* right-click context menu */
+.mx-midi-backdrop { position: fixed; inset: 0; z-index: 90; }
+.mx-midi-menu {
+  position: fixed; z-index: 91;
+  background: var(--hw-panel, #0a0e1a);
+  border: 1px solid var(--hw-border, #2a3a4a);
+  border-radius: 3px;
+  display: flex; flex-direction: column;
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.mx-midi-menu button {
+  border: none; background: none; cursor: pointer;
+  font-family: inherit; font-size: 10px;
+  padding: 5px 12px; text-align: left; white-space: nowrap;
+}
+.mx-midi-menu button:hover { background: var(--hw-bg, #141c2e); }
+.mx-midi-learn { color: var(--hw-accent, #35ff69); }
+.mx-midi-clear { color: #ff6666; }   /* destructive → stays red */
+
+/* ── Minimal-palette tweaks ── only when an ancestor (the .chopper-view root)
+ * carries data-palette. The phosphor glows read as stray green under a neutral
+ * palette, so drop them (mirrors HardwareView's glow-off). Inert in Original
+ * mode (no data-palette → these never match). Alarm glows (.mx-mute) are kept. */
+[data-palette] .mx-fx-drop-line,
+[data-palette] .mx-solo.on,
+[data-palette] .mx-param-toggle.on,
+[data-palette] .mx-knob-dot { box-shadow: none; }
+
+/* ── Fader MIDI learn (right-click → MIDI Learn) ── */
+/* The .mx-param-learning ring + amber dot are shared with the device-panel
+   knobs; these only place them on the vertical fader. */
+.mx-fader-midi-dot {
+  position: absolute;
+  top: 2px; right: 2px;
+  margin-left: 0;
+  pointer-events: none;
+}
+.mx-fader-learn-hint {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  white-space: nowrap;
+  font-size: 7px;
+  letter-spacing: 0.4px;
+  color: var(--hw-accent, #e7a977);
+  pointer-events: none;
+}
+
+/* SC COMP gain-reduction readout — sits first in the device panel. */
+.mx-sc-gr { min-width: 44px; align-items: center; }
+.mx-sc-gr .mx-param-val { font-variant-numeric: tabular-nums; color: var(--hw-accent, #e7a977); }
+
+/* Cmd/Ctrl-drag copy of an effect: the ghost that follows the pointer, and the
+   target chain's highlight (green = will land, red = strip has no free slot). */
+.mx-fx-copy-ghost {
+  z-index: 60; pointer-events: none;
+  padding: 2px 6px; border-radius: 3px;
+  font-family: 'DM Mono', monospace; font-size: 9px; letter-spacing: 0.04em;
+  color: var(--hw-text, #c9d4e2);
+  background: color-mix(in srgb, var(--hw-panel, #1f2a3d) 85%, black);
+  border: 1px solid var(--neon, #35ff69);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5), 0 0 6px color-mix(in srgb, var(--neon, #35ff69) 40%, transparent);
+  white-space: nowrap;
+}
+.mx-fx-copy-hint { color: var(--hw-muted, #8a99ad); }
+.mx-fx-chain.mx-fx-copy-over { outline: 1px dashed var(--neon, #35ff69); outline-offset: 1px; border-radius: 3px; }
+.mx-fx-chain.mx-fx-copy-full { outline: 1px dashed #ff4444; outline-offset: 1px; border-radius: 3px; }
+
+/* ── NARROW strips: the fader rides ON the meter as a thin line ─────────────
+   Below ~66px there is no room for a fader column beside a 42px meter (the
+   cap spilled into the neighbour). The meter fills the row and the fader
+   column overlays it: groove hidden, the cap becomes a full-width bar you drag
+   up/down; the meter keeps drawing underneath. */
+.mx-strip--narrow .mx-meter-fader-row { position: relative; }
+.mx-strip--narrow .mx-meter { flex: 1 1 auto; width: 100%; min-width: 0; }
+.mx-strip--narrow .mx-fader-col { position: absolute; left: 0; right: 0; top: 0; bottom: 0; }
+.mx-strip--narrow .mx-fader-track { opacity: 0; }
+.mx-strip--narrow .mx-fader-unity { left: 2px; right: 2px; opacity: 0.9; }
+.mx-strip--narrow .mx-fader-thumb {
+  left: 1px; right: 1px; width: auto; margin-left: 0; height: 7px; border-radius: 2px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.35), rgba(255,255,255,0.12));
+  border: 1px solid rgba(0,0,0,0.55);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.5), 0 0 0 1px color-mix(in srgb, var(--cap-line, var(--hw-accent, #35ff69)) 55%, transparent);
+}
+.mx-strip--narrow .mx-fader-thumb::after { left: 2px; right: 2px; height: 1.5px; }
+/* the fader's own bubble/menu still anchor to the column */
+.mx-strip--narrow .mx-fader-bubble { top: -18px; }
+
+/* ── LOUDNESS & SPECTRUM popup (click the master M/S/I/TP readout) ─────── */
+.mx-lufs-clickable { cursor: pointer; }
+.mx-lufs-clickable:hover { border-color: var(--hw-accent, #35ff69); }
+.lp-backdrop { position: fixed; inset: 0; z-index: 10050; background: rgba(0,0,0,0.6); display: grid; place-items: center; padding: 12px; }
+.lp-panel {
+  width: min(760px, 100%); max-height: 94dvh; overflow: auto; box-sizing: border-box;
+  background: var(--hw-bg, #06090f); color: var(--hw-text, #cfe3d6);
+  border: 1px solid var(--hw-border, #1d2942); border-radius: 8px; padding: 12px 14px 14px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 11px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+.lp-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.lp-title { font-size: 12px; letter-spacing: 2px; color: var(--hw-accent, #35ff69); flex: 1; }
+.lp-tag { font-size: 9px; letter-spacing: 1px; padding: 2px 6px; border-radius: 3px; border: 1px solid currentColor; }
+.lp-tag.ok { color: var(--hw-accent, #35ff69); }
+.lp-tag.warn { color: #e7a977; }
+.lp-btn { background: transparent; border: 1px solid var(--hw-border, #1d2942); color: var(--hw-muted, #8aa0b8); font: inherit; font-size: 10px; letter-spacing: 1px; padding: 4px 8px; border-radius: 3px; cursor: pointer; }
+.lp-btn.on { color: var(--hw-accent, #35ff69); border-color: var(--hw-accent, #35ff69); }
+.lp-close { background: transparent; border: 1px solid var(--hw-border, #1d2942); color: var(--hw-muted, #8aa0b8); width: 26px; height: 26px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+.lp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.lp-cell { background: rgba(255,255,255,0.03); border: 1px solid var(--hw-border, #1d2942); border-radius: 6px; padding: 8px 10px; }
+.lp-k { font-size: 9px; letter-spacing: 2px; color: var(--hw-muted, #6c7a8c); }
+.lp-big { font-size: 26px; line-height: 1.1; margin-top: 4px; color: var(--hw-text, #e6f1ea); font-variant-numeric: tabular-nums; }
+.lp-big.ok { color: var(--hw-accent, #35ff69); }
+.lp-big.hot { color: #ff5b4a; }
+.lp-big.low { color: #e7a977; }
+.lp-u { font-size: 9.5px; color: var(--hw-muted, #8aa0b8); margin-top: 3px; }
+.lp-corr { display: flex; align-items: center; gap: 10px; margin: 10px 0 8px; }
+.lp-corr-track { position: relative; flex: 1; height: 14px; border: 1px solid var(--hw-border, #1d2942); border-radius: 7px; background: linear-gradient(90deg, #ff5b4a33, transparent 50%, #35ff6933); }
+.lp-corr-track span { position: absolute; top: -1px; font-size: 9px; color: var(--hw-muted, #6c7a8c); }
+.lp-corr-neg { left: 4px; } .lp-corr-zero { left: 50%; transform: translateX(-50%); } .lp-corr-pos { right: 4px; }
+.lp-corr-dot { position: absolute; top: 1px; width: 10px; height: 10px; border-radius: 50%; background: var(--hw-accent, #35ff69); transform: translateX(-50%); transition: left 80ms linear; box-shadow: 0 0 6px var(--hw-accent, #35ff69); }
+.lp-corr-val { width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+.lp-spec-head { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.lp-spec-head .lp-k { flex: 1; }
+.lp-spec { display: block; width: 100%; height: 220px; margin-top: 6px; background: rgba(0,0,0,0.35); border: 1px solid var(--hw-border, #1d2942); border-radius: 6px; }
+.lp-bands { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 8px; }
+.lp-band { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.lp-band-bar { width: 100%; height: 44px; border: 1px solid var(--hw-border, #1d2942); border-radius: 3px; position: relative; overflow: hidden; background: rgba(0,0,0,0.3); }
+.lp-band-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 4%; background: var(--hw-accent, #35ff69); opacity: 0.75; transition: height 100ms linear; }
+.lp-band-v { font-size: 10px; font-variant-numeric: tabular-nums; }
+.lp-band-n { font-size: 8.5px; letter-spacing: 1px; color: var(--hw-muted, #6c7a8c); }
+@media (max-width: 720px) {
+  .lp-grid { grid-template-columns: 1fr 1fr; }
+  .lp-big { font-size: 20px; }
+  .lp-spec { height: 160px; }
+}

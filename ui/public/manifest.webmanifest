@@ -1,0 +1,19 @@
+{
+  "name": "Terminator",
+  "short_name": "T-800",
+  "description": "YouTube sample chopper + MPC pad sampler",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0a0a",
+  "theme_color": "#00ff96",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

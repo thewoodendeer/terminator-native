@@ -27,7 +27,8 @@ class WebShell::Browser final : public juce::WebBrowserComponent
 namespace
 {
 constexpr int kSnapshotHz = 20;
-constexpr int kProbeDelayTicks = 50; // 2.5 s at 20 Hz — enough for info() + a few snapshots
+constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
+constexpr int kProbeDelayTicksReact = 140; // 7 s — the React UI: fonts + first render + engines constructing
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -59,6 +60,58 @@ std::vector<int> intVector(const juce::var& v)
             out.push_back(static_cast<int>(x));
     return out;
 }
+
+const char* mimeForExtension(const juce::String& extWithDot)
+{
+    const auto e = extWithDot.toLowerCase();
+    if (e == ".html" || e == ".htm")
+        return "text/html";
+    if (e == ".js" || e == ".mjs")
+        return "text/javascript";
+    if (e == ".css")
+        return "text/css";
+    if (e == ".json" || e == ".webmanifest" || e == ".map")
+        return "application/json";
+    if (e == ".svg")
+        return "image/svg+xml";
+    if (e == ".png")
+        return "image/png";
+    if (e == ".jpg" || e == ".jpeg")
+        return "image/jpeg";
+    if (e == ".gif")
+        return "image/gif";
+    if (e == ".webp")
+        return "image/webp";
+    if (e == ".ico")
+        return "image/x-icon";
+    if (e == ".mp4")
+        return "video/mp4";
+    if (e == ".webm")
+        return "video/webm";
+    if (e == ".mp3")
+        return "audio/mpeg";
+    if (e == ".wav")
+        return "audio/wav";
+    if (e == ".flac")
+        return "audio/flac";
+    if (e == ".ogg")
+        return "audio/ogg";
+    if (e == ".m4a")
+        return "audio/mp4";
+    if (e == ".woff2")
+        return "font/woff2";
+    if (e == ".woff")
+        return "font/woff";
+    if (e == ".ttf")
+        return "font/ttf";
+    if (e == ".otf")
+        return "font/otf";
+    if (e == ".wasm")
+        return "application/wasm";
+    if (e == ".txt")
+        return "text/plain";
+    return "application/octet-stream";
+}
 } // namespace
 
 juce::var WebShell::ok(bool okFlag, const juce::String& error)
@@ -79,10 +132,23 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     if (probePath.isNotEmpty())
         probeFile_ = juce::File::getCurrentWorkingDirectory().getChildFile(probePath);
 
+    uiDir_ = resolveUiDir();
+
+    // Runs before every page script: collect uncaught errors + unhandled rejections so the headless probe (and a
+    // future crash-report) can read them — the WebView has no console we can see in CI.
+    static const char* kErrorCollector = R"JS((function(){
+        if (window.__terminatorErrors) return;
+        const errs = []; window.__terminatorErrors = errs;
+        const push = (m) => { if (errs.length < 50) errs.push(String(m).slice(0, 400)); };
+        window.addEventListener('error', (e) => push((e && e.message) || 'error'), true);
+        window.addEventListener('unhandledrejection', (e) => push('unhandledrejection: ' + ((e && e.reason && (e.reason.stack || e.reason.message || e.reason)) || '')));
+    })();)JS";
+
     auto opts =
         juce::WebBrowserComponent::Options{}
             .withNativeIntegrationEnabled()
             .withKeepPageLoadedWhenBrowserIsHidden()
+            .withUserScript(kErrorCollector)
             .withResourceProvider([this](const juce::String& url) { return provideResource(url); })
             .withNativeFunction("terminatorInfo", [this](const juce::Array<juce::var>&,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -158,6 +224,37 @@ std::optional<juce::WebBrowserComponent::Resource> WebShell::provideResource(con
         {"/index.html", WebResources::index_html, WebResources::index_htmlSize, "text/html"},
         {"/juce/index.js", WebResources::index_js, WebResources::index_jsSize, "text/javascript"},
     };
+    // 1. the built React UI from disk (ui/dist) — when present it owns "/" and everything under it
+    if (uiDir_ != juce::File())
+    {
+        auto path = url.upToFirstOccurrenceOf("?", false, false).upToFirstOccurrenceOf("#", false, false);
+        if (path == "/" || path.isEmpty())
+            path = "/index.html";
+        else if (path.endsWithChar('/'))
+            path += "index.html";
+        // never leave the UI dir (no "..", no absolute Windows paths)
+        if (!path.contains("..") && !path.containsChar(':') && path.startsWithChar('/'))
+        {
+            auto f = uiDir_.getChildFile(path.substring(1));
+            if (f.isDirectory())
+                f = f.getChildFile("index.html");
+            if (f.existsAsFile() && f.isAChildOf(uiDir_))
+            {
+                juce::MemoryBlock mb;
+                if (f.loadFileAsData(mb))
+                {
+                    juce::WebBrowserComponent::Resource r;
+                    r.data.assign(static_cast<const std::byte*>(mb.getData()),
+                                  static_cast<const std::byte*>(mb.getData()) + mb.getSize());
+                    r.mimeType = mimeForExtension(f.getFileExtension());
+                    return r;
+                }
+            }
+        }
+        if (url != "/juce/index.js")
+            return std::nullopt; // a real 404 inside the UI; /juce/index.js stays available below
+    }
+    // 2. the embedded Phase-1 static page + the JUCE webview ESM
     for (const auto& e : entries)
     {
         if (url == e.path)
@@ -170,6 +267,26 @@ std::optional<juce::WebBrowserComponent::Resource> WebShell::provideResource(con
         }
     }
     return std::nullopt;
+}
+
+juce::File WebShell::resolveUiDir()
+{
+    const auto env = juce::SystemStats::getEnvironmentVariable("TERMINATOR_UI_DIR", {});
+    if (env.isNotEmpty())
+    {
+        const auto d = juce::File::getCurrentWorkingDirectory().getChildFile(env);
+        return d.getChildFile("index.html").existsAsFile() ? d : juce::File();
+    }
+#if JUCE_MAC
+    const auto d = juce::File::getSpecialLocation(juce::File::currentApplicationFile)
+                       .getChildFile("Contents")
+                       .getChildFile("Resources")
+                       .getChildFile("ui");
+#else
+    const auto d =
+        juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory().getChildFile("ui");
+#endif
+    return d.getChildFile("index.html").existsAsFile() ? d : juce::File();
 }
 
 juce::var WebShell::deviceInfoVar() const
@@ -575,7 +692,8 @@ void WebShell::pageLoaded(const juce::String&)
     if (probeFile_ != juce::File() && !probeArmed_)
     {
         probeArmed_ = true;
-        probeCountdown_ = kProbeDelayTicks;
+        // the React UI needs a moment longer than the static page (fonts, first render, engines constructing)
+        probeCountdown_ = uiDir_ != juce::File() ? kProbeDelayTicksReact : kProbeDelayTicks;
     }
 }
 
@@ -583,9 +701,17 @@ void WebShell::runProbe()
 {
     static const char* kScript = R"JS((function(){
         const t = (id) => { const e = document.getElementById(id); return e ? e.textContent : null; };
+        const root = document.getElementById('root');
+        const chopper = document.querySelector('.chopper-view');
         return JSON.stringify({ title: document.title, hasJuce: !!(window.__JUCE__ && window.__JUCE__.backend),
                                 bridge: t('bridge'), engine: t('engine'), device: t('device'), snapshot: t('snap'),
-                                peak: t('peakTxt'), midi: t('midiTxt'), pads: document.querySelectorAll('.pad').length });
+                                peak: t('peakTxt'), midi: t('midiTxt'), pads: document.querySelectorAll('.pad').length,
+                                // the React UI (ui/dist): uiMode 'react' once App mounted, chopperView once ChopperView rendered
+                                uiMode: root ? 'react' : 'static', rootChildren: root ? root.childElementCount : -1,
+                                chopperView: !!chopper, padGrid: document.querySelectorAll('.pad-grid .pad, .pad-cell, [class*="pad-grid"]').length,
+                                href: String(location.href), secureContext: !!window.isSecureContext,
+                                audioWorklet: (typeof AudioContext !== 'undefined') && ('audioWorklet' in AudioContext.prototype),
+                                errors: window.__terminatorErrors || [] });
     })())JS";
     browser_->evaluateJavascript(kScript,
                                  [this](juce::WebBrowserComponent::EvaluationResult result)

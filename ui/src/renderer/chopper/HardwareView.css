@@ -1,0 +1,1636 @@
+/* HardwareView.css — opt-in ?v2 hardware layout. Adapted from the
+ * terminator-machine.html design reference; every class is `hw-` prefixed so it
+ * never collides with the classic ChopperView / terminator.css styles. The
+ * embedded feature components (WaveformView, Timeline, DrumSection, PadGrid,
+ * SampleBrowser, FinishHimPortal) bring their own CSS — this file styles the
+ * chassis around them, plus a few `.hw-machine`-scoped overrides to make those
+ * components fit the hardware shell. */
+
+.hw-machine {
+  --hw-chassis: #bbb8b2;
+  --hw-navy:    #2a324b;
+  --hw-mgreen:  #4a7c59;
+  --hw-amber:   #e7a977;
+  --hw-dtext:   #26d64e;
+  --hw-ddim:    #16883a;
+  --hw-dbright: #35ff69;
+  --hw-dglow:   rgba(53,255,105,.55);
+  --hw-dbg:     #010501;
+  --hw-font-ui: 'Outfit', sans-serif;
+  --hw-font-mono: 'DM Mono', ui-monospace, monospace;
+  --hw-font-disp: 'VT323', monospace;
+
+  position: relative;            /* positioning context; NO z-index → fixed
+                                    children (drum browser, beat finisher) escape
+                                    to the top instead of being trapped here. */
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  height: 100dvh;
+  background: var(--hw-bg, var(--hw-chassis));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--hw-font-ui);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;        /* kill double-tap-to-zoom across the app */
+  -webkit-text-size-adjust: 100%;    /* no font scaling on orientation change */
+}
+.hw-machine *, .hw-machine *::before, .hw-machine *::after { box-sizing: border-box; }
+/* Buttons never trigger double-tap zoom (faders/pads set their own touch-action
+   inline, which wins, so their drag/paging gestures are preserved). */
+.hw-machine button, .hw-machine .hw-tab, .hw-machine [role="button"] { touch-action: manipulation; }
+
+/* v2-only: hide the App-level CRT scanline + theme overlays. They sit ABOVE the
+   opaque hardware chassis (flashing) and can intercept taps over modals. The
+   body class is added by HardwareView on mount and removed on unmount, so the
+   classic layout is untouched. */
+body.hw-v2 .scanlines,
+body.hw-v2 .theme-overlay { display: none !important; }
+
+/* HEADER */
+.hw-hdr {
+  flex-shrink: 0; background: var(--hw-panel, var(--hw-navy));
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 14px; border-bottom: 2px solid var(--hw-border, #1a2035); box-shadow: 0 2px 0 rgba(255,255,255,.18);
+}
+.hw-logo { color: var(--hw-text, var(--hw-amber)); font-size: 14px; letter-spacing: 4px; font-weight: 700; cursor: pointer; text-shadow: 0 1px 0 rgba(255,255,255,.12), 0 -1px 0 rgba(0,0,0,.5); }
+.hw-hdr-icons { display: flex; gap: 8px; align-items: center; }
+.hw-hdr-icon { width: 30px; height: 26px; border-radius: 4px; background: var(--hw-panel, #1e2438); border: 1px solid var(--hw-border, #2a3255); color: var(--hw-muted, #8a93b5); font-size: 13px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-family: var(--hw-font-mono); }
+.hw-hdr-icon:active { transform: translateY(1px); }
+.hw-hdr-icon:disabled { opacity: .35; cursor: default; }
+
+/* DISPLAY */
+.hw-disp-outer { flex-shrink: 0; padding: 9px 12px 0; }
+.hw-disp {
+  background: var(--hw-panel, var(--hw-dbg)); border: 2px solid var(--hw-border, #060810); border-radius: 4px;
+  padding: 9px 12px 7px; height: 220px;
+  display: flex; flex-direction: column; position: relative; overflow: hidden;
+  box-shadow: inset 0 3px 14px rgba(0,0,0,.97), inset 0 0 30px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.35);
+}
+.hw-disp::after { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: 3px; background: repeating-linear-gradient(to bottom, transparent, transparent 2px, rgba(0,0,0,.08) 2px, rgba(0,0,0,.08) 3px); z-index: 5; }
+.hw-machine.hw-compact .hw-disp { height: min(440px, 52dvh); }
+/* On the SEQ tab the embedded Timeline renders its own .seq-countin over the
+   grid; HardwareView shows a single display-level count-in (direct child of
+   .hw-disp, outside .hw-d-content) on every tab, so hide the Timeline's inner
+   one here to avoid a doubled number. Scoped to .hw-d-content → desktop
+   ChopperView's Timeline countdown is unaffected. */
+.hw-disp .hw-d-content .seq-countin { display: none; }
+
+.hw-d-top { flex-shrink: 0; }
+.hw-d-status { font-family: var(--hw-font-mono); font-size: 9px; letter-spacing: 1px; color: var(--hw-muted, var(--hw-ddim)); margin-bottom: 3px; display: flex; gap: 8px; align-items: center; }
+.hw-d-track { font-family: var(--hw-font-mono); font-size: 8px; color: var(--hw-muted, var(--hw-ddim)); letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; text-transform: uppercase; }
+.hw-sc-midi { display: flex; align-items: center; gap: 4px; }
+.hw-midi-dot { width: 7px; height: 7px; border-radius: 50%; background: #2a0808; border: 1px solid #551010; flex-shrink: 0; }
+.hw-midi-dot.live { background: #ff2020; border-color: #ff5050; box-shadow: 0 0 6px rgba(255,30,30,.7); }
+.hw-midi-lbl { font-family: var(--hw-font-mono); font-size: 7px; color: var(--hw-faint, rgba(53,255,105,.3)); }
+
+.hw-d-bpm-row { display: flex; align-items: flex-end; gap: 6px; margin-bottom: 2px; }
+.hw-d-bpm { font-family: var(--hw-font-disp); font-size: 56px; line-height: 1; color: var(--hw-text, var(--hw-dbright)); cursor: ns-resize; user-select: none; letter-spacing: 1px; text-shadow: 0 0 24px var(--hw-dglow), 0 0 10px rgba(53,255,105,.4); }
+.hw-d-bpm-side { display: flex; flex-direction: column; gap: 2px; padding-bottom: 9px; }
+.hw-d-bpm-lbl { font-family: var(--hw-font-mono); font-size: 10px; color: var(--hw-muted, var(--hw-dtext)); letter-spacing: 1px; text-shadow: 0 0 8px var(--hw-dglow); }
+.hw-d-tap { font-family: var(--hw-font-mono); font-size: 7px; color: var(--hw-faint, var(--hw-ddim)); letter-spacing: 1px; }
+.hw-d-tap-btn { margin-top: 3px; align-self: flex-start; background: var(--hw-panel, rgba(0,16,5,.85)); border: 1px solid var(--hw-border, rgba(53,255,105,.22)); border-radius: 2px; color: var(--hw-muted, var(--hw-ddim)); font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: 1px; padding: 3px 6px; cursor: pointer; white-space: nowrap; }
+.hw-d-tap-btn.on { background: var(--hw-panel, rgba(0,28,10,.95)); border-color: var(--hw-accent, var(--hw-dbright)); color: var(--hw-accent, var(--hw-dbright)); text-shadow: 0 0 7px var(--hw-dglow); animation: hw-tap-pulse 1.1s ease-in-out infinite; }
+.hw-d-tap-btn.flash { color: #eaffef; border-color: #eaffef; text-shadow: 0 0 12px var(--hw-dbright); }
+@keyframes hw-tap-pulse { 0%,100% { box-shadow: 0 0 0 rgba(53,255,105,0); } 50% { box-shadow: 0 0 9px var(--hw-dglow); } }
+.hw-d-div { height: 1px; background: var(--hw-border, rgba(53,255,105,.12)); margin-bottom: 6px; flex-shrink: 0; }
+.hw-d-content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 3px; position: relative; z-index: 1; overflow-y: auto; }
+.hw-machine.hw-compact .hw-d-bpm-row { display: none; }
+.hw-machine.hw-compact .hw-d-status { margin-bottom: 5px; }
+
+/* Generic phosphor controls (LOAD / WAVE button rows) */
+.hw-sc-row { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; }
+.hw-sc-btn { background: var(--hw-panel, rgba(0,16,5,.85)); border: 1px solid var(--hw-border, rgba(53,255,105,.16)); border-radius: 2px; color: var(--hw-muted, var(--hw-ddim)); font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: .8px; padding: 5px 7px; cursor: pointer; white-space: nowrap; }
+.hw-sc-btn:active, .hw-sc-btn.on { background: var(--hw-panel, rgba(0,28,10,.95)); border-color: var(--hw-accent, rgba(53,255,105,.55)); color: var(--hw-accent, var(--hw-dtext)); text-shadow: 0 0 7px rgba(53,255,105,.35); }
+.hw-sc-btn.hi { border-color: var(--hw-border, rgba(53,255,105,.4)); color: var(--hw-text, var(--hw-dtext)); }
+.hw-sc-btn.red { border-color: rgba(255,80,60,.35); color: #ff8068; }
+.hw-sc-btn.amber { border-color: rgba(231,169,119,.45); color: var(--hw-amber); }
+.hw-sc-btn.pur { border-color: rgba(180,80,255,.4); color: #b060ff; }
+.hw-sc-btn:disabled { opacity: .4; cursor: default; }
+/* LOAD FILE is a <label> wrapping a hidden file input — programmatic
+   input.click() is blocked inside iframes on iOS Safari, but a label click is a
+   direct user gesture and opens the picker reliably. Render the label like a
+   .hw-sc-btn; .locked is the free-tier (gated) look. */
+label.hw-sc-btn { display: inline-flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+.hw-sc-btn.locked { opacity: .4; cursor: default; }
+/* Persistent (non-fading) upload/decode error banner — tap to dismiss. */
+.hw-error { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; padding: 5px 8px; background: rgba(255,80,60,.12); border: 1px solid rgba(255,80,60,.45); border-radius: 2px; color: #ff8068; font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: .8px; line-height: 1.4; cursor: pointer; }
+.hw-error-x { margin-left: auto; opacity: .8; }
+/* WAVE row: bigger, easier to tap */
+.hw-wave-row .hw-sc-btn { font-size: 10px; padding: 7px 10px; }
+.hw-sc-url { display: flex; gap: 4px; }
+.hw-sc-select { flex: 1; min-width: 0; background: var(--hw-panel, rgba(0,12,4,.9)); border: 1px solid var(--hw-border, rgba(53,255,105,.22)); border-radius: 2px; color: var(--hw-text, var(--hw-dtext)); font-family: var(--hw-font-mono); font-size: 9px; padding: 6px 7px; outline: none; -webkit-appearance: none; }
+.hw-sc-select option { background: var(--hw-panel, #010801); color: var(--hw-text, var(--hw-dtext)); }
+.hw-sc-in { flex: 1; min-width: 0; background: var(--hw-panel, rgba(0,12,4,.9)); border: 1px solid var(--hw-border, rgba(53,255,105,.22)); border-radius: 2px; color: var(--hw-text, var(--hw-dtext)); font-family: var(--hw-font-mono); font-size: 9px; padding: 6px 7px; outline: none; caret-color: var(--hw-accent, var(--hw-dbright)); }
+.hw-sc-in::placeholder { color: var(--hw-faint, rgba(53,255,105,.2)); }
+.hw-sc-lbl { font-family: var(--hw-font-mono); font-size: 8px; color: var(--hw-muted, var(--hw-ddim)); letter-spacing: 1px; flex-shrink: 0; }
+.hw-sc-presets { border-top: 1px solid var(--hw-border, rgba(53,255,105,.1)); margin-top: 4px; padding-top: 5px; display: flex; flex-direction: column; gap: 3px; }
+.hw-sc-presets-lbl { font-family: var(--hw-font-mono); font-size: 7px; color: var(--hw-faint, var(--hw-ddim)); letter-spacing: 2px; }
+
+/* PITCH KNOB (LOAD) */
+.hw-pitch-wrap { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+/* Keep the PITCH label and its knob together as one unit pinned to the RIGHT of
+   the REV / RESET / LINEN row. The auto-margin used to sit on .hw-pitch-wrap, so
+   only the knob floated right while the "PITCH" label stayed stranded in the
+   button group next to LINEN. Move the auto-margin onto the label instead — the
+   free space opens BEFORE "PITCH", and the knob follows immediately after it
+   (separated only by the row's small gap). Scoped to .hw-machine (these classes
+   render only in HardwareView) so desktop ChopperView is untouched. */
+.hw-machine .hw-sc-lbl { margin-left: auto; }
+.hw-machine .hw-pitch-wrap { margin-left: 0; }
+.hw-pitch-knob { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(145deg, #383848, #18181e); border: 2px solid #0a0a0e; border-top-color: #3c3c50; position: relative; cursor: ns-resize; flex-shrink: 0; }
+.hw-pitch-dot { width: 2px; height: 9px; background: var(--hw-accent, var(--hw-dtext)); position: absolute; left: calc(50% - 1px); top: 3px; transform-origin: 1px 12px; border-radius: 1px; box-shadow: 0 0 5px var(--hw-dglow); }
+.hw-pitch-val { font-family: var(--hw-font-mono); font-size: 9px; color: var(--hw-text, var(--hw-dtext)); letter-spacing: 1px; min-width: 34px; }
+/* Floating pitch readout shown above the knob while dragging (anchored to the
+   position:relative .hw-pitch-knob, so it centres over the knob). */
+.hw-pitch-popup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--hw-panel, var(--hw-dbg));
+  border: 1px solid var(--hw-border, var(--hw-dtext));
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 14px;
+  color: var(--hw-text, var(--hw-dbright));
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 200;
+  text-shadow: 0 0 8px var(--hw-dglow);
+  box-shadow: 0 0 12px rgba(0,0,0,.8);
+}
+
+/* SEQ inner tabs */
+.hw-sc-stabs { display: flex; gap: 4px; flex-shrink: 0; }
+.hw-sc-stab { flex: 1; text-align: center; background: var(--hw-panel, rgba(0,16,5,.85)); border: 1px solid var(--hw-border, rgba(53,255,105,.16)); border-radius: 2px; color: var(--hw-muted, var(--hw-ddim)); font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: .8px; padding: 6px 0; cursor: pointer; }
+.hw-sc-stab.on { background: var(--hw-panel, rgba(0,30,12,.95)); border-color: var(--hw-accent, rgba(53,255,105,.55)); color: var(--hw-accent, var(--hw-dtext)); text-shadow: 0 0 7px rgba(53,255,105,.3); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   DRUM SEQ retheme (mobile / HardwareView only)
+   ──────────────────────────────────────────────────────────────────────────
+   The embedded <DrumSection> ships the desktop step-sequencer skin: navy panels
+   + the active theme's neon accent (orange under vicecity, etc.). On the
+   green-phosphor hardware shell that clashes, so we reskin it to match the LOAD
+   screen — black background, #26d64e phosphor text/borders, #35ff69 lit steps,
+   DM Mono labels / VT323 readouts — WITHOUT redesigning any control.
+
+   Scope = ONLY `.hw-drum-skin`, the wrapper HardwareView puts around DrumSection
+   (never present in the desktop ChopperView), so desktop + every theme palette
+   are untouched. Two layers:
+     1. Remap the drum CSS custom props → green/black. Inherited by every
+        var-based .drum-* rule, so it beats the body[data-theme] values with no
+        specificity fight.
+     2. !important overrides for the per-theme rules that hardcode LITERAL
+        colours (step + panel backgrounds, row-name text) instead of a var.
+   No .drum-* rule uses !important, so these always win regardless of theme.
+   The portaled DrumBrowser (mounts on <body>) is out of scope by design. */
+.hw-drum-skin {
+  /* 1 — palette remap: green phosphor on black */
+  --neon:        var(--hw-dbright);   /* #35ff69 — lit steps / accents */
+  --neon3:       var(--hw-dbright);
+  --bg:          #000;
+  --bg1:         #000;
+  --bg2:         #000;
+  --border-neon: #1a4a2a;             /* dark-green hardware border */
+  --text-dim:    var(--hw-ddim);      /* #16883a */
+  --track-color: var(--hw-dtext);     /* #26d64e — row accent (no per-track hues) */
+  --danger:      var(--hw-dtext);     /* neutralise the red play state → green */
+  --font-mono:   var(--hw-font-mono); /* DM Mono */
+  min-height: 100%;
+  background: #000;
+  color: var(--hw-dtext);
+}
+
+/* 2a — panels + rows → flat black (beats body[data-theme] literal backgrounds) */
+.hw-drum-skin .drum-section,
+.hw-drum-skin .drum-grid,
+.hw-drum-skin .drum-header,
+.hw-drum-skin .drum-row,
+.hw-drum-skin .drum-row-head,
+.hw-drum-skin .drum-row-sample,
+.hw-drum-skin .drum-row-steps { background: #000 !important; }
+.hw-drum-skin .drum-section { border: 1px solid #1a4a2a; }
+.hw-drum-skin .drum-row-head { border-left: 3px solid var(--hw-dtext); }
+
+/* 2b — all text → phosphor green, DM Mono (beats per-theme .drum-row-name etc.) */
+.hw-drum-skin .drum-row-name,
+.hw-drum-skin .drum-row-sample,
+.hw-drum-skin .drum-sample-name,
+.hw-drum-skin button.drum-sample-name,
+.hw-drum-skin .drum-mini,
+.hw-drum-skin .drum-arrow,
+.hw-drum-skin .drum-rnd {
+  color: var(--hw-dtext) !important;
+  font-family: var(--hw-font-mono);
+}
+.hw-drum-skin .drum-row-name { text-transform: uppercase; }
+
+/* 2c — numeric readouts → VT323 */
+.hw-drum-skin .drum-seq-label,
+.hw-drum-skin .drum-mini-val { font-family: var(--hw-font-disp); color: var(--hw-dtext) !important; }
+.hw-drum-skin .drum-seq-total { color: var(--hw-ddim) !important; }
+
+/* 2d — STEP buttons: black fill / dark-green border; lit = bright #35ff69 */
+.hw-drum-skin .drum-step {
+  background: #000 !important;
+  border: 1px solid #1a4a2a !important;
+  box-shadow: none !important;
+  border-radius: 2px;
+}
+.hw-drum-skin .drum-step.beat { border-left: 1px solid var(--hw-dtext) !important; }
+.hw-drum-skin .drum-step.on {
+  background: var(--hw-dbright) !important;   /* #35ff69 */
+  border-color: var(--hw-dbright) !important;
+  box-shadow: 0 0 8px var(--hw-dglow) !important;
+}
+.hw-drum-skin .drum-playhead { background: var(--hw-dbright) !important; }
+
+/* 2e — control buttons (PLAY/STOP · GENERATE · BROWSE · CLEAR · BARS) →
+   green border / black fill / green text; engaged = green fill + black text */
+.hw-drum-skin .btn-rec,
+.hw-drum-skin .btn-clear,
+.hw-drum-skin .ctrl-select {
+  background: #000 !important;
+  border: 1px solid var(--hw-dtext) !important;
+  color: var(--hw-dtext) !important;
+  font-family: var(--hw-font-mono);
+  border-radius: 2px;
+}
+.hw-drum-skin .btn-rec.on,
+.hw-drum-skin .drum-genre-tab.on {
+  background: var(--hw-dbright) !important;
+  border-color: var(--hw-dbright) !important;
+  color: #000 !important;
+  text-shadow: none !important;
+  box-shadow: 0 0 8px var(--hw-dglow) !important;
+  animation: none !important;
+}
+
+/* 2f — small chrome: picker arrows, randomize, genre tabs → green-on-black */
+.hw-drum-skin .drum-arrow,
+.hw-drum-skin .drum-rnd,
+.hw-drum-skin .drum-genre-tab,
+.hw-drum-skin .drum-genre-tabs {
+  background: #000 !important;
+  border-color: #1a4a2a !important;
+}
+.hw-drum-skin .drum-genre-tab { color: var(--hw-dtext) !important; }
+
+/* 2g — range sliders (per-track VOL · header CLIP/VOL) → green accent */
+.hw-drum-skin input[type="range"] { accent-color: var(--hw-dbright); }
+
+/* ── DRUM SEQ mobile simplification (HardwareView only) ───────────────────────
+   Phone screens are narrow, so hide the per-track sample picker + fader, then
+   give the 16-step grid the FULL container width with taller, easier-to-tap
+   steps. CSS-only + scoped to `.hw-drum-skin`, so the desktop ChopperView keeps
+   every control. (Per-track MUTE is already hidden by the `.hw-machine .drum-mute`
+   rule above. The master VOL + CLIP faders and the BOOM BAP/TRAP genre tabs are
+   removed on mobile — VOL/CLIP because HardwareView no longer wires those props
+   to DrumSection, the genre tabs by the `display:none` rule below.) */
+
+/* 1 — per-track sample selector row (‹ name › 🎲) */
+.hw-drum-skin .drum-row-sample { display: none !important; }
+/* 2 — per-track volume fader */
+.hw-drum-skin .drum-vol { display: none !important; }
+/* 3 — master VOL + CLIP faders: REMOVED. DrumSection only renders the master VOL
+   <label> when wired (it isn't), and only renders the CLIP <label> when the host
+   passes onSetClip (HardwareView no longer does) — so there's nothing to hide
+   for either; the SWING fader is the only remaining .drum-mini. */
+/* 4 — BOOM BAP / TRAP genre tabs: hidden on mobile (the kit can still be changed
+   per-track from the ⊞ BROWSE drum browser, which has its own kit tabs). The
+   GENERATE button is KEPT (restored 2026-06-26) — it's the one-tap random-pattern
+   generator (engine.generate(genre)) and was the only way to get a fresh drum
+   pattern on the phone, so it stays visible. On mobile it's collapsed to a compact
+   🎲 dice glyph (text hidden, glyph via ::after — same font-size:0 + ::after trick
+   as the Timeline ✕ clear button below) to fit the narrow header. Scoped to
+   .hw-drum-skin → desktop ChopperView keeps the full "GENERATE" text. */
+.hw-drum-skin .drum-genre-tabs { display: none !important; }
+.hw-drum-skin .drum-generate-btn { font-size: 0; }
+.hw-drum-skin .drum-generate-btn::after { content: "🎲"; font-size: 14px; }
+/* 5 — transport / record row (PLAY/STOP · STEP · LIVE · CUE — all `.btn-rec`):
+   on mobile the HardwareView main transport (portrait) + landscape bottom bar are
+   the single source of truth for play + record, and REC/STEP route to the DRUM
+   engine while DRUMS (LIVE) mode is engaged — so the embedded drum section's own
+   transport row is redundant. The ONLY `.btn-rec` buttons DrumSection renders are
+   exactly those four (genre/GENERATE/BROWSE are `.btn-clear` / `.drum-*`), so this
+   hides precisely the transport row. Scoped to `.hw-drum-skin` → desktop
+   ChopperView keeps them; JSX is untouched (CSS-only). */
+.hw-drum-skin .btn-rec { display: none !important; }
+/* 6 — compact grid dropdowns ([GRID ▼] [T] [BARS ▼]) → green-on-black + a dark
+   native option list so the picker reads on the phosphor theme. */
+.hw-drum-skin .drum-gridctrl-select {
+  color: var(--hw-dtext) !important;
+  border-color: #1a4a2a !important;
+  background: #000 !important;
+  font-family: var(--hw-font-mono);
+}
+.hw-drum-skin .drum-gridctrl-select option { background: #000; color: var(--hw-dtext); }
+
+/* Stack the track label above the grid so the steps span the full width. With
+   the sample picker / mute / vol all hidden, the head now holds only the
+   KICK/SNARE… label, shown as a compact bar above the row. */
+.hw-drum-skin .drum-row { flex-direction: column; align-items: stretch; gap: 3px; }
+.hw-drum-skin .drum-row-head {
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding-left: 6px;
+}
+/* Full-width grid + bigger tap targets. The grid is `repeat(16, 1fr)` inline, so
+   the 16 steps divide the full row width evenly; we only grow their height. */
+.hw-drum-skin .drum-row-steps { width: 100%; }
+.hw-drum-skin .drum-step { height: 42px; }
+
+/* Bar-graph editor below the steps: on desktop a fixed-width .drum-graph-spacer
+   offsets the bars to clear the inline .drum-row-head (140px / 100px portrait).
+   Here the row is COLUMN — the head is STACKED above and .drum-row-steps is
+   full-width with NO left offset — so the spacer would push the bars right of the
+   steps (the misalignment). Drop it: with the spacer out of the flex flow, the
+   full-width .drum-graph-bars grid (same repeat(N,1fr); gap:2px as the steps)
+   starts at the left edge, so bar N sits directly under step N. */
+.hw-drum-skin .drum-graph-spacer { display: none; }
+
+/* Hide the blue beat/quarter-note gridlines (the cyan left-border on every 4th
+   bar — .drum-graph-bar.beat) on mobile. Desktop keeps them as a beat divider;
+   here they clutter the narrow grid. Neutralise the colour back to the regular
+   bar border so the columns stay uniform. The grey note-presence markers
+   (inline rgba(180,180,180,…)) are unaffected. */
+.hw-drum-skin .drum-graph-bar.beat { border-left-color: rgba(255,255,255,0.06); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CHOP SEQ retheme (mobile / HardwareView only)
+   ──────────────────────────────────────────────────────────────────────────
+   Mirror of `.hw-drum-skin` (above) for the embedded chop <Timeline>.
+   HardwareView wraps the Timeline in `.hw-chop-skin` ONLY (never present in the
+   desktop ChopperView, and only mobile renders HardwareView), so desktop + every
+   theme palette are untouched. Same two layers:
+     1. remap the seq CSS custom props → green/black. Inherited by every var-based
+        .seq-* / .btn-rec / .ctrl-select rule (HardwareView sets no body[data-theme],
+        so there's no specificity fight).
+     2. !important overrides for the rules that hardcode LITERAL colours — incl.
+        the lit step + row label, whose colour Timeline.tsx sets via INLINE style
+        (style={{ background: pad.color }}), so only !important can beat them. */
+.hw-chop-skin {
+  /* 1 — palette remap: green phosphor on black */
+  --neon:        var(--hw-dbright);   /* #35ff69 — lit cells / accents / on-tab */
+  --neon2:       var(--hw-dbright);   /* SEQUENCER title / bar-number ruler / + tab */
+  --neon3:       var(--hw-dbright);   /* DUP tab / CLEAR hover */
+  --bg:          #000;
+  --bg1:         #000;
+  --bg2:         #000;
+  --border-neon: #1a4a2a;             /* dark-green hardware border */
+  --text-dim:    var(--hw-ddim);      /* #16883a — dim labels */
+  --track-color: var(--hw-dtext);     /* #26d64e */
+  --danger:      var(--hw-dtext);     /* neutralise the red record/stop state → green */
+  --font-mono:   var(--hw-font-mono); /* DM Mono */
+  --font-hud:    var(--hw-font-mono); /* DM Mono for the seq labels/tabs too */
+  min-height: 100%;
+  background: #000;
+  color: var(--hw-dtext);
+}
+
+/* 2a — panels / body / empty → flat black + dark-green border */
+.hw-chop-skin .seq,
+.hw-chop-skin .seq-body,
+.hw-chop-skin .seq-empty { background: #000 !important; border-color: #1a4a2a !important; }
+
+/* 2b — text → phosphor green (DM Mono). Row label colour + accent are set inline
+   (pad.color), so force green with !important. */
+.hw-chop-skin .seq-title,
+.hw-chop-skin .seq-count,
+.hw-chop-skin .seq-ruler-cell { color: var(--hw-dtext) !important; font-family: var(--hw-font-mono); }
+.hw-chop-skin .seq-ruler-cell.is-bar { color: var(--hw-dbright) !important; }
+.hw-chop-skin .seq-ruler-cell.is-beat { color: var(--hw-ddim) !important; }
+.hw-chop-skin .seq-row-label { color: var(--hw-dtext) !important; border-left-color: var(--hw-dtext) !important; }
+
+/* 2c — STEP cells: black fill / dark-green border; lit = bright #35ff69. The lit
+   fill + glow come from inline style → !important is required to override them. */
+.hw-chop-skin .seq-cell {
+  background: #000 !important;
+  border-color: #1a4a2a !important;
+}
+.hw-chop-skin .seq-cell:hover { background: #04130a !important; border-color: var(--hw-dtext) !important; }
+.hw-chop-skin .seq-cell.is-bar { border-left-color: #1a4a2a !important; }
+.hw-chop-skin .seq-cell.is-beat { border-left-color: #123322 !important; }
+.hw-chop-skin .seq-cell.on {
+  background: var(--hw-dbright) !important;   /* #35ff69 */
+  border-color: var(--hw-dbright) !important;
+  box-shadow: 0 0 8px var(--hw-dglow) !important;
+}
+
+/* 2d — playhead + record cursors → green (base uses --danger; belt-and-braces) */
+.hw-chop-skin .seq-cursor { background: rgba(53,255,105,.12) !important; border-left-color: var(--hw-dbright) !important; }
+.hw-chop-skin .seq-rec-cursor { background: rgba(53,255,105,.10) !important; border-color: var(--hw-dbright) !important; }
+
+/* 2e — control buttons + sequence tabs → green border / black fill / green text;
+   engaged = green fill + black text (mirrors .hw-drum-skin .btn-rec.on) */
+.hw-chop-skin .btn-rec,
+.hw-chop-skin .btn-clear,
+.hw-chop-skin .ctrl-select,
+.hw-chop-skin .seq-tab {
+  background: #000 !important;
+  border: 1px solid var(--hw-dtext) !important;
+  color: var(--hw-dtext) !important;
+  font-family: var(--hw-font-mono);
+  border-radius: 2px;
+}
+.hw-chop-skin .seq-tab.on,
+.hw-chop-skin .btn-rec.on {
+  background: var(--hw-dbright) !important;
+  border-color: var(--hw-dbright) !important;
+  color: #000 !important;
+  text-shadow: none !important;
+  box-shadow: 0 0 8px var(--hw-dglow) !important;
+}
+
+/* Hosts for embedded components */
+.hw-wave-host { flex: 1; min-height: 130px; display: flex; }
+.hw-wave-host > * { flex: 1; min-width: 0; }
+.hw-seq-host { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+
+/* WAVE: hide WaveformView's own zoom toolbar (we render our own row) + let the
+   canvas fill the host so the waveform is tall (#6/#7). */
+.hw-wave-host .waveform-wrap { height: 100%; display: flex; flex-direction: column; }
+.hw-wave-host .waveform-zoom-bar { display: none !important; }
+.hw-wave-host .chopper-waveform { flex: 1; width: 100% !important; height: auto !important; min-height: 0; display: block; }
+
+/* Resize handle under the display (drag up = more pads, down = bigger screen) */
+.hw-resize-handle { width: 100%; height: 12px; background: var(--hw-bg, var(--hw-chassis)); cursor: ns-resize; touch-action: none; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.hw-resize-handle::after { content: ''; width: 36px; height: 3px; background: rgba(0,0,0,.22); border-radius: 2px; }
+.hw-resize-handle:active::after { background: var(--hw-accent, rgba(53,255,105,.45)); }
+
+/* MIXER — strips fill the full width (equal columns, faders only) */
+.hw-mx-strips { display: flex; gap: 4px; width: 100%; padding: 2px 4px 4px; box-sizing: border-box; align-items: flex-end; flex: 1; min-height: 0; }
+.hw-mx-trk { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; }
+.hw-mx-tnm { font-family: var(--hw-font-mono); font-size: 7px; letter-spacing: .5px; color: var(--hw-muted, var(--hw-ddim)); text-align: center; line-height: 1.2; }
+.hw-mx-fdr { position: relative; width: 100%; max-width: 40px; flex: 1; min-height: 90px; background: var(--hw-panel, rgba(0,12,4,.9)); border: 1px solid var(--hw-border, rgba(53,255,105,.18)); border-radius: 4px; cursor: ns-resize; overflow: hidden; }
+.hw-mx-fdr .hw-fader-fill { position: absolute; bottom: 0; left: 0; right: 0; background: var(--hw-accent, var(--hw-mgreen)); box-shadow: 0 0 4px rgba(53,255,105,.3); }
+.hw-mx-fvol { font-family: var(--hw-font-mono); font-size: 7px; color: var(--hw-faint, rgba(53,255,105,.4)); }
+.hw-mx-master { display: flex; align-items: center; gap: 3px; padding: 5px 4px 0; border-top: 1px solid var(--hw-border, rgba(53,255,105,.1)); flex-shrink: 0; justify-content: flex-end; }
+.hw-export-lbl { font-family: var(--hw-font-mono); font-size: 7px; color: var(--hw-faint, var(--hw-ddim)); letter-spacing: 1px; margin-right: auto; }
+
+/* PEAK meter (MIXER) */
+.hw-vu { position: relative; display: flex; align-items: center; height: 14px; flex-shrink: 0; margin: 2px 0; background: var(--hw-panel, rgba(0,12,4,.9)); border: 1px solid var(--hw-border, rgba(53,255,105,.2)); border-radius: 2px; overflow: hidden; }
+.hw-vu-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: linear-gradient(to right, var(--hw-accent, var(--hw-mgreen)), var(--hw-accent, var(--hw-dbright))); }
+.hw-vu-lbl { position: relative; z-index: 1; font-family: var(--hw-font-mono); font-size: 7px; color: var(--hw-muted, var(--hw-ddim)); letter-spacing: 1px; padding-left: 6px; }
+.hw-vu-val { position: relative; z-index: 1; font-family: var(--hw-font-mono); font-size: 8px; color: var(--hw-text, var(--hw-dtext)); margin-left: auto; padding-right: 6px; }
+
+/* TABS */
+.hw-tabs { flex-shrink: 0; display: flex; gap: 3px; padding: 8px 12px 0; }
+.hw-tab { flex: 1; background: var(--hw-panel, var(--hw-navy)); border: 1px solid var(--hw-border, #1a2035); border-bottom: 2px solid var(--hw-border, #141825); color: var(--hw-muted, #4a5268); font-family: var(--hw-font-mono); font-size: 9px; letter-spacing: 2px; padding: 8px 0; border-radius: 3px; cursor: pointer; }
+.hw-tab:active { transform: translateY(1px); border-bottom-width: 1px; }
+.hw-tab.on { background: var(--hw-accent, var(--hw-mgreen)); border-color: var(--hw-accent, #3a6448); border-bottom-color: var(--hw-accent, #2a5038); color: var(--hw-bg, var(--hw-chassis)); font-weight: 600; }
+
+/* PADS — full width, no border on the container (silver chassis shows through) */
+.hw-pads-outer { flex: 1 1 auto; min-height: 160px; width: 100%; background: var(--hw-bg, var(--hw-chassis)); padding: 6px 0 4px; display: flex; flex-direction: column; }
+.hw-pads-hdr { display: flex; align-items: center; gap: 8px; font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: 1px; color: var(--hw-muted, #18122a); margin: 0 8px 5px; flex-shrink: 0; }
+.hw-bank-row { display: flex; gap: 3px; }
+.hw-bank-btn { width: 20px; height: 16px; background: var(--hw-panel, #18122a); border: 1px solid var(--hw-border, #2a2040); border-radius: 3px; color: var(--hw-muted, #6a5a8a); font-family: var(--hw-font-mono); font-size: 8px; cursor: pointer; }
+.hw-bank-btn.on { background: var(--hw-accent, #2a1a4a); border-color: var(--hw-accent, var(--hw-mgreen)); color: var(--hw-bg, var(--hw-dbright)); }
+.hw-status { color: var(--hw-text, var(--hw-mgreen)); font-size: 8px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hw-pads-bpm { margin-left: auto; font-family: var(--hw-font-disp); font-size: 14px; color: var(--hw-text, #18122a); }
+.hw-pad-host { flex: 1; min-height: 0; }
+
+/* Bespoke hardware pad grid — 4×4 fills the host. */
+.hw-pad-grid { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 6px; width: 100%; height: 100%; padding: 0 6px; box-sizing: border-box; }
+.hw-pad {
+  position: relative; min-width: 0; background: var(--hw-panel, #18122a);
+  border-top: 1px solid var(--hw-border, #261840); border-left: 1px solid var(--hw-border, #261840);
+  border-bottom: 4px solid var(--hw-border, #070512); border-right: 3px solid var(--hw-border, #0a0618);
+  border-radius: 6px; cursor: pointer; user-select: none; touch-action: manipulation;
+  transition: transform 50ms, border-bottom-width 50ms, border-right-width 50ms;
+}
+.hw-pad.filled { background: var(--hw-pad, #241a3e); border-top-color: var(--hw-border, #3a2860); border-left-color: var(--hw-border, #3a2860); }
+.hw-pad.lit { background: #7a1000; border-top-color: #aa2010; border-left-color: #aa2010; }
+.hw-pad.locked { opacity: .4; }
+.hw-pad.move-src { outline: 2px solid var(--hw-amber); outline-offset: -2px; }
+.hw-pad:active { transform: translateY(3px); border-bottom-width: 1px; border-right-width: 1px; }
+.hw-pad-num { position: absolute; bottom: 3px; right: 4px; font-family: var(--hw-font-mono); font-size: 8px; color: var(--hw-faint, rgba(255,255,255,.18)); line-height: 1; user-select: none; pointer-events: none; }
+.hw-pad.lit .hw-pad-num { color: rgba(255,120,80,.55); }
+.hw-pad-menu-btn { position: absolute; bottom: 2px; left: 3px; width: 16px; height: 16px; font-size: 9px; color: var(--hw-faint, rgba(255,255,255,.22)); background: transparent; border: none; padding: 0; cursor: pointer; touch-action: manipulation; display: flex; align-items: center; justify-content: center; z-index: 5; }
+.hw-pad-menu-btn.move-pending { color: var(--hw-amber); }
+.hw-pad-dropdown { position: absolute; bottom: 100%; left: 0; margin-bottom: 2px; background: var(--hw-panel, rgba(1,20,6,.96)); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--hw-border, rgba(53,255,105,.35)); border-radius: 4px; padding: 3px; z-index: 100; min-width: 84px; box-shadow: 0 4px 16px rgba(0,0,0,.8); }
+.hw-pad-dropdown button { display: block; width: 100%; padding: 6px 8px; text-align: left; background: transparent; border: none; color: var(--hw-text, var(--hw-dtext)); font-family: var(--hw-font-mono); font-size: 9px; letter-spacing: 1px; cursor: pointer; touch-action: manipulation; border-radius: 2px; }
+.hw-pad-dropdown button:active, .hw-pad-dropdown button:hover { background: var(--hw-border, rgba(53,255,105,.12)); }
+.hw-pad-dropdown button:disabled { opacity: .35; cursor: default; }
+.hw-pad-dropdown button:disabled:active, .hw-pad-dropdown button:disabled:hover { background: transparent; }
+
+/* ── LIVE mode (finger-drum pads in the PAD section) ─────────────────────────
+   The header toggle, the 2×2 big-pad grid (reuses .hw-pad's navy chassis look,
+   just laid out 2×2 so 4 pads fill the same area as 16), and the per-pad
+   FILL/LOAD/REPEAT/OFFSET config menu. Press feedback is the existing
+   `.hw-pad:active` translateY (the big pads carry the .hw-pad class). */
+.hw-live-btn {
+  margin-left: 6px; padding: 2px 8px; height: 16px;
+  background: var(--hw-panel, #18122a); border: 1px solid var(--hw-border, #2a2040); border-radius: 3px;
+  color: var(--hw-muted, #6a5a8a); font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: 1px;
+  cursor: pointer; flex-shrink: 0;
+}
+.hw-live-btn.on {
+  background: var(--hw-accent, #2a1a4a); border-color: var(--hw-accent, var(--hw-dbright)); color: var(--hw-bg, var(--hw-dbright));
+  text-shadow: 0 0 7px var(--hw-dglow); box-shadow: 0 0 8px var(--hw-dglow);
+}
+
+/* 2×2 big-pad grid — same gap/padding/size as the 16-pad grid, 2 cols × 2 rows. */
+.hw-pad-grid-live { grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); }
+.hw-pad-live { display: flex; align-items: center; justify-content: center; }
+.hw-pad-label {
+  font-family: var(--hw-font-mono); font-size: 16px; font-weight: 700;
+  letter-spacing: 1px; text-transform: uppercase; text-align: center;
+  line-height: 1.15; padding: 0 8px; pointer-events: none;
+}
+
+/* Per-pad config menu — floats over the pad body (up from the □), phosphor panel. */
+.hw-live-menu {
+  position: absolute; left: 4px; bottom: 22px; z-index: 100; width: 200px;
+  display: flex; flex-direction: column; gap: 5px; padding: 5px; cursor: default;
+  background: var(--hw-panel, rgba(1,20,6,.97)); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--hw-border, rgba(53,255,105,.35)); border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.8);
+}
+.hw-live-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
+.hw-live-tab {
+  background: transparent; border: 1px solid var(--hw-border, rgba(53,255,105,.2)); border-radius: 2px;
+  color: var(--hw-muted, var(--hw-ddim)); font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: .04em;
+  padding: 4px 2px; cursor: pointer;
+}
+.hw-live-tab.on { background: var(--hw-accent, var(--hw-dbright)); border-color: var(--hw-accent, var(--hw-dbright)); color: var(--hw-bg, #000); }
+.hw-live-body { display: flex; flex-direction: column; gap: 5px; max-height: 168px; overflow-y: auto; }
+.hw-live-frow {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--hw-font-mono); font-size: 10px; cursor: pointer; color: var(--hw-text, var(--hw-dtext));
+}
+.hw-live-frow input[type="checkbox"] { accent-color: var(--hw-accent, var(--hw-dbright)); width: 13px; height: 13px; cursor: pointer; }
+.hw-live-frow input:disabled { cursor: not-allowed; }
+.hw-live-lrow {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-family: var(--hw-font-mono); font-size: 10px; color: var(--hw-text, var(--hw-dtext));
+}
+.hw-live-mbtn {
+  background: transparent; border: 1px solid var(--hw-border, rgba(53,255,105,.3)); border-radius: 2px;
+  color: var(--hw-text, var(--hw-dtext)); font-family: var(--hw-font-mono); font-size: 9px; letter-spacing: .04em;
+  padding: 5px 8px; cursor: pointer; white-space: nowrap;
+}
+.hw-live-mbtn:active, .hw-live-mbtn:hover { border-color: var(--hw-accent, var(--hw-dbright)); color: var(--hw-accent, var(--hw-dbright)); }
+.hw-live-mbtn.on { background: var(--hw-accent, var(--hw-dbright)); border-color: var(--hw-accent, var(--hw-dbright)); color: var(--hw-bg, #000); }
+.hw-live-mbtn.on:hover { color: var(--hw-bg, #000); }
+.hw-live-rep { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.hw-live-trip { width: 100%; margin-top: 3px; }
+.hw-live-scrub {
+  height: 76px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--hw-border, rgba(53,255,105,.3)); border-radius: 4px; cursor: ns-resize;
+  user-select: none; -webkit-user-select: none;
+}
+.hw-live-scrub-hint { font-family: var(--hw-font-mono); font-size: 9px; color: var(--hw-muted, var(--hw-ddim)); pointer-events: none; }
+.hw-live-off-val { text-align: center; font-family: var(--hw-font-disp); font-size: 14px; color: var(--hw-text, var(--hw-dbright)); margin-top: 4px; }
+
+/* TRANSPORT */
+.hw-transport { flex-shrink: 0; display: flex; gap: 5px; padding: 6px 12px 9px; background: var(--hw-bg, var(--hw-chassis)); }
+.hw-tbtn { flex: 1; background: var(--hw-panel, var(--hw-navy)); border: 1px solid var(--hw-border, #1a2035); border-top-color: var(--hw-border, #3a4270); border-bottom: 3px solid var(--hw-border, #0e1220); border-right: 2px solid var(--hw-border, #1a2040); color: var(--hw-muted, #6a7290); font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: .5px; padding: 11px 2px; border-radius: 4px; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,.4); }
+.hw-tbtn:active { transform: translateY(2px); border-bottom-width: 1px; border-right-width: 1px; box-shadow: none; }
+.hw-tbtn.rec { background: #3a0a00; border-color: #882000; border-top-color: #cc3010; color: #ffb098; }
+.hw-tbtn.rec.armed { background: #cc1800; animation: hw-rp .75s ease-in-out infinite; }
+@keyframes hw-rp { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.hw-tbtn.step.on { background: #1e1600; border-color: #774800; border-top-color: #bb7820; color: #ffb060; }
+.hw-tbtn.playing { background: var(--hw-accent, #0a2010); border-color: var(--hw-accent, #286828); border-top-color: var(--hw-accent, #3a9a3a); color: var(--hw-bg, #35ff69); text-shadow: 0 0 8px rgba(53,255,105,.7); }
+
+/* Beat Finisher host — full-screen overlay above the chassis */
+.hw-fh-host { position: fixed; inset: 0; z-index: 1100; display: flex; align-items: center; justify-content: center; }
+
+/* Beat Finisher (FINISHER) on mobile: hide the CHOPS / DRUMS / CLIPPER / MASTER
+   mixer strip. It's redundant with the MIXER tab, and removing it gives the
+   arrangement view more room. FinishHimPortal styles everything inline (no class
+   names), but its mixer strip (mixStyles.wrap) is the ONLY element in the whole
+   component with an inline `border-bottom` — so this attribute selector targets
+   it uniquely, and that strip contains exactly those four columns, nothing else.
+   Scoped to `.hw-fh-host` (the HardwareView-only FINISHER container), so the
+   desktop ChopperView Beat Finisher is untouched. `!important` is required to
+   beat the strip's own inline `display:flex`. */
+.hw-fh-host [style*="border-bottom: 1px"] { display: none !important; }
+
+/* Beat Finisher (FINISHER) mobile header — collapse it to ONE compact row so the
+   arrangement grid gets more height:
+     (1) drop the redundant header "Close" button (the ✕ top-right still closes),
+     (2) show only the ↶ / ↷ glyphs on Undo/Redo (hide the word labels),
+     (3) keep BPM · Undo · Redo · Rearrange on a single non-wrapping line.
+   Scoped to `.hw-fh-host` (HardwareView-only), so the desktop ChopperView keeps
+   the full labels + Close button. The added classes are inert off this scope.
+   `!important` on the wrap rule beats the container's inline `flex-wrap: wrap`. */
+.hw-fh-host .fh-close-btn { display: none !important; }
+.hw-fh-host .fh-btn-label { display: none !important; }
+.hw-fh-host .fh-head-ctrls { flex-wrap: nowrap !important; }
+
+/* CHOP SEQ (Timeline) header on mobile — HardwareView has its own PLAY/STOP/STEP
+   transport bar at the bottom, so the Timeline's transport + record buttons are
+   redundant. Hide PLAY/STOP, PAUSE/RESUME, STEP and LIVE — i.e. every non-mode
+   `.btn-rec` — and shrink CLEAR to a ✕ glyph, so the two wrapped control rows
+   collapse to one and free a row of height for the step grid. The mode toggles
+   LOOP / CUE / TRIPS (`.btn-rec.seq-mode`) and the BAR / RES selects stay; the
+   remaining controls repack onto one row via the existing mobile flex-wrap.
+   Scoped to `.hw-machine .seq-actions` (HardwareView-only, and `.seq-actions`
+   so the DrumSection PLAY button — also a `.btn-rec` — is NOT touched). Desktop
+   ChopperView Timeline is untouched. */
+.hw-machine .seq-actions .btn-rec:not(.seq-mode) { display: none !important; }
+/* Lock the remaining controls to ONE row regardless of the T-button engaged
+   state (which changes its width slightly). overflow-x:auto is a safety net so a
+   very narrow screen scrolls the row instead of clipping a control. */
+.hw-machine .seq-actions { flex-wrap: nowrap !important; overflow-x: auto; }
+/* Keep each control its natural width — stop LOOP/CUE (etc.) from stretching to
+   fill leftover space now that the row is nowrap. overflow-x:auto above handles
+   any spill on very narrow screens. */
+.hw-machine .seq-actions > * { flex-grow: 0 !important; flex-shrink: 0 !important; }
+.hw-machine .tl-clear-btn { font-size: 0; }
+.hw-machine .tl-clear-btn::after { content: "✕"; font-size: 13px; }
+/* Shrink TRIPS → "T" so the row gains width and the ✕ repacks onto it instead of
+   wrapping alone. TRIPS shares `btn-rec seq-mode` with LOOP/CUE (no unique class),
+   but its title uniquely starts with "TRIPS" — so target that, keeping this
+   CSS-only. (LIVE's title also mentions TRIPS, but at the END, and it's hidden.) */
+.hw-machine .seq-actions button[title^="TRIPS"] { font-size: 0; }
+.hw-machine .seq-actions button[title^="TRIPS"]::after { content: "T"; font-size: 13px; }
+
+/* Hide the per-track MUTE button in the embedded DrumSection (solo stays). */
+.hw-machine .drum-mute { display: none !important; }
+
+/* Drum browser: a fixed full-screen modal that DrumSection portals to <body> in
+   ?v2 (so it escapes the .hw-seq-host scroller iOS clips it to). Because it now
+   mounts under <body> — not inside .hw-machine — these overrides are scoped to
+   the body.hw-v2 class HardwareView toggles on mount. Lift it above everything
+   and guarantee its sections scroll so the folders (top) and CLOSE (bottom) stay
+   reachable. */
+body.hw-v2 .db-overlay { z-index: 99999; }
+body.hw-v2 .db-frame { width: 96vw; height: 92dvh; max-height: 92dvh; }
+body.hw-v2 .db-body { min-height: 0; }
+body.hw-v2 .db-actions { flex-shrink: 0; }
+
+@media (min-width: 600px) {
+  .hw-machine { width: min(480px, 100%); margin: 0 auto; height: 860px; max-height: 100dvh; border-radius: 12px; border: 1px solid #d0cdc8; box-shadow: 0 0 0 1px #8a8880, 0 20px 70px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.45); margin-top: max(0px, calc((100dvh - 860px) / 2)); }
+}
+
+/* iPad / large screens in PORTRAIT: fill the screen edge-to-edge instead of the
+   centred desktop device frame above (which still applies in landscape). Pads
+   scale up automatically — they're flex:1 inside a width:100% grid. Comes AFTER
+   the min-width:600px block so these win when both queries match (iPad portrait). */
+@media (min-width: 600px) and (orientation: portrait) {
+  .hw-machine {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    margin: 0;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+  }
+}
+
+/* LED spectrum analyser — sits to the right of the BPM/TAP block on LOAD */
+.hw-load-bpm-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;        /* row fills container = same as playlist bar */
+  box-sizing: border-box;
+}
+
+/* Height clamp applies ONLY on the LOAD tab. The row lives in the shared
+   .hw-d-top (rendered on every tab), so a fixed height here would leak a gap
+   onto WAVE/SEQ/MIXER. Scope it via :has() to the spectrum canvas, which is
+   rendered only when tab === 'load'. Other tabs hold just the BPM block and
+   size naturally — same as before the spectrum analyzer existed. */
+.hw-load-bpm-row:has(.hw-spectrum-canvas) {
+  height: 60px;       /* fixed — keeps PRESETS/LOAD PRESET visible without clipping TAP */
+  overflow: hidden;   /* hard clip anything that overflows */
+}
+
+.hw-bpm-block {
+  flex-shrink: 0;
+}
+
+.hw-spectrum-canvas {
+  flex: 1;
+  min-width: 0;
+  max-width: none;    /* remove any cap that was cutting it short */
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+  border: 1px solid var(--hw-border, #1a4a2a);
+  border-radius: 3px;
+  background: var(--hw-panel, #000);
+}
+
+/* ── LANDSCAPE LAYOUT (mobile rotate) ──────────────────────────────────────────
+   Rendered by HardwareView's `isLandscape` branch. Two-class selectors
+   (`.hw-machine.hw-landscape …`, specificity 0,2,0) beat the ≥600px desktop
+   device-frame rule (`.hw-machine`, 0,1,0) with no !important, and this block
+   comes AFTER it in source order — so the frame is fully neutralised here.
+   Portrait (`.hw-machine` without `.hw-landscape`) is untouched. */
+.hw-machine.hw-landscape {
+  display: flex;
+  flex-direction: column;
+  width: 100dvw;
+  max-width: none;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;            /* cancels the desktop frame's `margin: 0 auto` + margin-top */
+  border: none;         /* cancels the desktop frame's 1px chassis border */
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+  background: var(--hw-bg, #000);
+}
+
+/* top tab bar */
+.hw-machine.hw-landscape .hw-ls-tabs {
+  display: flex;
+  height: 36px;
+  background: var(--hw-panel, #0a0a0a);
+  border-bottom: 1px solid var(--hw-border, #1e1e1e);
+  flex-shrink: 0;
+}
+.hw-machine.hw-landscape .hw-ls-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--hw-font-mono);
+  font-size: 11px;
+  letter-spacing: .12em;
+  color: var(--hw-muted, #555);
+  border-right: 1px solid var(--hw-border, #1a1a1a);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.hw-machine.hw-landscape .hw-ls-tab:last-child { border-right: none; }
+.hw-machine.hw-landscape .hw-ls-tab.hw-ls-tab--active {
+  color: var(--hw-accent, var(--hw-dbright));
+  border-bottom: 2px solid var(--hw-accent, var(--hw-dbright));
+  text-shadow: 0 0 8px var(--hw-dglow);
+}
+
+/* content area — active tab fills all remaining height */
+.hw-machine.hw-landscape .hw-ls-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.hw-machine.hw-landscape .hw-ls-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px 10px;
+}
+/* SEQ = Timeline only; let it fill + scroll internally if needed */
+.hw-machine.hw-landscape .hw-ls-seq {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 6px 8px;
+}
+/* MIXER = strips fill the height instead of scrolling */
+.hw-machine.hw-landscape .hw-ls-mixer { display: flex; flex-direction: column; }
+
+/* LOAD — tappable LED spectrum on top + roomier (more tappable) controls */
+.hw-machine.hw-landscape .hw-ls-spec-tap {
+  position: relative;
+  height: 64px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.hw-machine.hw-landscape .hw-ls-spec-tap .hw-spectrum-canvas { width: 100%; height: 100%; }
+.hw-machine.hw-landscape .hw-ls-spec-hint {
+  position: absolute; top: 4px; right: 7px;
+  font-family: var(--hw-font-mono); font-size: 8px; letter-spacing: .1em;
+  color: var(--hw-faint, rgba(53,255,105,.4)); pointer-events: none;
+}
+.hw-machine.hw-landscape .hw-ls-load .hw-sc-btn,
+.hw-machine.hw-landscape .hw-ls-load .hw-sc-stab { font-size: 10px; padding: 8px 10px; }
+.hw-machine.hw-landscape .hw-ls-load .hw-sc-select,
+.hw-machine.hw-landscape .hw-ls-load .hw-sc-in { font-size: 11px; padding: 8px; }
+
+/* DRUMS — taller, easier-to-tap steps than portrait (full-width grid stays). */
+.hw-machine.hw-landscape .hw-drum-skin .drum-step {
+  height: 44px !important;
+  min-height: 44px !important;
+}
+
+/* bottom bar — transport + 8 pads, no BPM */
+.hw-machine.hw-landscape .hw-ls-bottom {
+  display: flex;
+  align-items: center;
+  height: 54px;
+  background: var(--hw-panel, #0a0a0a);
+  border-top: 1px solid var(--hw-border, #1e1e1e);
+  padding: 0 8px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.hw-machine.hw-landscape .hw-ls-transport { display: flex; gap: 4px; flex-shrink: 0; }
+.hw-machine.hw-landscape .hw-ls-tbtn {
+  width: 36px; height: 36px;
+  border: 1px solid var(--hw-border, #333); border-radius: 3px;
+  background: var(--hw-panel, #1a1a1a); color: var(--hw-muted, #888); font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; font-family: inherit;
+}
+.hw-machine.hw-landscape .hw-ls-tbtn:active { transform: translateY(1px); }
+.hw-machine.hw-landscape .hw-ls-tbtn--play { color: var(--hw-accent, var(--hw-dbright)); border-color: var(--hw-accent, var(--hw-dbright)); background: var(--hw-panel, #0a1f0e); }
+.hw-machine.hw-landscape .hw-ls-tbtn--playing { background: var(--hw-accent, #0e3018); box-shadow: 0 0 8px var(--hw-dglow); }
+.hw-machine.hw-landscape .hw-ls-tbtn--rec { color: #ff4444; border-color: #663333; }
+.hw-machine.hw-landscape .hw-ls-tbtn--rec-active { background: #2a0000; border-color: #ff4444; animation: hw-rp .75s ease-in-out infinite; }
+
+/* 8 pads */
+.hw-machine.hw-landscape .hw-ls-pads { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.hw-machine.hw-landscape .hw-ls-pad {
+  position: relative; flex: 1; min-width: 0; height: 40px;
+  background: var(--hw-panel, #18122a); border: 1px solid var(--hw-border, #2a2040); border-radius: 4px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+.hw-machine.hw-landscape .hw-ls-pad:active { transform: translateY(1px); }
+.hw-machine.hw-landscape .hw-ls-pad--filled { background: var(--hw-pad, #241a3e); border-color: var(--hw-border, #3a2860); }
+.hw-machine.hw-landscape .hw-ls-pad--active { background: #7a1000; border-color: #aa2010; }
+.hw-machine.hw-landscape .hw-ls-pad--locked { opacity: .4; }
+.hw-machine.hw-landscape .hw-ls-pad-num {
+  position: absolute; bottom: 2px; right: 4px;
+  font-family: var(--hw-font-mono); font-size: 8px; color: var(--hw-faint, rgba(255,255,255,.2));
+  line-height: 1; pointer-events: none;
+}
+.hw-machine.hw-landscape .hw-ls-pad--active .hw-ls-pad-num { color: rgba(255,120,80,.55); }
+
+/* ── FULL-SCREEN SPECTRAL OVERLAY (portal'd to <body>) ─────────────────────── */
+.hw-ls-spectral-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 99999;
+  display: flex;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.hw-ls-spectral-overlay > * { width: 100% !important; height: 100% !important; flex: 1; }
+.hw-ls-spectral-canvas { display: block; image-rendering: pixelated; background: #000; }
+.hw-ls-spectral-overlay::after {
+  content: 'TAP TO CLOSE';
+  position: absolute; top: 14px; right: 18px;
+  font-family: 'DM Mono', ui-monospace, monospace;
+  font-size: 10px; letter-spacing: .14em;
+  color: #2a6a3a;
+  pointer-events: none;
+}
+
+/* ── PALETTE THEME OVERRIDES (mobile-only) ──────────────────────────────────
+   Active ONLY when `.hw-machine` carries data-palette (palette mode ON). These
+   handle the cases a simple var(--hw-role, <original>) fallback can't:
+     • lit/firing pads need a LUMINANCE FLIP (on light palettes accent ≈ pad ≈
+       text, so a plain accent fill would vanish against the resting pads);
+     • the embedded drum sequencer (.hw-drum-skin) hardcodes literal green/black
+       with !important, so its rules are re-pointed at higher specificity;
+     • the phosphor text-shadow / box-shadow glows are dropped for the flat look.
+   With NO data-palette set NONE of this applies → the original look is intact. */
+
+/* Flat tactile: drop the phosphor text-shadow on the hw chrome text. Scoped to
+   hw chrome classes (NOT a blanket *) so embedded components keep their own. */
+.hw-machine[data-palette] .hw-logo,
+.hw-machine[data-palette] .hw-d-bpm,
+.hw-machine[data-palette] .hw-d-bpm-lbl,
+.hw-machine[data-palette] .hw-d-tap-btn,
+.hw-machine[data-palette] .hw-sc-btn,
+.hw-machine[data-palette] .hw-sc-stab,
+.hw-machine[data-palette] .hw-pitch-popup,
+.hw-machine[data-palette] .hw-pitch-val,
+.hw-machine[data-palette] .hw-tbtn,
+.hw-machine[data-palette] .hw-status,
+.hw-machine[data-palette] .hw-mx-tnm,
+.hw-machine[data-palette] .hw-vu-val,
+.hw-machine[data-palette] .hw-ls-tab,
+.hw-machine[data-palette] .hw-ls-tbtn { text-shadow: none !important; }
+
+/* Neutralise the green box-shadow glows on the faders/knob indicator. */
+.hw-machine[data-palette] .hw-mx-fdr .hw-fader-fill,
+.hw-machine[data-palette] .hw-pitch-dot { box-shadow: none !important; }
+
+/* Lit / firing pad — luminance flip: bg-coloured fill (flips bright on light
+   palettes, dark on dark, vs the resting pad), crisp 2px accent border, and a
+   text-coloured number. Covers both the portrait grid + landscape mini-pads. */
+.hw-machine[data-palette] .hw-pad.lit,
+.hw-machine[data-palette] .hw-ls-pad--active {
+  background: var(--hw-bg) !important;
+  border-color: var(--hw-accent) !important;
+  border-width: 2px !important;
+}
+.hw-machine[data-palette] .hw-pad.lit .hw-pad-num,
+.hw-machine[data-palette] .hw-ls-pad--active .hw-ls-pad-num { color: var(--hw-text) !important; }
+
+/* ── Embedded drum sequencer (.hw-drum-skin) ────────────────────────────────
+   Re-point the green !important remap + literal-colour rules to palette roles.
+   `.hw-machine[data-palette] .hw-drum-skin …` out-specifies the existing
+   `.hw-drum-skin …` rules and matches their !important, so it always wins. */
+.hw-machine[data-palette] .hw-drum-skin {
+  --neon: var(--hw-accent) !important;
+  --neon3: var(--hw-accent) !important;
+  --bg: var(--hw-panel) !important;
+  --bg1: var(--hw-panel) !important;
+  --bg2: var(--hw-panel) !important;
+  --border-neon: var(--hw-border) !important;
+  --text-dim: var(--hw-muted) !important;
+  --track-color: var(--hw-text) !important;
+  --danger: var(--hw-accent) !important;
+  background: var(--hw-panel) !important;
+  color: var(--hw-text) !important;
+}
+.hw-machine[data-palette] .hw-drum-skin .drum-section,
+.hw-machine[data-palette] .hw-drum-skin .drum-grid,
+.hw-machine[data-palette] .hw-drum-skin .drum-header,
+.hw-machine[data-palette] .hw-drum-skin .drum-row,
+.hw-machine[data-palette] .hw-drum-skin .drum-row-head,
+.hw-machine[data-palette] .hw-drum-skin .drum-row-sample,
+.hw-machine[data-palette] .hw-drum-skin .drum-row-steps { background: var(--hw-panel) !important; }
+.hw-machine[data-palette] .hw-drum-skin .drum-section { border-color: var(--hw-border) !important; }
+.hw-machine[data-palette] .hw-drum-skin .drum-row-head { border-left-color: var(--hw-text) !important; }
+.hw-machine[data-palette] .hw-drum-skin .drum-row-name,
+.hw-machine[data-palette] .hw-drum-skin .drum-row-sample,
+.hw-machine[data-palette] .hw-drum-skin .drum-sample-name,
+.hw-machine[data-palette] .hw-drum-skin button.drum-sample-name,
+.hw-machine[data-palette] .hw-drum-skin .drum-mini,
+.hw-machine[data-palette] .hw-drum-skin .drum-arrow,
+.hw-machine[data-palette] .hw-drum-skin .drum-rnd,
+.hw-machine[data-palette] .hw-drum-skin .drum-seq-label,
+.hw-machine[data-palette] .hw-drum-skin .drum-mini-val,
+.hw-machine[data-palette] .hw-drum-skin .drum-genre-tab { color: var(--hw-text) !important; }
+.hw-machine[data-palette] .hw-drum-skin .drum-seq-total { color: var(--hw-muted) !important; }
+.hw-machine[data-palette] .hw-drum-skin .drum-step {
+  background: var(--hw-panel) !important;
+  border-color: var(--hw-border) !important;
+}
+.hw-machine[data-palette] .hw-drum-skin .drum-step.beat { border-left-color: var(--hw-text) !important; }
+.hw-machine[data-palette] .hw-drum-skin .drum-step.on {
+  background: var(--hw-accent) !important;
+  border-color: var(--hw-accent) !important;
+  box-shadow: none !important;
+}
+.hw-machine[data-palette] .hw-drum-skin .drum-playhead { background: var(--hw-accent) !important; }
+.hw-machine[data-palette] .hw-drum-skin .btn-rec,
+.hw-machine[data-palette] .hw-drum-skin .btn-clear,
+.hw-machine[data-palette] .hw-drum-skin .ctrl-select {
+  background: var(--hw-panel) !important;
+  border-color: var(--hw-text) !important;
+  color: var(--hw-text) !important;
+}
+.hw-machine[data-palette] .hw-drum-skin .btn-rec.on,
+.hw-machine[data-palette] .hw-drum-skin .drum-genre-tab.on {
+  background: var(--hw-accent) !important;
+  border-color: var(--hw-accent) !important;
+  color: var(--hw-bg) !important;
+  box-shadow: none !important;
+}
+.hw-machine[data-palette] .hw-drum-skin .drum-arrow,
+.hw-machine[data-palette] .hw-drum-skin .drum-rnd,
+.hw-machine[data-palette] .hw-drum-skin .drum-genre-tab,
+.hw-machine[data-palette] .hw-drum-skin .drum-genre-tabs {
+  background: var(--hw-panel) !important;
+  border-color: var(--hw-border) !important;
+}
+.hw-machine[data-palette] .hw-drum-skin input[type="range"] { accent-color: var(--hw-accent); }
+
+/* ── Embedded chop sequencer (.hw-chop-skin) ────────────────────────────────
+   Mirror of the .hw-drum-skin palette block above, for the embedded chop
+   <Timeline>. Re-points the base `.hw-chop-skin` green/black !important remap +
+   literal-colour rules (lines ~333-404) to the active palette roles, so CHOP SEQ
+   matches DRUM SEQ (light/white + dark text) instead of staying phosphor-green.
+   `.hw-machine[data-palette] .hw-chop-skin …` out-specifies the base
+   `.hw-chop-skin …` rules and matches their !important, so it always wins. With
+   NO data-palette set, NONE of this applies → the green-phosphor look is intact,
+   and desktop ChopperView (no .hw-chop-skin, no data-palette) is untouched. */
+.hw-machine[data-palette] .hw-chop-skin {
+  --neon: var(--hw-accent) !important;
+  --neon2: var(--hw-accent) !important;
+  --neon3: var(--hw-accent) !important;
+  --bg: var(--hw-panel) !important;
+  --bg1: var(--hw-panel) !important;
+  --bg2: var(--hw-panel) !important;
+  --border-neon: var(--hw-border) !important;
+  --text-dim: var(--hw-muted) !important;
+  --track-color: var(--hw-text) !important;
+  --danger: var(--hw-accent) !important;
+  background: var(--hw-panel) !important;
+  color: var(--hw-text) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq,
+.hw-machine[data-palette] .hw-chop-skin .seq-body,
+.hw-machine[data-palette] .hw-chop-skin .seq-empty {
+  background: var(--hw-panel) !important;
+  border-color: var(--hw-border) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-title,
+.hw-machine[data-palette] .hw-chop-skin .seq-count,
+.hw-machine[data-palette] .hw-chop-skin .seq-ruler-cell { color: var(--hw-text) !important; }
+.hw-machine[data-palette] .hw-chop-skin .seq-ruler-cell.is-bar { color: var(--hw-accent) !important; }
+.hw-machine[data-palette] .hw-chop-skin .seq-ruler-cell.is-beat { color: var(--hw-muted) !important; }
+.hw-machine[data-palette] .hw-chop-skin .seq-row-label {
+  color: var(--hw-text) !important;
+  border-left-color: var(--hw-text) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-cell {
+  background: var(--hw-panel) !important;
+  border-color: var(--hw-border) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-cell:hover {
+  background: rgba(128,128,128,.16) !important;
+  border-color: var(--hw-accent) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-cell.is-bar { border-left-color: var(--hw-border) !important; }
+.hw-machine[data-palette] .hw-chop-skin .seq-cell.is-beat { border-left-color: var(--hw-border) !important; }
+.hw-machine[data-palette] .hw-chop-skin .seq-cell.on {
+  background: var(--hw-accent) !important;
+  border-color: var(--hw-accent) !important;
+  box-shadow: none !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-cursor {
+  background: rgba(128,128,128,.14) !important;
+  border-left-color: var(--hw-accent) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-rec-cursor {
+  background: rgba(128,128,128,.10) !important;
+  border-color: var(--hw-accent) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .btn-rec,
+.hw-machine[data-palette] .hw-chop-skin .btn-clear,
+.hw-machine[data-palette] .hw-chop-skin .ctrl-select,
+.hw-machine[data-palette] .hw-chop-skin .seq-tab {
+  background: var(--hw-panel) !important;
+  border-color: var(--hw-text) !important;
+  color: var(--hw-text) !important;
+}
+.hw-machine[data-palette] .hw-chop-skin .seq-tab.on,
+.hw-machine[data-palette] .hw-chop-skin .btn-rec.on {
+  background: var(--hw-accent) !important;
+  border-color: var(--hw-accent) !important;
+  color: var(--hw-bg) !important;
+  box-shadow: none !important;
+}
+.hw-machine[data-palette] .hw-chop-skin input[type="range"] { accent-color: var(--hw-accent); }
+
+/* ── SCREEN-GREEN OVERRIDE (mobile-only) ────────────────────────────────────
+   Toggled by the small LOAD-screen button (data-screen-green on .hw-machine),
+   INDEPENDENT of the palette toggle. Re-applies the ORIGINAL phosphor-green
+   display look to ONLY the .hw-disp screen + its HardwareView chrome, while the
+   chassis / header / pads / tabs / transport stay in the active palette.
+
+   Scoped to an EXPLICIT selector list (NO wildcard) so the embedded
+   .hw-drum-skin DrumSection, the chop <Timeline> and <WaveformView> are NOT
+   touched — they keep whatever state they're already in (palette or own theme).
+
+   Selectors are `.hw-machine[data-screen-green] .hw-disp …` (0,4,0), so they
+   beat both the base rules (0,1,0) AND the palette overrides
+   (`.hw-machine[data-palette] …`, 0,3,0). `!important` is used ONLY to restore
+   glow on text-shadow / box-shadow (the palette killed those with !important).
+   Green values reference the ORIGINAL --hw-* hardware vars (always defined on
+   .hw-machine) with literal fallbacks, so this is correct whether the palette
+   is on or off. Semantic button colours (.red/.amber/.pur) are re-asserted so
+   the broad .hw-sc-btn rule can't clobber them. */
+
+/* the screen box itself */
+.hw-machine[data-screen-green] .hw-disp {
+  background: var(--hw-dbg, #010501);
+  border-color: #060810;
+}
+/* display-level count-in digit (direct child of .hw-disp, shown on every tab
+   during a REC precount) — keep it phosphor green so the screen reads coherent.
+   (0,4,0) beats the base .seq-countin (0,1,0); base has no !important. */
+.hw-machine[data-screen-green] .hw-disp .seq-countin {
+  color: var(--hw-dbright, #35ff69);
+  text-shadow: 0 0 18px var(--hw-dglow, rgba(53,255,105,.55)), 0 0 2px #000;
+}
+
+/* display chrome — readouts / status / BPM / tap */
+.hw-machine[data-screen-green] .hw-disp .hw-d-status,
+.hw-machine[data-screen-green] .hw-disp .hw-d-track { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-midi-lbl { color: rgba(53,255,105,.3); }
+.hw-machine[data-screen-green] .hw-disp .hw-d-bpm {
+  color: var(--hw-dbright, #35ff69);
+  text-shadow: 0 0 24px var(--hw-dglow, rgba(53,255,105,.55)), 0 0 10px rgba(53,255,105,.4) !important;
+}
+.hw-machine[data-screen-green] .hw-disp .hw-d-bpm-lbl {
+  color: var(--hw-dtext, #26d64e);
+  text-shadow: 0 0 8px var(--hw-dglow, rgba(53,255,105,.55)) !important;
+}
+.hw-machine[data-screen-green] .hw-disp .hw-d-tap { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-d-tap-btn {
+  background: rgba(0,16,5,.85);
+  border-color: rgba(53,255,105,.22);
+  color: var(--hw-ddim, #16883a);
+}
+.hw-machine[data-screen-green] .hw-disp .hw-d-tap-btn.on {
+  background: rgba(0,28,10,.95);
+  border-color: var(--hw-dbright, #35ff69);
+  color: var(--hw-dbright, #35ff69);
+  text-shadow: 0 0 7px var(--hw-dglow, rgba(53,255,105,.55)) !important;
+}
+/* the 140ms per-tap white confirmation flash — the button carries `on flash`
+   together, so this must come AFTER the .on rule to win the (0,5,0) source-order
+   tie and restore the original brighten. */
+.hw-machine[data-screen-green] .hw-disp .hw-d-tap-btn.flash {
+  color: #eaffef;
+  border-color: #eaffef;
+  text-shadow: 0 0 12px var(--hw-dbright, #35ff69) !important;
+}
+.hw-machine[data-screen-green] .hw-disp .hw-d-div { background: rgba(53,255,105,.12); }
+.hw-machine[data-screen-green] .hw-disp .hw-spectrum-canvas {
+  border-color: #1a4a2a;
+  background: #000;
+}
+
+/* LoadScreen controls (selects / inputs / buttons / presets / pitch) */
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn {
+  background: rgba(0,16,5,.85);
+  border-color: rgba(53,255,105,.16);
+  color: var(--hw-ddim, #16883a);
+}
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn:active,
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn.on {
+  background: rgba(0,28,10,.95);
+  border-color: rgba(53,255,105,.55);
+  color: var(--hw-dtext, #26d64e);
+  text-shadow: 0 0 7px rgba(53,255,105,.35) !important;
+}
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn.hi {
+  border-color: rgba(53,255,105,.4);
+  color: var(--hw-dtext, #26d64e);
+}
+/* keep the semantic button colours (broad .hw-sc-btn rule above is 0,4,0) */
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn.red { color: #ff8068; }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn.amber { color: var(--hw-amber, #e7a977); }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-btn.pur { color: #b060ff; }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-select,
+.hw-machine[data-screen-green] .hw-disp .hw-sc-in {
+  background: rgba(0,12,4,.9);
+  border-color: rgba(53,255,105,.22);
+  color: var(--hw-dtext, #26d64e);
+}
+.hw-machine[data-screen-green] .hw-disp .hw-sc-select option { background: #010801; color: var(--hw-dtext, #26d64e); }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-in { caret-color: var(--hw-dbright, #35ff69); }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-in::placeholder { color: rgba(53,255,105,.2); }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-lbl { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-presets { border-top-color: rgba(53,255,105,.1); }
+.hw-machine[data-screen-green] .hw-disp .hw-sc-presets-lbl { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-pitch-dot {
+  background: var(--hw-dtext, #26d64e);
+  box-shadow: 0 0 5px var(--hw-dglow, rgba(53,255,105,.55)) !important;
+}
+.hw-machine[data-screen-green] .hw-disp .hw-pitch-val { color: var(--hw-dtext, #26d64e); }
+.hw-machine[data-screen-green] .hw-disp .hw-pitch-popup {
+  background: var(--hw-dbg, #010501);
+  border-color: var(--hw-dtext, #26d64e);
+  color: var(--hw-dbright, #35ff69);
+  text-shadow: 0 0 8px var(--hw-dglow, rgba(53,255,105,.55)) !important;
+}
+
+/* SEQ inner tabs (CHOP SEQ / DRUM SEQ) */
+.hw-machine[data-screen-green] .hw-disp .hw-sc-stab {
+  background: rgba(0,16,5,.85);
+  border-color: rgba(53,255,105,.16);
+  color: var(--hw-ddim, #16883a);
+}
+.hw-machine[data-screen-green] .hw-disp .hw-sc-stab.on {
+  background: rgba(0,30,12,.95);
+  border-color: rgba(53,255,105,.55);
+  color: var(--hw-dtext, #26d64e);
+  text-shadow: 0 0 7px rgba(53,255,105,.3) !important;
+}
+
+/* MIXER chrome (faders / VU / labels) */
+.hw-machine[data-screen-green] .hw-disp .hw-mx-tnm { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-mx-fdr {
+  background: rgba(0,12,4,.9);
+  border-color: rgba(53,255,105,.18);
+}
+.hw-machine[data-screen-green] .hw-disp .hw-mx-fdr .hw-fader-fill {
+  background: var(--hw-mgreen, #4a7c59);
+  box-shadow: 0 0 4px rgba(53,255,105,.3) !important;
+}
+.hw-machine[data-screen-green] .hw-disp .hw-mx-fvol { color: rgba(53,255,105,.4); }
+.hw-machine[data-screen-green] .hw-disp .hw-mx-master { border-top-color: rgba(53,255,105,.1); }
+.hw-machine[data-screen-green] .hw-disp .hw-export-lbl { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-vu {
+  background: rgba(0,12,4,.9);
+  border-color: rgba(53,255,105,.2);
+}
+.hw-machine[data-screen-green] .hw-disp .hw-vu-fill { background: linear-gradient(to right, var(--hw-mgreen, #4a7c59), var(--hw-dbright, #35ff69)); }
+.hw-machine[data-screen-green] .hw-disp .hw-vu-lbl { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-vu-val { color: var(--hw-dtext, #26d64e); }
+
+/* ── SAMPLE BROWSER palette match (mobile-only) ─────────────────────────────
+   The Sample Browser (.sb-*, base rules in terminator.css) is shared with the
+   desktop ChopperView. These overrides are scoped to `body[data-hw-palette]` —
+   a marker HardwareView sets on <body> ONLY while a palette is active (it also
+   mirrors the 8 --hw-* vars there). Body-scoping (not .hw-machine) is required
+   because in the LANDSCAPE branch the browser renders as a SIBLING of
+   .hw-machine. Desktop / palette-off never has the marker → the original
+   Winamp/phosphor look is byte-identical. (0,2,1)+ out-specifies the base
+   (0,1,0) rules, so no !important. The preview LCD readout (.sb-display /
+   .sb-lcd-*) + the JS-painted spectrum canvas (.sb-spectrum-wrap / -main /
+   .sb-wave-msg) are intentionally LEFT as a green phosphor "screen"; only the
+   window chrome + playlist + controls are palettised. Semantic gold (star /
+   LOAD PRESET) + red errors are left as-is. */
+body[data-hw-palette] .sb-modal {
+  --wa-face: var(--hw-panel); --wa-face-d: var(--hw-panel);
+  --wa-hi: var(--hw-border); --wa-sh: var(--hw-border);
+  background: var(--hw-panel);
+  border-color: var(--hw-border);
+  color: var(--hw-text);
+  box-shadow: 0 36px 80px -24px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
+}
+body[data-hw-palette] .sb-titlebar { background: var(--hw-panel); border-bottom-color: var(--hw-border); }
+body[data-hw-palette] .sb-title { color: var(--hw-text); text-shadow: none; }
+body[data-hw-palette] .sb-x { color: var(--hw-muted); }
+body[data-hw-palette] .sb-x:hover { color: var(--hw-accent); box-shadow: inset 1px 1px 0 var(--hw-border), inset -1px -1px 0 var(--hw-border); }
+body[data-hw-palette] .sb-transport,
+body[data-hw-palette] .sb-footer { background: var(--hw-panel); }
+body[data-hw-palette] .sb-play { color: var(--hw-accent); text-shadow: none; }
+body[data-hw-palette] .sb-load { background: var(--hw-panel); color: var(--hw-accent); text-shadow: none; box-shadow: inset 1px 1px 0 var(--hw-border), inset -1px -1px 0 var(--hw-border); }
+body[data-hw-palette] .sb-pitch-btn { color: var(--hw-muted); }
+body[data-hw-palette] .sb-play:hover:not(:disabled),
+body[data-hw-palette] .sb-pitch-btn:hover:not(:disabled),
+body[data-hw-palette] .sb-load:hover:not(:disabled) { color: var(--hw-accent); text-shadow: none; box-shadow: inset 1px 1px 0 var(--hw-border), inset -1px -1px 0 var(--hw-border); }
+body[data-hw-palette] .sb-pitch-val { color: var(--hw-text); }
+body[data-hw-palette] .sb-vol-lbl { color: var(--hw-muted); }
+body[data-hw-palette] .sb-vol input[type=range] { background: var(--hw-accent); }
+/* thumb = --hw-bg (NOT --hw-pad): pad ≈ accent luminance, so a pad thumb melts
+   into the accent track on every palette; bg flips opposite the accent. */
+body[data-hw-palette] .sb-vol input[type=range]::-webkit-slider-thumb { background: var(--hw-bg); }
+body[data-hw-palette] .sb-vol input[type=range]::-moz-range-thumb { background: var(--hw-bg); border-color: var(--hw-border); }
+body[data-hw-palette] .sb-search { background: var(--hw-panel); color: var(--hw-text); box-shadow: inset 0 0 0 1px var(--hw-border); }
+body[data-hw-palette] .sb-search:focus { box-shadow: inset 0 0 0 1px var(--hw-accent); }
+body[data-hw-palette] .sb-search::placeholder,
+body[data-hw-palette] .sb-yt-input::placeholder { color: var(--hw-faint); }
+body[data-hw-palette] .sb-browser { background: var(--hw-panel); box-shadow: inset 0 0 0 1px var(--hw-border); }
+body[data-hw-palette] .sb-status,
+body[data-hw-palette] .sb-empty,
+body[data-hw-palette] .sb-fcount,
+body[data-hw-palette] .sb-tnum,
+body[data-hw-palette] .sb-tw,
+body[data-hw-palette] .sb-us-hint,
+body[data-hw-palette] .sb-search-clear,
+body[data-hw-palette] .sb-row-del { color: var(--hw-muted); }
+body[data-hw-palette] .sb-folder { background: var(--hw-panel); border-bottom-color: var(--hw-border); color: var(--hw-text); }
+body[data-hw-palette] .sb-folder:hover { color: var(--hw-accent); }
+body[data-hw-palette] .sb-track { color: var(--hw-text); }
+body[data-hw-palette] .sb-track:hover { background: color-mix(in srgb, var(--hw-accent) 14%, transparent); }
+body[data-hw-palette] .sb-track--sel { background: color-mix(in srgb, var(--hw-accent) 26%, transparent); color: var(--hw-text); box-shadow: inset 3px 0 0 var(--hw-accent); }
+body[data-hw-palette] .sb-track--sel:hover { background: color-mix(in srgb, var(--hw-accent) 32%, transparent); }
+body[data-hw-palette] .sb-track--sel .sb-tnum { color: var(--hw-accent); }
+/* selected-row preset star: base sets #fff (invisible on the light 26%-accent
+   tint) — retint to --hw-text so it reads on light AND dark palettes. */
+body[data-hw-palette] .sb-track--sel .sb-tstar { color: var(--hw-text); }
+body[data-hw-palette] .sb-yt-input { background: var(--hw-panel); color: var(--hw-text); border-color: var(--hw-border); }
+body[data-hw-palette] .sb-yt-addbtn { color: var(--hw-accent); background: color-mix(in srgb, var(--hw-accent) 12%, transparent); border-color: var(--hw-border); box-shadow: none; }
+body[data-hw-palette] .sb-yt-add { background: color-mix(in srgb, var(--hw-border) 30%, transparent); }
+
+/* HELP — the ? in the portrait header, beside undo/redo. Accent-coloured
+   because it is the one control in the chassis that explains the rest of it,
+   and 44px tall on a phone so a thumb actually lands on it. */
+.hw-hdr-help { color: var(--hw-accent, var(--hw-amber)); font-weight: 700; }
+@media (pointer: coarse) {
+  .hw-hdr-help { width: 44px; height: 34px; font-size: 16px; }
+}
+
+/* HELP — the ? riding the end of the landscape tab row. Fixed width so the
+   four real tabs keep their equal flex share. */
+.hw-machine.hw-landscape .hw-ls-help {
+  flex: 0 0 44px;
+  color: var(--hw-accent, var(--hw-dbright));
+  font-weight: 700;
+  font-size: 13px;
+  border-right: none;
+  border-left: 1px solid var(--hw-border, #1a1a1a);
+}
+
+/* MIDI latency meter in the hardware display's MIDI IN row. Tiny — the row is
+   already tight and the figure is a diagnostic, not a control. */
+.hw-sc-midi .midi-latency {
+  height: 18px; padding: 0 5px; margin-left: 6px;
+  font-size: 9px;
+  border-color: var(--hw-border, #2a3255);
+  color: var(--hw-muted, #8a93b5);
+}
+
+/* ── BASS (mobile): the BassSection reads --hw-* first, so palettes skin it
+   for free. Phosphor (palette off) → the same green the drum skin uses. ── */
+.hw-bass-skin { min-height: 100%; }
+.hw-bass-skin .bass-section { border: 0; padding: 6px; gap: 6px; }
+.hw-machine:not([data-palette]) .hw-bass-skin .bass-section {
+  --bass-accent: var(--hw-dbright, #35ff69);
+  --bass-ink: #cfe;
+  --bass-dim: #6f9;
+  --bass-panel: #000;
+  --bass-pad: #061008;
+  --bass-border: rgba(53, 255, 105, 0.35);
+}
+.hw-bass-skin .bass-panel { gap: 4px; padding: 4px; }
+.hw-bass-skin .bm-title { font-size: 8px; }
+.hw-bass-skin .bass-head, .hw-bass-skin .bass-roll-bar { gap: 4px; }
+.hw-bass-skin .bass-meter { width: 60px; }
+/* the roll must never scroll the page sideways */
+.hw-bass-skin .pr-wrap { max-width: 100%; }
+/* the machine's own <select> skin paints these dark-on-dark on light palettes */
+.hw-bass-skin .bass-field select {
+  background: var(--bass-panel) !important; color: var(--bass-ink) !important;
+  border: 1px solid var(--bass-border) !important; -webkit-appearance: menulist; appearance: auto;
+}
+
+/* MIXER screen LUFS row (under PEAK): M / S / I / TP off the BS.1770-4 tap —
+   tap the row for the full LoudnessPopup. Same colour hooks as .hw-vu. */
+.hw-lufs { display: flex; align-items: baseline; gap: 3px; flex-shrink: 0; margin: 0 0 2px; padding: 2px 6px; font-family: var(--hw-font-mono); font-size: 8px; background: var(--hw-panel, rgba(0,12,4,.9)); border: 1px solid var(--hw-border, rgba(53,255,105,.2)); border-radius: 2px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.hw-lufs:active { border-color: var(--hw-accent, var(--hw-dbright)); }
+.hw-lufs-k { color: var(--hw-muted, var(--hw-ddim)); letter-spacing: 1px; font-size: 7px; }
+.hw-lufs-v { color: var(--hw-text, var(--hw-dtext)); font-variant-numeric: tabular-nums; min-width: 26px; margin-right: 4px; }
+.hw-lufs-tp { color: var(--hw-accent, var(--hw-dbright)); }
+.hw-lufs-unit { margin-left: auto; color: var(--hw-muted, var(--hw-ddim)); font-size: 7px; letter-spacing: 1px; }
+.hw-machine[data-screen-green] .hw-disp .hw-lufs { background: rgba(0,12,4,.9); border-color: rgba(53,255,105,.2); }
+.hw-machine[data-screen-green] .hw-disp .hw-lufs-k, .hw-machine[data-screen-green] .hw-disp .hw-lufs-unit { color: var(--hw-ddim, #16883a); }
+.hw-machine[data-screen-green] .hw-disp .hw-lufs-v { color: var(--hw-dtext, #26d64e); }
+.hw-machine[data-screen-green] .hw-disp .hw-lufs-tp { color: var(--hw-dbright, #35ff69); }
+
+/* LOAD screen ● REC (record a sample from the mic / an input). While rolling
+   the button turns red and its background fills with the input level. */
+.hw-rec { position: relative; overflow: hidden; }
+.hw-rec.rec { border-color: rgba(255,80,60,.6); color: #ff8068; text-shadow: none; }
+.hw-rec-lvl { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: rgba(255,80,60,.28); transition: width 100ms linear; pointer-events: none; }
+.hw-rec-txt { position: relative; z-index: 1; font-variant-numeric: tabular-nums; }
+
+/* Pad menu: a <label> item (LOAD FILE onto this pad) styled like the buttons. */
+.hw-pad-dropdown .hw-pad-dropdown-item { display: block; width: 100%; box-sizing: border-box; padding: 6px 8px; text-align: left; color: var(--hw-text, var(--hw-dtext)); font-family: var(--hw-font-mono); font-size: 9px; letter-spacing: 1px; cursor: pointer; border-radius: 2px; }
+.hw-pad-dropdown .hw-pad-dropdown-item:active { background: var(--hw-border, rgba(53,255,105,.12)); }
+/* SOURCE stripe along the top of a loaded pad — one colour per source, joined across a block. */
+.hw-pad-src {
+  position: absolute; top: 5px; left: 8px; right: 8px; height: 4px;
+  border-radius: 3px; pointer-events: none;
+  background: var(--led);
+  /* an LED, not a sticker: a soft spill of its own colour, a lit top edge and
+     a hairline seat so it sits IN the cap instead of on it */
+  box-shadow:
+    0 0 6px 1px color-mix(in srgb, var(--led) 55%, transparent),
+    inset 0 1px 0 rgba(255,255,255,.4),
+    0 1px 1px rgba(0,0,0,.35);
+}
+.hw-pad-src-start { right: 6px; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.hw-pad-src-mid { left: 6px; right: 6px; border-radius: 0; }
+.hw-pad-src-end { left: 6px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   4K MODE — the mobile finish (hwPalettes.ts HwFinish, stamped as
+   data-finish="4k" on the .hw-machine roots by HardwareView).
+   The phone-sized sibling of the desktop's 4K material (terminator.css
+   body[data-finish="4k"]): the same three-stop ramp derived from the ACTIVE
+   --hw-* palette vars — so all 15 palettes AND the phosphor look (fallbacks)
+   wear the material in their own hue — the same fixed key light, hairline
+   bevels and brushed grain. Everything is vector; idle 4K costs nothing.
+   Scoped entirely to .hw-machine[data-finish="4k"]: classic mode and the
+   desktop layout are untouched.
+   ══════════════════════════════════════════════════════════════════════════ */
+.hw-machine[data-finish="4k"] {
+  /* the key light: fixed, upper-left, like a product shot (same as desktop) */
+  --ldx: -0.5; --ldy: -0.7; --lang: 155deg;
+  /* material ramp — palette-derived, phosphor-green-tinted navy fallbacks */
+  --m-base:  var(--hw-panel, #242b42);
+  --m-hi:    color-mix(in oklab, var(--m-base) 64%, white);
+  --m-mid:   var(--m-base);
+  --m-lo:    color-mix(in oklab, var(--m-base) 66%, black);
+  --m-deep:  color-mix(in oklab, var(--m-base) 34%, black);
+  --m-ink:   var(--hw-text, #d9e2f2);
+  --m-acc:   var(--hw-accent, #35ff69);
+  --m-room:  var(--hw-bg, #23211e);
+  --bev-hi: rgba(255,255,255,0.5);
+  --bev-lo: rgba(0,0,0,0.42);
+  --bevel:
+    inset calc(var(--ldx) * -1px) calc(var(--ldy) * -1px) 0 var(--bev-hi),
+    inset calc(var(--ldx) *  1px) calc(var(--ldy) *  1px) 0 var(--bev-lo);
+  --grain: repeating-linear-gradient(var(--lang), rgba(255,255,255,0.03) 0 1px, rgba(0,0,0,0.03) 1px 2px);
+  /* the chassis: brushed metal in the room tone, lit from the top */
+  background:
+    var(--grain),
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--m-room) 86%, white) 0%,
+      var(--m-room) 22%,
+      color-mix(in oklab, var(--m-room) 72%, black) 100%);
+  -webkit-font-smoothing: antialiased;
+}
+/* the chassis sections painted their own flat bg — let the metal through */
+.hw-machine[data-finish="4k"] .hw-pads-outer,
+.hw-machine[data-finish="4k"] .hw-transport,
+.hw-machine[data-finish="4k"] .hw-resize-handle { background: transparent; }
+
+/* ── the display: a glass LCD recessed INTO the metal ─────────────────────── */
+.hw-machine[data-finish="4k"] .hw-disp {
+  border: 1px solid var(--m-deep);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 2px 10px rgba(0,0,0,.55),
+    inset 0 1px 0 rgba(0,0,0,.6),
+    0 1px 0 rgba(255,255,255,.14);
+}
+
+/* ── pads: milled keycaps with a spec highlight facing the light ──────────── */
+.hw-machine[data-finish="4k"] .hw-pad {
+  background:
+    radial-gradient(60% 45% at calc(50% + var(--ldx) * 25%) calc(28% + var(--ldy) * 12%), rgba(255,255,255,0.25) 0%, transparent 70%),
+    linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 40%, var(--m-lo) 100%);
+  border: 1px solid var(--m-deep);
+  border-radius: 8px;
+  box-shadow: var(--bevel), 0 1px 0 rgba(255,255,255,0.08), 0 3px 8px rgba(0,0,0,0.4);
+  transition: transform 60ms ease-out, filter 60ms ease-out;
+}
+.hw-machine[data-finish="4k"] .hw-pad.filled {
+  background:
+    radial-gradient(60% 45% at calc(50% + var(--ldx) * 25%) calc(28% + var(--ldy) * 12%), rgba(255,255,255,0.22) 0%, transparent 70%),
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--hw-pad, var(--m-mid)) 78%, white) 0%,
+      color-mix(in oklab, var(--hw-pad, var(--m-mid)) 92%, var(--m-mid)) 40%,
+      color-mix(in oklab, var(--hw-pad, var(--m-mid)) 70%, black) 100%);
+  border-color: var(--m-deep);
+}
+.hw-machine[data-finish="4k"] .hw-pad-num { color: color-mix(in srgb, var(--m-ink) 45%, transparent); text-shadow: 0 1px 0 rgba(255,255,255,.18); }
+.hw-machine[data-finish="4k"] .hw-pad-menu-btn { color: color-mix(in srgb, var(--m-ink) 45%, transparent); }
+/* pressed: the cap sinks and the bevel flips — instant, like a real switch */
+.hw-machine[data-finish="4k"] .hw-pad:active {
+  transform: translateY(2px);
+  border-bottom-width: 1px; border-right-width: 1px;
+  box-shadow:
+    inset calc(var(--ldx) *  1px) calc(var(--ldy) *  1px) 0 var(--bev-hi),
+    inset calc(var(--ldx) * -1px) calc(var(--ldy) * -1px) 0 var(--bev-lo),
+    0 1px 2px rgba(0,0,0,0.3);
+}
+/* lit: the pad IS a light — emissive accent, spilling onto the metal.
+   !important beats the [data-palette] lit remap (same specificity, later +
+   important on both → this block wins for 4K). */
+.hw-machine[data-finish="4k"] .hw-pad.lit {
+  background:
+    radial-gradient(70% 60% at 50% 35%, color-mix(in srgb, var(--m-acc) 55%, transparent) 0%, transparent 75%),
+    linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 40%, var(--m-lo) 100%) !important;
+  border: 1px solid color-mix(in oklab, var(--m-acc) 70%, black) !important;
+  box-shadow:
+    var(--bevel),
+    inset 0 0 0 1px var(--m-acc),
+    inset 0 0 16px color-mix(in srgb, var(--m-acc) 45%, transparent),
+    0 0 14px color-mix(in srgb, var(--m-acc) 40%, transparent) !important;
+}
+.hw-machine[data-finish="4k"] .hw-pad.lit .hw-pad-num { color: var(--m-ink) !important; }
+
+/* ── buttons: milled chiclets (tabs, screen buttons, transport, banks) ────── */
+.hw-machine[data-finish="4k"] .hw-tab,
+.hw-machine[data-finish="4k"] .hw-tbtn,
+.hw-machine[data-finish="4k"] .hw-sc-btn,
+.hw-machine[data-finish="4k"] .hw-sc-stab,
+.hw-machine[data-finish="4k"] .hw-bank-btn,
+.hw-machine[data-finish="4k"] .hw-live-btn,
+.hw-machine[data-finish="4k"] .hw-hdr-icon,
+.hw-machine[data-finish="4k"] .hw-d-tap-btn,
+.hw-machine[data-finish="4k"] .hw-ls-tab,
+.hw-machine[data-finish="4k"] .hw-ls-tbtn {
+  background: linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 46%, var(--m-lo) 100%);
+  color: var(--m-ink);
+  border: 1px solid var(--m-deep);
+  box-shadow: var(--bevel), 0 1px 0 rgba(255,255,255,0.08), 0 2px 5px rgba(0,0,0,0.35);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+}
+.hw-machine[data-finish="4k"] .hw-tbtn { border-radius: 5px; }
+.hw-machine[data-finish="4k"] .hw-tab:active,
+.hw-machine[data-finish="4k"] .hw-tbtn:active,
+.hw-machine[data-finish="4k"] .hw-sc-btn:active,
+.hw-machine[data-finish="4k"] .hw-sc-stab:active,
+.hw-machine[data-finish="4k"] .hw-bank-btn:active,
+.hw-machine[data-finish="4k"] .hw-ls-tab:active {
+  box-shadow:
+    inset calc(var(--ldx) *  1px) calc(var(--ldy) *  1px) 0 var(--bev-hi),
+    inset calc(var(--ldx) * -1px) calc(var(--ldy) * -1px) 0 var(--bev-lo),
+    0 1px 2px rgba(0,0,0,0.3);
+}
+/* engaged = lit from within: accent ring + spill, on the SAME metal cap */
+.hw-machine[data-finish="4k"] .hw-tab.on,
+.hw-machine[data-finish="4k"] .hw-sc-btn.on,
+.hw-machine[data-finish="4k"] .hw-sc-stab.on,
+.hw-machine[data-finish="4k"] .hw-bank-btn.on,
+.hw-machine[data-finish="4k"] .hw-live-btn.on,
+.hw-machine[data-finish="4k"] .hw-ls-tab--active,
+.hw-machine[data-finish="4k"] .hw-tbtn.playing {
+  background: linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 46%, var(--m-lo) 100%);
+  color: var(--m-ink);
+  border-color: color-mix(in oklab, var(--m-acc) 70%, black);
+  box-shadow:
+    var(--bevel),
+    inset 0 0 0 1px var(--m-acc),
+    inset 0 0 10px color-mix(in srgb, var(--m-acc) 35%, transparent),
+    0 0 10px color-mix(in srgb, var(--m-acc) 35%, transparent);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+}
+/* semantic lights keep their colour: REC glows red, STEP amber — as LEDs in
+   the cap, not painted plastic */
+.hw-machine[data-finish="4k"] .hw-tbtn.rec {
+  color: #b03020;
+  border-color: color-mix(in oklab, #cc2010 45%, var(--m-deep));
+  text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+}
+.hw-machine[data-finish="4k"] .hw-tbtn.rec.armed {
+  color: #fff0ec;
+  background:
+    radial-gradient(70% 60% at 50% 40%, rgba(255,60,30,.75) 0%, transparent 80%),
+    linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 46%, var(--m-lo) 100%);
+  box-shadow: var(--bevel), inset 0 0 0 1px #ff4030, inset 0 0 12px rgba(255,60,30,.5), 0 0 14px rgba(255,60,30,.55);
+  text-shadow: 0 0 6px rgba(255,120,90,.9);
+}
+.hw-machine[data-finish="4k"] .hw-tbtn.step.on {
+  color: var(--m-ink);
+  border-color: color-mix(in oklab, #cc8820 55%, var(--m-deep));
+  box-shadow: var(--bevel), inset 0 0 0 1px #e7a040, inset 0 0 10px rgba(231,160,64,.4), 0 0 10px rgba(231,160,64,.4);
+}
+/* the LOAD-screen buttons sit ON the glass: keep them flatter than the chassis
+   chiclets — a thin lit key, not a metal block over the LCD */
+.hw-machine[data-finish="4k"] .hw-sc-btn { border-radius: 4px; }
+.hw-machine[data-finish="4k"] .hw-sc-btn.red { color: #c03828; border-color: color-mix(in oklab, #cc3018 45%, var(--m-deep)); }
+.hw-machine[data-finish="4k"] .hw-sc-btn.amber { color: #a06a20; border-color: color-mix(in oklab, #cc8820 45%, var(--m-deep)); }
+.hw-machine[data-finish="4k"] .hw-sc-btn.pur { color: #7a48c0; border-color: color-mix(in oklab, #8040cc 45%, var(--m-deep)); }
+
+/* wells: inputs / selects / faders / the VU read as recessed glass */
+.hw-machine[data-finish="4k"] .hw-sc-in,
+.hw-machine[data-finish="4k"] .hw-sc-select,
+.hw-machine[data-finish="4k"] .hw-mx-fdr,
+.hw-machine[data-finish="4k"] .hw-vu {
+  border: 1px solid var(--m-deep);
+  box-shadow: inset 0 2px 6px rgba(0,0,0,.4), 0 1px 0 rgba(255,255,255,.12);
+}
+
+/* chassis legends (PADS · bank · BPM): the classic fallbacks are dark ink for
+   the light grey chassis — on the 4K room they vanish. Read the material ink
+   instead (palette text, else the light phosphor fallback). */
+.hw-machine[data-finish="4k"] .hw-pads-hdr { color: color-mix(in srgb, var(--m-ink) 60%, transparent); }
+.hw-machine[data-finish="4k"] .hw-pads-bpm { color: var(--m-ink); }
+
+/* the resize handle: a machined groove instead of a flat strip */
+.hw-machine[data-finish="4k"] .hw-resize-handle::before { opacity: .7; }
+
+/* landscape mini-pads: same keycap material at strip size */
+.hw-machine[data-finish="4k"] .hw-ls-pad {
+  background:
+    radial-gradient(60% 45% at calc(50% + var(--ldx) * 25%) calc(28% + var(--ldy) * 12%), rgba(255,255,255,0.22) 0%, transparent 70%),
+    linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 40%, var(--m-lo) 100%);
+  border: 1px solid var(--m-deep);
+  box-shadow: var(--bevel), 0 2px 5px rgba(0,0,0,0.35);
+}
+.hw-machine[data-finish="4k"] .hw-ls-pad--filled {
+  background:
+    radial-gradient(60% 45% at calc(50% + var(--ldx) * 25%) calc(28% + var(--ldy) * 12%), rgba(255,255,255,0.2) 0%, transparent 70%),
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--hw-pad, var(--m-mid)) 78%, white) 0%,
+      color-mix(in oklab, var(--hw-pad, var(--m-mid)) 92%, var(--m-mid)) 40%,
+      color-mix(in oklab, var(--hw-pad, var(--m-mid)) 70%, black) 100%);
+}
+.hw-machine[data-finish="4k"] .hw-ls-pad--active {
+  background:
+    radial-gradient(70% 60% at 50% 35%, color-mix(in srgb, var(--m-acc) 55%, transparent) 0%, transparent 75%),
+    linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 40%, var(--m-lo) 100%) !important;
+  border: 1px solid color-mix(in oklab, var(--m-acc) 70%, black) !important;
+  box-shadow: var(--bevel), inset 0 0 0 1px var(--m-acc), 0 0 12px color-mix(in srgb, var(--m-acc) 40%, transparent) !important;
+}
+
+/* reduced motion: the material stays, the transforms go */
+@media (prefers-reduced-motion: reduce) {
+  .hw-machine[data-finish="4k"] .hw-pad,
+  .hw-machine[data-finish="4k"] .hw-tbtn { transition: none; }
+}
+
+/* ── BASS pad surface (the DRUMS button's third stop) ────────────────────────
+   16 .hw-pad caps playing the bass synth — the note name is the face of the
+   pad, the ROOT pads carry the accent so the key is readable at a glance.
+   Palette + 4K dress these for free (same .hw-pad class). */
+.hw-pad-note {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--hw-font-mono); font-size: 15px; font-weight: 500; letter-spacing: 1px;
+  color: var(--hw-text, var(--hw-dtext)); pointer-events: none; user-select: none;
+}
+.hw-pad-note i { font-style: normal; font-size: 9px; opacity: .55; margin-left: 1px; align-self: flex-end; padding-bottom: 30%; }
+.hw-pad-bass-root { border-color: var(--hw-accent, var(--hw-dbright)); }
+.hw-pad-bass-root .hw-pad-note { color: var(--hw-accent, var(--hw-dbright)); text-shadow: 0 0 8px var(--hw-dglow); }
+.hw-machine[data-palette] .hw-pad-bass-root .hw-pad-note { text-shadow: none; }
+
+/* KEY + SCALE in the pads header (bass surface only) — bank-button sized. */
+.hw-bass-keyrow { display: flex; gap: 3px; align-items: center; }
+.hw-bass-key {
+  height: 16px; background: var(--hw-panel, #18122a); border: 1px solid var(--hw-border, #2a2040);
+  border-radius: 3px; color: var(--hw-muted, #6a5a8a); font-family: var(--hw-font-mono);
+  font-size: 8px; padding: 0 3px; -webkit-appearance: none; appearance: none; outline: none;
+}
+.hw-machine[data-finish="4k"] .hw-bass-key {
+  background: linear-gradient(180deg, var(--m-hi) 0%, var(--m-mid) 46%, var(--m-lo) 100%);
+  color: var(--m-ink); border: 1px solid var(--m-deep);
+  box-shadow: var(--bevel), 0 1px 2px rgba(0,0,0,0.3);
+}

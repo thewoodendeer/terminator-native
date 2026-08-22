@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# the optional boot-intro easter-egg videos (11 MB) — ui/scripts/sync-assets.sh copies them from a local
+# Electron checkout; the app degrades gracefully without them
+public/videos/*.mp4

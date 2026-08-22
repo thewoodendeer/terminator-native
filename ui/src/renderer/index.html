@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover lets the app draw under the notch + home indicator
+         on iPhones when launched as a PWA from the home screen. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- PWA: registered manifest + iOS-specific bits so "Add to Home Screen"
+         produces a real full-screen app with an icon. -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="T-800" />
+    <meta name="theme-color" content="#00ff96" />
+    <!-- Defense-in-depth CSP. Allows the local bundle, fonts from Google, and
+         audio via the terminator-cache:// custom protocol. Blocks remote
+         scripts/iframes/objects entirely. 'unsafe-inline' is required for
+         style only (Vite injects inline <style> tags for CSS modules). -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self' terminator-cache: blob: data:;
+                   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                   font-src 'self' https://fonts.gstatic.com data:;
+                   img-src 'self' data: blob:;
+                   media-src 'self' terminator-cache: blob: data: https://kcc-samples.killavicbeats.workers.dev;
+                   connect-src 'self' terminator-cache: ws: wss: https://pub-17b3d7f0dae24aa8b32405d12d43a870.r2.dev https://kcc-samples.killavicbeats.workers.dev;
+                   script-src 'self' 'unsafe-inline';
+                   worker-src 'self' blob:;
+                   object-src 'none';
+                   base-uri 'none';" />
+    <title>TERMINATOR // T-800 AUDIO SYSTEM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Default-UI fonts (Share Tech Mono + Orbitron): render-blocking, needed
+         for first paint. -->
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
+    <!-- Per-theme display fonts: loaded NON-blocking so they don't slow first
+         paint. The media=print → onload swap is the standard async-CSS trick;
+         they apply once a theme that uses them is active (the Chicago/SF2 faces
+         are bundled separately as @font-face). -->
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Bungee&family=Faster+One&family=VT323&family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <!-- Hardware ?v2 layout fonts (DM Mono + Outfit): only used by HardwareView;
+         display=swap so they never block first paint for the classic UI. -->
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet" />
+    <!-- 4K finish type: IBM Plex Mono is the ONE voice of the material UI —
+         button legends, section headers, LCD wells. Only fetched when the 4K
+         finish actually uses it (browsers load a family lazily on first use),
+         so the classic look pays nothing. -->
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

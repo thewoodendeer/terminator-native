@@ -1,0 +1,148 @@
+/* BASS section — Model-D module strip + piano roll. Palette-first tokens:
+   --hw-* (palette) → classic --neon theme → hex last resort. */
+.bass-section {
+  --bass-accent: var(--hw-accent, var(--neon, #00ff88));
+  --bass-ink: var(--hw-text, var(--text, #b0ffd0));
+  --bass-dim: var(--hw-muted, var(--text-dim, #00bb66));
+  --bass-panel: var(--hw-panel, var(--bg2, #0a0a10));
+  --bass-pad: var(--hw-pad, var(--bg3, #0f0f18));
+  --bass-border: var(--hw-border, var(--border-neon, #00ff8855));
+  --bass-line: color-mix(in srgb, var(--bass-ink) 10%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bass-panel);
+  border: 1px solid var(--bass-border);
+  border-top: 0;
+  padding: 8px;
+  color: var(--bass-ink);
+  font-family: var(--font-mono);
+}
+.bass-head, .bass-roll-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.bass-sep { width: 1px; height: 18px; background: var(--bass-border); margin: 0 2px; }
+.bass-field { display: inline-flex; align-items: center; gap: 4px; font-size: 9px; letter-spacing: 0.08em; color: var(--bass-dim); text-transform: uppercase; }
+.bass-field select {
+  font-family: var(--font-mono); font-size: 10px; background: var(--bass-pad); color: var(--bass-ink);
+  border: 1px solid var(--bass-border); border-radius: 3px; padding: 2px 4px;
+}
+.bass-hint { margin-left: auto; font-size: 9px; color: var(--bass-dim); opacity: 0.8; letter-spacing: 0.02em; }
+
+/* buttons */
+.bb {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 3px;
+  border: 1px solid var(--bass-border); background: transparent; color: var(--bass-dim); cursor: pointer; white-space: nowrap; line-height: 1.3;
+}
+.bb:hover { color: var(--bass-accent); border-color: var(--bass-accent); }
+.bb.on { background: var(--bass-accent); border-color: var(--bass-accent); color: var(--bass-panel); box-shadow: 0 0 8px color-mix(in srgb, var(--bass-accent) 60%, transparent); }
+.bb:disabled { opacity: 0.4; cursor: default; }
+.bb:disabled:hover { color: var(--bass-dim); border-color: var(--bass-border); }
+.bb-sq { padding: 2px 6px; font-size: 9px; }
+.bb-play { font-size: 12px; padding: 2px 12px; }
+.bb-rec.on { background: var(--rec, #ff5230); border-color: var(--rec, #ff5230); box-shadow: 0 0 10px var(--rec, #ff5230); color: #fff; }
+.bb-midi.on { background: var(--neon2, #00ccff); border-color: var(--neon2, #00ccff); }
+
+/* meter */
+.bass-meter { --lvl: 0%; position: relative; width: 90px; height: 10px; border: 1px solid var(--bass-border); border-radius: 2px; overflow: hidden; margin-left: auto; background: var(--bass-pad); }
+.bass-meter i { position: absolute; left: 0; top: 0; bottom: 0; width: var(--lvl); background: linear-gradient(90deg, var(--bass-accent), color-mix(in srgb, var(--bass-accent) 60%, #ffcc00)); transition: width 40ms linear; }
+.bass-meter.hot { border-color: var(--danger, #ff003c); }
+.bass-meter::after { content: attr(data-voices); position: absolute; right: 3px; top: -1px; font-size: 8px; color: var(--bass-dim); }
+
+/* synth panel */
+.bass-panel {
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; border: 1px solid var(--bass-border); border-radius: 4px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bass-pad) 80%, #000) 0%, var(--bass-pad) 100%);
+}
+.bm { display: flex; flex-direction: column; border: 1px solid var(--bass-border); border-radius: 4px; background: color-mix(in srgb, var(--bass-panel) 70%, transparent); min-width: 0; }
+.bm-title { font-family: var(--font-hud, var(--font-mono)); font-size: 9px; letter-spacing: 0.18em; padding: 3px 8px; color: var(--bass-accent); border-bottom: 1px solid var(--bass-border); display: flex; align-items: baseline; gap: 6px; }
+.bm-sub { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.06em; color: var(--bass-dim); text-transform: lowercase; }
+.bm-body { display: flex; align-items: flex-end; gap: 4px; padding: 6px 6px 4px; }
+.bm-col { display: flex; flex-direction: column; gap: 3px; align-self: center; }
+.bm-waves { display: flex; gap: 1px; }
+.bm-waves .bb-wave { padding: 1px 4px; font-size: 11px; line-height: 1.1; min-width: 20px; }
+.bm-range { display: flex; gap: 1px; }
+.bm-range .bb-range { padding: 1px 4px; font-size: 8px; min-width: 20px; }
+
+/* knob */
+.bk { display: flex; flex-direction: column; align-items: center; gap: 2px; user-select: none; }
+.bk-dial {
+  --a0: -135deg; --asw: 0deg;
+  position: relative; border-radius: 50%; cursor: ns-resize;
+  /* arc (accent) over a faint full-sweep track ring */
+  background:
+    conic-gradient(from var(--a0), var(--bass-accent) 0 var(--asw), transparent var(--asw) 360deg),
+    conic-gradient(from 225deg, color-mix(in srgb, var(--bass-ink) 14%, transparent) 0 270deg, transparent 270deg 360deg);
+}
+/* the arc ring is drawn by the conic gradient; the cap sits over it */
+.bk-cap {
+  position: absolute; inset: 15%; border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #3a3a3f, #141418 70%, #0a0a0c);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.05);
+}
+.bk-cap i { position: absolute; left: 50%; top: 8%; width: 2px; height: 34%; margin-left: -1px; background: var(--bass-accent); border-radius: 1px; box-shadow: 0 0 4px var(--bass-accent); }
+.bk-val { position: absolute; left: 50%; top: -18px; transform: translateX(-50%); font-size: 9px; color: var(--bass-ink); background: var(--bass-panel); border: 1px solid var(--bass-border); padding: 0 4px; border-radius: 2px; pointer-events: none; white-space: nowrap; z-index: 3; }
+.bk-label { font-size: 8px; letter-spacing: 0.08em; color: var(--bass-dim); white-space: nowrap; }
+.bk-cc { margin-left: 3px; color: var(--neon2, #00ccff); }
+.bk.learning .bk-dial { outline: 1px dashed var(--neon2, #00ccff); outline-offset: 2px; animation: bk-blink 0.8s infinite; }
+@keyframes bk-blink { 50% { outline-color: transparent; } }
+
+/* roll */
+.bass-seqs { display: inline-flex; align-items: center; gap: 3px; }
+.bass-seq-lbl { font-size: 10px; letter-spacing: 0.08em; color: var(--bass-accent); min-width: 58px; text-align: center; }
+.bass-seq-lbl small { color: var(--bass-dim); font-size: 8px; }
+.bass-grids { display: inline-flex; gap: 2px; }
+.pr-wrap { position: relative; border: 1px solid var(--bass-border); border-radius: 3px; overflow: hidden; outline: none; }
+.pr-wrap:focus-within { border-color: var(--bass-accent); }
+.pr-canvas { display: block; width: 100%; }
+
+.pr-scroll { position: absolute; right: 4px; top: 4px; display: flex; flex-direction: column; gap: 2px; opacity: 0.75; }
+.pr-scroll .bb { padding: 1px 5px; font-size: 8px; background: var(--bass-panel); }
+.bk-dial { touch-action: none; }
+/* compact (phone / iPad landscape) */
+.bass-section.compact .bass-hint { display: none; }
+.bass-section.compact .bm-body { padding: 4px 4px 2px; gap: 2px; }
+.bass-section.compact .bb { padding: 5px 8px; font-size: 10px; }
+.bass-section.compact .bb-sq { padding: 4px 6px; font-size: 9px; }
+.bass-section.compact .bass-field select { font-size: 11px; padding: 4px; }
+.bass-tools { display: inline-flex; gap: 2px; }
+
+/* ── LEARN mode: every knob flashes — green = mapped, white = free ── */
+.bb-learn.on { background: var(--neon2, #00ccff); border-color: var(--neon2, #00ccff); }
+.bk.learnmode .bk-dial { cursor: pointer; outline: 2px dashed rgba(255,255,255,0.85); outline-offset: 2px; animation: bk-learn-white 0.9s infinite; }
+.bk.learnmode.mapped .bk-dial { outline-color: #35ff69; animation: bk-learn-green 0.9s infinite; }
+.bk.learnmode.learning .bk-dial { outline-style: solid; outline-color: var(--neon2, #00ccff); animation: bk-blink 0.35s infinite; }
+@keyframes bk-learn-white { 50% { outline-color: rgba(255,255,255,0.15); } }
+@keyframes bk-learn-green { 50% { outline-color: rgba(53,255,105,0.15); } }
+.bk-val-cc { top: auto; bottom: -14px; font-size: 8px; }
+.bk-mod { position: absolute; right: -3px; top: -3px; width: 12px; height: 12px; border-radius: 50%; background: var(--bass-accent); color: var(--bass-panel); font-size: 8px; font-weight: 800; line-height: 12px; text-align: center; box-shadow: 0 0 4px var(--bass-accent); }
+
+/* ── knob menu ── */
+.km-backdrop { position: fixed; inset: 0; z-index: 9998; }
+.km-menu { position: fixed; z-index: 9999; background: var(--hw-panel, var(--bg2, #0a0a10)); color: var(--hw-text, var(--text, #b0ffd0)); border: 1px solid var(--hw-border, var(--border-neon, #00ff8855)); border-radius: 6px; box-shadow: 0 8px 28px rgba(0,0,0,0.5); font-family: var(--font-mono); padding: 4px; }
+.km-title { font-size: 9px; letter-spacing: 0.16em; color: var(--hw-accent, var(--neon, #00ff88)); padding: 4px 8px 5px; border-bottom: 1px solid var(--hw-border, var(--border-neon, #00ff8855)); margin-bottom: 3px; }
+.km-sub { font-size: 8px; letter-spacing: 0.14em; opacity: 0.7; padding: 4px 8px 2px; }
+.km-sep { height: 1px; background: var(--hw-border, var(--border-neon, #00ff8855)); margin: 3px 0; }
+.km-item { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-radius: 3px; color: inherit; font: inherit; font-size: 11px; letter-spacing: 0.04em; padding: 6px 8px; cursor: pointer; }
+.km-item small { font-size: 8px; opacity: 0.6; }
+.km-item:hover { background: var(--hw-border, var(--bg, #050508)); }
+.km-item.on { color: var(--hw-accent, var(--neon, #00ff88)); font-weight: 700; }
+.km-item:disabled { opacity: 0.35; cursor: default; }
+
+/* ── MOD module ── */
+.bm-mod { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+.bm-modsrc { border: 1px solid var(--bass-border); border-radius: 3px; padding: 3px 4px; min-width: 150px; }
+.bm-modsrc-head { font-size: 8px; letter-spacing: 0.14em; color: var(--bass-accent); padding: 1px 2px 3px; display: flex; gap: 6px; align-items: baseline; }
+.bm-modsrc-body { display: flex; align-items: flex-end; gap: 4px; flex-wrap: wrap; }
+.bm-modtargets { display: flex; flex-wrap: wrap; gap: 3px; align-items: flex-end; border-left: 1px solid var(--bass-border); padding-left: 5px; }
+.bm-modtargets-empty { font-size: 8px; color: var(--bass-dim); opacity: 0.8; align-self: center; max-width: 120px; line-height: 1.3; }
+.bm-modtarget { display: flex; align-items: flex-end; gap: 1px; }
+.bm-modtarget .bk-label { max-width: 46px; overflow: hidden; text-overflow: ellipsis; }
+.bm-modx { padding: 1px 4px; font-size: 8px; align-self: flex-start; }
+
+/* SHAPE morph: drawn pulse glyphs, the morph button, knob + live scope */
+.bm-waves .bb-wave-svg { width: 14px; height: 9px; display: block; }
+.bm-waves .bb-morph { font-size: 12px; }
+.bm-morph { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.bm-scope { width: 72px; height: 28px; display: block; background: rgba(0,0,0,.35); border: 1px solid var(--bass-line, rgba(255,255,255,.12)); border-radius: 3px; }

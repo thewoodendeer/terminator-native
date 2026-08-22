@@ -17,9 +17,13 @@ incompatibly; add fields freely (additive changes don't bump).
 | JS → C++ | native functions (Promise-returning): `terminatorInfo()`, `terminatorCommand(cmd)`, `terminatorAudio(req)`, `terminatorMidi(req)`, `terminatorPads(req)` | message thread; engine-bound commands → `Engine::commands().push()` (lock-free) → audio thread at the next block |
 | C++ → JS | events `terminator.snapshot` (20 Hz), `terminator.devicesChanged`, `terminator.midiChanged` | audio thread publishes `StateSnapshot` (wait-free) → message thread reads `Engine::snapshot()` → WebView |
 
-Resources: `/`, `/index.html`, `/juce/index.js` from embedded binary data at
-`WebBrowserComponent::getResourceProviderRoot()`. Env `TERMINATOR_UI_URL` overrides the start URL (Vite dev
-server with HMR in Phase 2). Env `TERMINATOR_PROBE_FILE=<path>` = headless smoke mode (see tools/ci/probe-app.sh).
+Resources at `WebBrowserComponent::getResourceProviderRoot()` (`juce://juce.backend/` macOS · `https://juce.backend/`
+Windows): the **built React UI** (`ui/dist`, bundled into the app at build time, or `TERMINATOR_UI_DIR=<dir>`)
+owns `/` and every path under it when present (MIME by extension, no `..`); `/juce/index.js` (the official
+`@juce-framework/webview` ESM) is always served; without a built UI the embedded Phase-1 static page is served.
+Env `TERMINATOR_UI_URL` overrides the start URL (Vite dev server with HMR). Env `TERMINATOR_PROBE_FILE=<path>` =
+headless smoke mode (see tools/ci/probe-app.sh) — the probe also reports `uiMode`, `chopperView`, `errors`
+(uncaught page errors collected by a user script), `secureContext`, `audioWorklet`.
 
 ## `terminatorInfo()` → object
 ```json

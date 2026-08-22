@@ -3,8 +3,10 @@
 //   JS → C++ : native functions  terminatorInfo() · terminatorCommand(cmd) · terminatorAudio(req) ·
 //              terminatorMidi(req) · terminatorPads(req)
 //   C++ → JS : event "terminator.snapshot" at 20 Hz with the engine StateSnapshot + device/MIDI stats
-// The page is served from embedded resources at WebBrowserComponent::getResourceProviderRoot(); set
-// TERMINATOR_UI_URL=http://localhost:5173 to point the view at a dev server instead (Phase 2 HMR loop).
+// The page is served at WebBrowserComponent::getResourceProviderRoot(): the built React UI (ui/dist, copied
+// into the app bundle's Resources/ui at build time — or TERMINATOR_UI_DIR=<dir> to point at any dist folder)
+// when present, else the embedded Phase-1 static page. TERMINATOR_UI_URL=http://localhost:5173 points the view
+// at the Vite dev server instead (HMR inside the WebView).
 // Probe mode (CI / headless smoke): TERMINATOR_PROBE_FILE=<path> — ~2.5 s after the page loads, the shell
 // evaluates JS inside the WebView, writes what the page rendered (bridge/engine/device/snapshot lines) as
 // JSON to that file and quits. Proves WebView + bridge + engine end-to-end without a screenshot.
@@ -38,6 +40,8 @@ class WebShell final : public juce::Component, private juce::Timer
     void pageLoaded(const juce::String& url);
     void runProbe();
     std::optional<juce::WebBrowserComponent::Resource> provideResource(const juce::String& url);
+    /// Where the built React UI lives (ui/dist copied into the bundle at build time, or TERMINATOR_UI_DIR).
+    static juce::File resolveUiDir();
 
     juce::var engineInfo() const;
     juce::var deviceInfoVar() const;
@@ -68,6 +72,7 @@ class WebShell final : public juce::Component, private juce::Timer
     double calibrationResultMs_ = -1.0;
     int calibrationReportedSamples_ = 0;
     juce::File probeFile_;
+    juce::File uiDir_;       // invalid = no built UI present → the embedded Phase-1 static page is served
     bool pageReady_ = false; // no events to the page before it has loaded (window.__JUCE__ is injected with it)
     bool probeArmed_ = false;
     int probeCountdown_ = 0;

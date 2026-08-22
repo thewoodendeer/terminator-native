@@ -1,0 +1,29 @@
+{
+  "name": "terminator-ui",
+  "private": true,
+  "version": "3.0.0-alpha.0",
+  "description": "Terminator 3.0 — the React UI, copied from the Electron renderer (terminator/src/renderer) and bound to the native engine through EngineClient (docs/native/BRIDGE-PROTOCOL.md).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode native",
+    "build": "vite build --mode native",
+    "typecheck": "tsc --noEmit",
+    "gate": "npm run typecheck && npm run build"
+  },
+  "dependencies": {
+    "@audio/stretch-transient": "1.2.1",
+    "@breezystack/lamejs": "^1.2.7",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "soundtouchjs": "^0.3.0"
+  },
+  "devDependencies": {
+    "@audio/stretch-core": "1.0.2",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10"
+  }
+}
