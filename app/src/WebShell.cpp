@@ -1,5 +1,7 @@
 #include "WebShell.h"
 
+#include <iostream>
+
 #include "WebResources.h"
 #include "terminator/Version.h"
 
@@ -125,6 +127,14 @@ const char* mimeForExtension(const juce::String& extWithDot)
         return "audio/ogg";
     if (e == ".m4a")
         return "audio/mp4";
+    if (e == ".aac")
+        return "audio/aac";
+    if (e == ".aif" || e == ".aiff")
+        return "audio/aiff";
+    if (e == ".opus")
+        return "audio/ogg";
+    if (e == ".caf")
+        return "audio/x-caf";
     if (e == ".woff2")
         return "font/woff2";
     if (e == ".woff")
@@ -193,11 +203,17 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
         window.addEventListener('unhandledrejection', (e) => push('unhandledrejection: ' + ((e && e.reason && (e.reason.stack || e.reason.message || e.reason)) || '')));
     })();)JS";
 
+    // TERMINATOR_PROBE_AUDIO=1: the library self-test also tries an <audio> load through the resource provider
+    // (kept opt-in: a media load through the scheme handler is the one thing that can stall the page)
+    const juce::String probeAudio = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_AUDIO", {}).isNotEmpty()
+                                        ? "window.__terminatorProbeAudio = true;"
+                                        : "void 0;";
     auto opts =
         juce::WebBrowserComponent::Options{}
             .withNativeIntegrationEnabled()
             .withKeepPageLoadedWhenBrowserIsHidden()
             .withUserScript(kErrorCollector)
+            .withUserScript(probeAudio)
             // window.__TERMINATOR_NATIVE__ = { version, settings, dirs } before any page script (sync boot reads)
             .withUserScript(services_.bootUserScript(terminator::versionString()))
             .withResourceProvider([this](const juce::String& url) { return provideResource(url); })
@@ -318,6 +334,50 @@ std::optional<juce::WebBrowserComponent::Resource> WebShell::provideResource(con
         {"/index.html", WebResources::index_html, WebResources::index_htmlSize, "text/html"},
         {"/juce/index.js", WebResources::index_js, WebResources::index_jsSize, "text/javascript"},
     };
+    // 0a. a large native-function reply stashed by ShellServices::maybeLarge (one-shot JSON)
+    if (url.startsWith("/blob/"))
+    {
+        const auto token = url.fromFirstOccurrenceOf("/blob/", false, false).upToFirstOccurrenceOf("?", false, false);
+        if (auto json = services_.takeBlob(token))
+        {
+            juce::WebBrowserComponent::Resource r;
+            const auto utf8 = json->toRawUTF8();
+            const auto n = static_cast<std::size_t>(json->getNumBytesAsUTF8());
+            r.data.assign(reinterpret_cast<const std::byte*>(utf8), reinterpret_cast<const std::byte*>(utf8) + n);
+            r.mimeType = "application/json";
+            return r;
+        }
+        return std::nullopt;
+    }
+    // 0b. library files: /lib/b64/<base64url(absolute path)> — only under roots the page registered (serveRoots)
+    if (url.startsWith("/lib/b64/"))
+    {
+        auto token = url.fromFirstOccurrenceOf("/lib/b64/", false, false)
+                         .upToFirstOccurrenceOf("?", false, false)
+                         .upToFirstOccurrenceOf("#", false, false)
+                         .replaceCharacter('-', '+')
+                         .replaceCharacter('_', '/');
+        while (token.length() % 4 != 0)
+            token += "=";
+        juce::MemoryOutputStream raw;
+        if (!juce::Base64::convertFromBase64(raw, token))
+            return std::nullopt;
+        const auto path =
+            juce::String::fromUTF8(static_cast<const char*>(raw.getData()), static_cast<int>(raw.getDataSize()));
+        if (!juce::File::isAbsolutePath(path))
+            return std::nullopt;
+        const juce::File f(path);
+        if (!services_.mayServe(f))
+            return std::nullopt;
+        juce::MemoryBlock mb;
+        if (!f.loadFileAsData(mb))
+            return std::nullopt;
+        juce::WebBrowserComponent::Resource r;
+        r.data.assign(static_cast<const std::byte*>(mb.getData()),
+                      static_cast<const std::byte*>(mb.getData()) + mb.getSize());
+        r.mimeType = mimeForExtension(f.getFileExtension());
+        return r;
+    }
     // 1. the built React UI from disk (ui/dist) — when present it owns "/" and everything under it
     if (uiDir_ != juce::File())
     {
@@ -786,9 +846,11 @@ void WebShell::handlePads(const juce::var& req, juce::WebBrowserComponent::Nativ
     complete(ok(false, "unknown pads verb '" + verb + "'"));
 }
 
-void WebShell::pageLoaded(const juce::String&)
+void WebShell::pageLoaded(const juce::String& url)
 {
     pageReady_ = true;
+    if (probeFile_ != juce::File())
+        std::cerr << "probe: page loaded " << url << std::endl;
     if (probeFile_ != juce::File() && !probeArmed_)
     {
         probeArmed_ = true;
@@ -818,6 +880,10 @@ void WebShell::runProbeAsyncChecks()
                     // buffer through terminatorSamples, bind + trigger a pad, read the engine back
                     const sh = window.__terminatorNativeShadow;
                     r.shadow = sh && sh.selfTest ? await sh.selfTest() : { error: 'no shadow' };
+                    // the Sample Library (libraryNative.ts): the tree loads, files are served under the
+                    // registered roots only (read-only on the user's library)
+                    const lb = window.__terminatorNativeLibrary;
+                    r.library = lb && lb.selfTest ? await lb.selfTest() : { error: 'no library' };
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();
@@ -878,9 +944,15 @@ void WebShell::timerCallback()
     {
         --probeCountdown_;
         if (probeCountdown_ == kProbeAsyncLeadTicks)
+        {
+            std::cerr << "probe: async checks" << std::endl;
             runProbeAsyncChecks();
+        }
         if (probeCountdown_ == 0)
+        {
+            std::cerr << "probe: final read" << std::endl;
             runProbe();
+        }
     }
 
     samples_.collect(engine_.snapshot());

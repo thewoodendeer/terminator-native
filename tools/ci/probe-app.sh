@@ -36,6 +36,16 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"release": ?true' "$OUT" || { echo "::error::shadow self-test: sample release failed"; exit 1; }
   grep -Eq '"syncBound": ?true' "$OUT" || { echo "::error::shadow self-test: a pad source loaded into the TS engine was not mirrored (describe/diff/upload/bind) to the native pad"; exit 1; }
   grep -Eq '"syncUnbound": ?true' "$OUT" || { echo "::error::shadow self-test: removing the pad source did not unbind the native pad"; exit 1; }
+  # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and
+  # when the library already holds a file the shell served it byte-complete
+  grep -Eq '"systemOk": ?true' "$OUT" || { echo "::error::library self-test: the library tree did not load (system folders missing)"; exit 1; }
+  grep -Eq '"outsideRootBlocked": ?true' "$OUT" || { echo "::error::library self-test: /lib/b64/ served a path OUTSIDE the registered roots"; exit 1; }
+  if grep -Eq '"servedUrl":' "$OUT"; then
+    grep -Eq '"servedOk": ?true' "$OUT" || { echo "::error::library self-test: a managed library file was not served byte-complete at its /lib/b64/ URL"; exit 1; }
+    echo "library file served OK (fetch); audio element: $(grep -Eo '"audioCanPlay": ?[a-z]+' "$OUT")"
+  else
+    echo "library OK (empty library on this machine — serving not exercised)"
+  fi
   if grep -Eq '"enginePrepared": ?true' "$OUT"; then
     grep -Eq '"lastTriggeredPad": ?63' "$OUT" || { echo "::error::engine is running but the shadow's trigger never reached the audio thread (lastTriggeredPad != 63)"; exit 1; }
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"

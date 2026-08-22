@@ -4,7 +4,10 @@
 // Electron-era IPC surface (projects, recents, EULA, layout/MIDI-map/bass-patch files, presets, session).
 // Protocol: docs/native/BRIDGE-PROTOCOL.md §terminatorFs / §terminatorSettings. Nothing here touches the engine.
 #include <functional>
+#include <map>
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -21,9 +24,24 @@ class ShellServices
 
     explicit ShellServices(Settings& settings);
 
-    /// `terminatorFs(req)` — req.verb ∈ dirs · readText · writeText · exists · list · mkdir · trash · reveal ·
-    /// openExternal · openDialog · saveDialog · clipboardReadText. Dialogs complete asynchronously.
+    /// `terminatorFs(req)` — req.verb ∈ dirs · readText · writeText · writeBinary · exists · stat · list · mkdir ·
+    /// move · copy · trash · reveal · openPath · openExternal · openDialog · saveDialog · clipboardReadText ·
+    /// serveRoots. Dialogs complete asynchronously.
     void handleFs(const juce::var& req, Completion complete);
+
+    /// LARGE REPLIES: JUCE's emitEvent escapes every C++→JS payload into a JS string literal with a quadratic
+    /// String::replace — a 230 KB library.json took minutes (caught by the probe 2026-08-22). Replies bigger than
+    /// kLargeReplyBytes are stashed and answered as { ok:true, __largeReply:"/blob/<token>" }; the page fetches the
+    /// JSON through the resource provider (juceBridge.ts does this transparently) — one-shot, 60 s expiry.
+    static constexpr int kLargeReplyBytes = 24 * 1024;
+    juce::var maybeLarge(const juce::var& reply);
+    /// The resource provider's side: the stashed JSON for a token (consumed), or nullopt.
+    std::optional<juce::String> takeBlob(const juce::String& token);
+
+    /// Files the resource provider may serve at `/lib/b64/<base64url(path)>`: anything under a root the page
+    /// registered with `serveRoots` (the sample-library root + its linked folders — the page's own library
+    /// module decides, the shell enforces). Nothing is servable until the page registers roots.
+    bool mayServe(const juce::File& f) const;
     /// `terminatorSettings(req)` — req.verb ∈ get · set{patch}. The UI's settings live under settings.json `app`
     /// (the Electron terminator-settings.json keys, verbatim — Phase 8 imports that file here).
     juce::var handleSettings(const juce::var& req);
@@ -49,6 +67,14 @@ class ShellServices
 
     Settings& settings_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    std::vector<juce::File> servableRoots_;
+    struct Blob
+    {
+        juce::String json;
+        juce::int64 expiresMs;
+    };
+    std::map<juce::String, Blob> blobs_;
+    juce::Random blobRandom_;
 };
 
 } // namespace terminator::app
