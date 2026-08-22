@@ -147,6 +147,28 @@ void ShellServices::handleFs(const juce::var& req, Completion complete)
         complete(maybeLarge(o));
         return;
     }
+    if (verb == "readBinary") // the file's bytes through the resource provider: {ok, url:"/blob/<token>", bytes, name}
+    {
+        const auto f = fileFromVar(req.getProperty("path", juce::var()));
+        if (!f.existsAsFile())
+        {
+            complete(ok(false, "no such file"));
+            return;
+        }
+        if (f.getSize() > 2LL * 1024 * 1024 * 1024)
+        {
+            complete(ok(false, "file too large"));
+            return;
+        }
+        const auto token = stash({{}, f, "application/octet-stream", 0});
+        auto o = ok(true);
+        put(o, "url", "/blob/" + token);
+        put(o, "bytes", static_cast<juce::int64>(f.getSize()));
+        put(o, "path", f.getFullPathName());
+        put(o, "name", f.getFileName());
+        complete(o);
+        return;
+    }
     if (verb == "writeText")
     {
         const auto f = fileFromVar(req.getProperty("path", juce::var()));
@@ -465,32 +487,56 @@ void ShellServices::handleFs(const juce::var& req, Completion complete)
     complete(ok(false, "unknown fs verb '" + verb + "'"));
 }
 
-juce::var ShellServices::maybeLarge(const juce::var& reply)
+juce::String ShellServices::stash(Blob blob)
 {
-    const auto json = juce::JSON::toString(reply, true);
-    if (json.length() <= kLargeReplyBytes)
-        return reply;
     const auto now = juce::Time::currentTimeMillis();
     for (auto it = blobs_.begin(); it != blobs_.end();) // expire stale stashes (a page that never fetched)
         it = it->second.expiresMs < now ? blobs_.erase(it) : std::next(it);
     juce::String token;
     for (int i = 0; i < 4; ++i)
         token += juce::String::toHexString(blobRandom_.nextInt64());
-    blobs_[token] = {json, now + 60'000};
+    blob.expiresMs = now + 60'000;
+    blobs_[token] = std::move(blob);
+    return token;
+}
+
+juce::var ShellServices::maybeLarge(const juce::var& reply)
+{
+    const auto json = juce::JSON::toString(reply, true);
+    if (json.length() <= kLargeReplyBytes)
+        return reply;
+    const auto bytes = json.length();
+    const auto token = stash({json, {}, "application/json", 0});
     auto o = ok(true);
     put(o, "__largeReply", "/blob/" + token);
-    put(o, "bytes", json.length());
+    put(o, "bytes", bytes);
     return o;
 }
 
-std::optional<juce::String> ShellServices::takeBlob(const juce::String& token)
+std::optional<ShellServices::BlobData> ShellServices::takeBlob(const juce::String& token)
 {
     const auto it = blobs_.find(token);
     if (it == blobs_.end())
         return std::nullopt;
-    auto json = std::move(it->second.json);
+    auto blob = std::move(it->second);
     blobs_.erase(it);
-    return json;
+    BlobData out;
+    out.mime = blob.mime.isNotEmpty() ? blob.mime : "application/octet-stream";
+    if (blob.file != juce::File())
+    {
+        juce::MemoryBlock mb;
+        if (!blob.file.loadFileAsData(mb))
+            return std::nullopt;
+        out.bytes.assign(static_cast<const std::byte*>(mb.getData()),
+                         static_cast<const std::byte*>(mb.getData()) + mb.getSize());
+    }
+    else
+    {
+        const auto* utf8 = blob.json.toRawUTF8();
+        const auto n = static_cast<std::size_t>(blob.json.getNumBytesAsUTF8());
+        out.bytes.assign(reinterpret_cast<const std::byte*>(utf8), reinterpret_cast<const std::byte*>(utf8) + n);
+    }
+    return out;
 }
 
 bool ShellServices::mayServe(const juce::File& f) const

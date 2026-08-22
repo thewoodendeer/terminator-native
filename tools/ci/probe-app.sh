@@ -57,6 +57,8 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   else
     echo "library OK (empty library on this machine — serving not exercised)"
   fi
+  # the asset store: put → has → get (bytes byte-identical through /blob/) → the Electron-store fallback probe
+  grep -Eq '"assetsOk": ?true' "$OUT" || { echo "::error::asset-store self-test failed (see the assets object above)"; exit 1; }
   if grep -Eq '"enginePrepared": ?true' "$OUT"; then
     grep -Eq '"lastTriggeredPad": ?63' "$OUT" || { echo "::error::engine is running but the shadow's trigger never reached the audio thread (lastTriggeredPad != 63)"; exit 1; }
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"

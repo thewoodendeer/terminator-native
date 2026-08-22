@@ -24,9 +24,9 @@ class ShellServices
 
     explicit ShellServices(Settings& settings);
 
-    /// `terminatorFs(req)` — req.verb ∈ dirs · readText · writeText · writeBinary · exists · stat · list · mkdir ·
-    /// move · copy · trash · reveal · openPath · openExternal · openDialog · saveDialog · clipboardReadText ·
-    /// serveRoots. Dialogs complete asynchronously.
+    /// `terminatorFs(req)` — req.verb ∈ dirs · readText · readBinary · writeText · writeBinary · exists · stat ·
+    /// list · mkdir · move · copy · trash · reveal · openPath · openExternal · openDialog · saveDialog ·
+    /// clipboardReadText · serveRoots. Dialogs complete asynchronously.
     void handleFs(const juce::var& req, Completion complete);
 
     /// LARGE REPLIES: JUCE's emitEvent escapes every C++→JS payload into a JS string literal with a quadratic
@@ -35,8 +35,14 @@ class ShellServices
     /// JSON through the resource provider (juceBridge.ts does this transparently) — one-shot, 60 s expiry.
     static constexpr int kLargeReplyBytes = 24 * 1024;
     juce::var maybeLarge(const juce::var& reply);
-    /// The resource provider's side: the stashed JSON for a token (consumed), or nullopt.
-    std::optional<juce::String> takeBlob(const juce::String& token);
+    /// The resource provider's side: the stashed bytes for a token (consumed), or nullopt. A JSON stash
+    /// (maybeLarge) or a FILE stash (`readBinary` — the page fetches the file's bytes through /blob/<token>).
+    struct BlobData
+    {
+        std::vector<std::byte> bytes;
+        juce::String mime;
+    };
+    std::optional<BlobData> takeBlob(const juce::String& token);
 
     /// Files the resource provider may serve at `/lib/b64/<base64url(path)>`: anything under a root the page
     /// registered with `serveRoots` (the sample-library root + its linked folders — the page's own library
@@ -70,9 +76,12 @@ class ShellServices
     std::vector<juce::File> servableRoots_;
     struct Blob
     {
-        juce::String json;
+        juce::String json; // a JSON reply (maybeLarge) …
+        juce::File file;   // … or a file to stream (readBinary)
+        juce::String mime;
         juce::int64 expiresMs;
     };
+    juce::String stash(Blob blob);
     std::map<juce::String, Blob> blobs_;
     juce::Random blobRandom_;
 };

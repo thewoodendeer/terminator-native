@@ -350,13 +350,11 @@ std::optional<juce::WebBrowserComponent::Resource> WebShell::provideResource(con
     if (url.startsWith("/blob/"))
     {
         const auto token = url.fromFirstOccurrenceOf("/blob/", false, false).upToFirstOccurrenceOf("?", false, false);
-        if (auto json = services_.takeBlob(token))
+        if (auto blob = services_.takeBlob(token))
         {
             juce::WebBrowserComponent::Resource r;
-            const auto utf8 = json->toRawUTF8();
-            const auto n = static_cast<std::size_t>(json->getNumBytesAsUTF8());
-            r.data.assign(reinterpret_cast<const std::byte*>(utf8), reinterpret_cast<const std::byte*>(utf8) + n);
-            r.mimeType = "application/json";
+            r.data = std::move(blob->bytes);
+            r.mimeType = blob->mime;
             return r;
         }
         return std::nullopt;
@@ -896,6 +894,9 @@ void WebShell::runProbeAsyncChecks()
                     // registered roots only (read-only on the user's library)
                     const lb = window.__terminatorNativeLibrary;
                     r.library = lb && lb.selfTest ? await lb.selfTest() : { error: 'no library' };
+                    // the asset store + project bundles (assetsNative.ts): put/has/get round-trip + readBinary
+                    const as = window.__terminatorNativeAssets;
+                    r.assets = as && as.selfTest ? await as.selfTest() : { error: 'no assets' };
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();
