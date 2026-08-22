@@ -25,7 +25,24 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"errors": ?\[\]' "$OUT" || { echo "::error::the page reported uncaught errors"; exit 1; }
   grep -Eq '"prefsWindow": ?true' "$OUT" || { echo "::error::window.terminator.openPreferences() did not open the native Preferences window"; exit 1; }
   grep -Eq '"prefsReady": ?true' "$OUT" || { echo "::error::the Preferences page did not finish loading in its window"; exit 1; }
-  echo "React UI OK (ChopperView + Preferences window)"
+  # the native-engine shadow (audio through the C++ engine): attached to ChopperView's engine, and its self-test
+  # pushed a synthetic buffer through terminatorSamples, bound + triggered pad 63 and released it
+  grep -Eq '"attached": ?true' "$OUT" || { echo "::error::the native engine shadow did not attach to the ChopperEngine"; exit 1; }
+  grep -Eq '"upload": ?true' "$OUT" || { echo "::error::shadow self-test: the sample upload (terminatorSamples begin/chunk/end) failed"; exit 1; }
+  grep -Eq '"storeFrames": ?12000' "$OUT" || { echo "::error::shadow self-test: the SampleStore does not hold the uploaded frames"; exit 1; }
+  grep -Eq '"bind": ?true' "$OUT" || { echo "::error::shadow self-test: setPadSample by key failed"; exit 1; }
+  grep -Eq '"loop": ?true' "$OUT" || { echo "::error::shadow self-test: setPadLoop (native crossfade-loop render) failed"; exit 1; }
+  grep -Eq '"trigger": ?true' "$OUT" || { echo "::error::shadow self-test: triggerPad failed"; exit 1; }
+  grep -Eq '"release": ?true' "$OUT" || { echo "::error::shadow self-test: sample release failed"; exit 1; }
+  grep -Eq '"syncBound": ?true' "$OUT" || { echo "::error::shadow self-test: a pad source loaded into the TS engine was not mirrored (describe/diff/upload/bind) to the native pad"; exit 1; }
+  grep -Eq '"syncUnbound": ?true' "$OUT" || { echo "::error::shadow self-test: removing the pad source did not unbind the native pad"; exit 1; }
+  if grep -Eq '"enginePrepared": ?true' "$OUT"; then
+    grep -Eq '"lastTriggeredPad": ?63' "$OUT" || { echo "::error::engine is running but the shadow's trigger never reached the audio thread (lastTriggeredPad != 63)"; exit 1; }
+    echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
+  else
+    echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"
+  fi
+  echo "React UI OK (ChopperView + Preferences window + native engine shadow)"
 else
   grep -q '@juce-framework/webview loaded' "$OUT" || { echo "::error::page did not load the JUCE webview package"; exit 1; }
   grep -q 'Terminator 3\.' "$OUT" || { echo "::error::terminatorInfo() did not reach the page"; exit 1; }

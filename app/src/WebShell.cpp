@@ -153,7 +153,7 @@ juce::var WebShell::ok(bool okFlag, const juce::String& error)
 WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore& samples, SampleLoader& loader,
                    Settings& settings, juce::String audioError)
     : engine_(engine), audioIO_(audioIO), midi_(midi), samples_(samples), loader_(loader), settings_(settings),
-      services_(settings), audioError_(std::move(audioError))
+      services_(settings), registry_(engine, samples, loader), audioError_(std::move(audioError))
 {
     const auto probePath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_FILE", {});
     if (probePath.isNotEmpty())
@@ -224,6 +224,10 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
             .withNativeFunction("terminatorPads", [this](const juce::Array<juce::var>& args,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { handlePads(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
+            .withNativeFunction(
+                "terminatorSamples",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                { complete(registry_.handle(args.size() > 0 ? args[0] : juce::var())); })
             .withNativeFunction(
                 "terminatorWindow",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -440,6 +444,11 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
     if (!json.isObject())
         return ok(false, "command must be an object");
     const auto type = json["type"].toString();
+    // the pad-binding commands resolve page keys → SampleStore buffers in the registry (it pushes the commands)
+    if (type == "setPadSample")
+        return registry_.setPadSample(json);
+    if (type == "setPadLoop")
+        return registry_.setPadLoop(json);
     Command c;
     if (type == "setMasterGain")
         c = Command::setMasterGain(static_cast<float>(static_cast<double>(json["gain"])));
@@ -477,6 +486,7 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         const auto mode = json.getProperty("mode", "oneshot").toString();
         p.mode = mode == "gate" ? PadMode::gate : mode == "loop" ? PadMode::loop : PadMode::oneShot;
         p.reverse = static_cast<bool>(json.getProperty("reverse", false)) ? 1 : 0;
+        p.gate = static_cast<bool>(json.getProperty("gate", false)) ? 1 : 0;
         p.chokeGroup = static_cast<std::int16_t>(static_cast<int>(json.getProperty("chokeGroup", -1)));
         p.interpolation = json.getProperty("interpolation", "hermite").toString() == "linear" ? Interpolation::linear
                                                                                               : Interpolation::hermite;
@@ -804,6 +814,10 @@ void WebShell::runProbeAsyncChecks()
                     r.projectFiles = t.listProjectFiles ? (await t.listProjectFiles()).length : -1;
                     r.layout = t.loadLayout ? await t.loadLayout() : undefined;
                     r.openPreferences = t.openPreferences ? await t.openPreferences() : null;
+                    // the native-engine shadow (ui/src/renderer/native/nativeEngineShadow.ts): upload a synthetic
+                    // buffer through terminatorSamples, bind + trigger a pad, read the engine back
+                    const sh = window.__terminatorNativeShadow;
+                    r.shadow = sh && sh.selfTest ? await sh.selfTest() : { error: 'no shadow' };
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();
@@ -826,32 +840,36 @@ void WebShell::runProbe()
                                 chopperView: !!chopper, padGrid: document.querySelectorAll('.pad-grid .pad, .pad-cell, [class*="pad-grid"]').length,
                                 href: String(location.href), secureContext: !!window.isSecureContext,
                                 audioWorklet: (typeof AudioContext !== 'undefined') && ('audioWorklet' in AudioContext.prototype),
-                                errors: window.__terminatorErrors || [], asyncChecks: window.__terminatorProbeAsync || null });
+                                errors: window.__terminatorErrors || [], asyncChecks: window.__terminatorProbeAsync || null,
+                                shadow: (window.__terminatorNativeShadow && window.__terminatorNativeShadow.stats) ? window.__terminatorNativeShadow.stats() : null });
     })())JS";
-    browser_->evaluateJavascript(kScript,
-                                 [this](juce::WebBrowserComponent::EvaluationResult result)
-                                 {
-                                     juce::String out;
-                                     if (const auto* v = result.getResult())
-                                     {
-                                         // merge what only the shell knows (the Preferences window state)
-                                         auto parsed = juce::JSON::parse(v->toString());
-                                         if (auto* o = parsed.getDynamicObject())
-                                         {
-                                             o->setProperty("prefsWindow",
-                                                            prefsWindow_ != nullptr && prefsWindow_->isVisible());
-                                             o->setProperty("prefsReady", prefsReady_);
-                                             out = juce::JSON::toString(parsed, true);
-                                         }
-                                         else
-                                             out = v->toString();
-                                     }
-                                     else if (const auto* e = result.getError())
-                                         out = "{\"error\":" + juce::JSON::toString(e->message) + "}";
-                                     probeFile_.deleteFile();
-                                     probeFile_.replaceWithText(out + "\n");
-                                     juce::JUCEApplication::getInstance()->systemRequestedQuit();
-                                 });
+    browser_->evaluateJavascript(
+        kScript,
+        [this](juce::WebBrowserComponent::EvaluationResult result)
+        {
+            juce::String out;
+            if (const auto* v = result.getResult())
+            {
+                // merge what only the shell knows (the Preferences window state)
+                auto parsed = juce::JSON::parse(v->toString());
+                if (auto* o = parsed.getDynamicObject())
+                {
+                    o->setProperty("prefsWindow", prefsWindow_ != nullptr && prefsWindow_->isVisible());
+                    o->setProperty("prefsReady", prefsReady_);
+                    o->setProperty("registryKeys", static_cast<int>(registry_.keyCount()));
+                    o->setProperty("enginePrepared", static_cast<bool>(engine_.snapshot().prepared));
+                    o->setProperty("lastTriggeredPad", engine_.snapshot().lastTriggeredPad);
+                    out = juce::JSON::toString(parsed, true);
+                }
+                else
+                    out = v->toString();
+            }
+            else if (const auto* e = result.getError())
+                out = "{\"error\":" + juce::JSON::toString(e->message) + "}";
+            probeFile_.deleteFile();
+            probeFile_.replaceWithText(out + "\n");
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        });
 }
 
 void WebShell::timerCallback()
@@ -899,7 +917,13 @@ void WebShell::timerCallback()
     obj->setProperty("xruns", audioIO_.xrunCount());
     obj->setProperty("activeVoices", static_cast<int>(s.activeVoices));
     obj->setProperty("voiceStealing", static_cast<int>(s.voiceStealing));
-    obj->setProperty("padActiveMask", static_cast<juce::int64>(s.padActiveMask));
+    obj->setProperty("padActiveMask",
+                     static_cast<juce::int64>(s.padActiveMask)); // (JS loses bits ≥ 53 — use activePads)
+    juce::Array<juce::var> activePads;
+    for (int i = 0; i < kMaxPads; ++i)
+        if ((s.padActiveMask >> i) & 1u)
+            activePads.add(i);
+    obj->setProperty("activePads", juce::var(activePads));
     obj->setProperty("lastTriggeredPad", s.lastTriggeredPad);
     obj->setProperty("lastTriggeredPadPositionSec", s.lastTriggeredPadPositionSec);
     obj->setProperty("calibrationState", static_cast<int>(s.calibrationState));

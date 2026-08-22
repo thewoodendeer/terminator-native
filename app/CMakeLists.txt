@@ -32,7 +32,9 @@ target_sources(Terminator PRIVATE
     src/WebShell.h
     src/WebShell.cpp
     src/ShellServices.h
-    src/ShellServices.cpp)
+    src/ShellServices.cpp
+    src/SampleRegistry.h
+    src/SampleRegistry.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1
@@ -61,8 +63,11 @@ if(APPLE)
 else()
     set(_terminator_ui_dest "$<TARGET_FILE_DIR:Terminator>/ui")
 endif()
-add_custom_command(TARGET Terminator POST_BUILD
+# An always-run target (not a POST_BUILD step — that only fires when the app RELINKS, so a UI-only rebuild
+# `npm run gate` + `cmake --build` used to keep serving yesterday's bundle; caught by the probe 2026-08-22).
+add_custom_target(TerminatorBundleUi ALL
     COMMAND "${CMAKE_COMMAND}" -DSRC=${TERMINATOR_UI_DIST} -DDST=${_terminator_ui_dest}
             -P "${PROJECT_SOURCE_DIR}/cmake/CopyDirIfExists.cmake"
     COMMENT "Bundling the React UI from ${TERMINATOR_UI_DIST} (if built)"
     VERBATIM)
+add_dependencies(TerminatorBundleUi Terminator)
