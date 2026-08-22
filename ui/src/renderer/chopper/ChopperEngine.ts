@@ -706,7 +706,7 @@ export class ChopperEngine {
    *  hear — while the voice records, LEDs, playhead, chokes and the sequencer's own scheduled voices keep
    *  working unchanged. Null (Electron / web) = no-op. The sequencer's scheduled voices (scheduleSeqStepAudio)
    *  are NOT muted: the chop sequencer stays Web Audio until the native transport lands (Phase 3). */
-  voiceSink: { start(padIdx: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined): void; stop(padIdx: number): void; release(padIdx: number): void } | null = null;
+  voiceSink: { start(padIdx: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean): void; stop(padIdx: number): void; release(padIdx: number): void } | null = null;
   /** Route live-hit voices into a silent bus (the native engine sounds instead). Set with voiceSink. */
   mutePadVoices = false;
   private mutedBus: GainNode | null = null;
@@ -4151,7 +4151,7 @@ export class ChopperEngine {
     this.emit();
   }
 
-  triggerPad(padIdx: number, velocity = 1, eventTimestamp?: number, opts?: { reverse?: boolean }): void {
+  triggerPad(padIdx: number, velocity = 1, eventTimestamp?: number, opts?: { reverse?: boolean; nativeOwned?: boolean }): void {
     if (this.lockedPadFrom !== null && padIdx >= this.lockedPadFrom) return;
     // Context not running? Could be 'suspended' (backgrounded) or iOS's
     // 'interrupted' (screen locked/slept). This tap IS the user gesture iOS
@@ -4179,7 +4179,7 @@ export class ChopperEngine {
    *  fall out of sync, then pick back up). The chokes run on a timer at
    *  `when` — a few ms of timer jitter on a 3 ms fade is inaudible; the
    *  audio start itself is exact. */
-  triggerPadAt(padIdx: number, when: number, velocity = 1, opts?: { reverse?: boolean }): void {
+  triggerPadAt(padIdx: number, when: number, velocity = 1, opts?: { reverse?: boolean; nativeOwned?: boolean }): void {
     if (this.lockedPadFrom !== null && padIdx >= this.lockedPadFrom) return;
     const pad = this.pads[padIdx];
     if (!pad) return;
@@ -4208,10 +4208,10 @@ export class ChopperEngine {
       if (i >= 0) this.loopTimers.splice(i, 1);
     }, delay);
     this.loopTimers.push(timer);
-    this.startVoice(padIdx, velocity, opts?.reverse, when);
+    this.startVoice(padIdx, velocity, opts?.reverse, when, opts?.nativeOwned);
   }
 
-  private _doTrigger(padIdx: number, velocity: number, eventTimestamp?: number, opts?: { reverse?: boolean }): void {
+  private _doTrigger(padIdx: number, velocity: number, eventTimestamp?: number, opts?: { reverse?: boolean; nativeOwned?: boolean }): void {
     // Chop-while-playing: slice silently — current audio continues uninterrupted.
     // This comes FIRST: whatever else the kit looks like, an empty-pad tap while
     // something rings is a chop-tap. (His report 2026-08-22: "hitting pads to
@@ -4291,7 +4291,7 @@ export class ChopperEngine {
             this.lastLivePadHit.set(padIdx, lineT);
           } else {
             this.chokeGroup(padIdx);
-            this.startVoice(padIdx, velocity, opts?.reverse);
+            this.startVoice(padIdx, velocity, opts?.reverse, undefined, opts?.nativeOwned);
             this.lastLivePadHit.set(padIdx, this.ctx.currentTime);
           }
         }
@@ -4299,7 +4299,7 @@ export class ChopperEngine {
         return;
       }
       this.chokeGroup(padIdx);
-      this.startVoice(padIdx, velocity, opts?.reverse);
+      this.startVoice(padIdx, velocity, opts?.reverse, undefined, opts?.nativeOwned);
       this.lastLivePadHit.set(padIdx, this.ctx.currentTime);
       this.writeLiveHit(padIdx, hitTime);
       this.emit();
@@ -4308,7 +4308,7 @@ export class ChopperEngine {
 
     // Choke within the pad's MUTE GROUP (was: stop every pad — global mono).
     this.chokeGroup(padIdx);
-    this.startVoice(padIdx, velocity, opts?.reverse);
+    this.startVoice(padIdx, velocity, opts?.reverse, undefined, opts?.nativeOwned);
     // COUNT-IN: REC is armed but the loop has not started — keep the hit; the
     // downbeat flush lands anything within half a grid step of the "1" on step
     // 1 (the first hit of a take is played ON the one, and lands a few ms early).
@@ -4342,7 +4342,10 @@ export class ChopperEngine {
 
   /** @param reverseOverride per-hit reverse (a Beat Finisher preview replaying
    *  a reversed cell); undefined = the global REVERSE toggle. */
-  private startVoice(padIdx: number, velocity: number, reverseOverride?: boolean, when?: number): void {
+  /** @param nativeOwned Terminator 3.0: the native engine already played this hit itself (a MIDI note on the direct
+   *  MidiHub → engine path) — the shadow must not trigger it again; everything else (voice record, LEDs, chokes,
+   *  recording) runs as usual. */
+  private startVoice(padIdx: number, velocity: number, reverseOverride?: boolean, when?: number, nativeOwned = false): void {
     if (this.ctx.state === 'closed') return;
     this.lastTriggeredPad = padIdx;
     const pad = this.pads[padIdx];
@@ -4495,7 +4498,7 @@ export class ChopperEngine {
       this.voices.set(padIdx, lv);
       this.activePadSet.add(padIdx);
       this.emitActivity();
-      this.voiceSink?.start(padIdx, velocity, when, reverseOverride);
+      this.voiceSink?.start(padIdx, velocity, when, reverseOverride, nativeOwned);
       return;
     }
 
@@ -4549,7 +4552,7 @@ export class ChopperEngine {
     this.voices.set(padIdx, voice);
     this.activePadSet.add(padIdx);
     this.emitActivity();
-    this.voiceSink?.start(padIdx, velocity, when, reverseOverride);
+    this.voiceSink?.start(padIdx, velocity, when, reverseOverride, nativeOwned);
   }
 
   /** LIVE stem toggle (his ask 2026-08-20: hear the chips without restarting

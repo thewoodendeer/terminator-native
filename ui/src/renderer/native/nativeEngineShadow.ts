@@ -92,6 +92,7 @@ export interface NativeShadowStats {
   commandErrors: number;
   padsBound: number;
   triggers: number;
+  midiNotes: number;
   lastError: string | null;
 }
 
@@ -105,22 +106,36 @@ class NativeEngineShadow {
   private chokeIds = new Map<string, number>();
   private unsubscribe: (() => void) | null = null;
   private unsubSnapshot: (() => void) | null = null;
+  private unsubMidi: (() => void) | null = null;
   private masterGainSent = -1;
   private detached = false;
   latestSnapshot: AnyRecord | null = null;
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, lastError: null };
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, lastError: null };
 
   constructor(private engine: ChopperEngine) {}
 
   attach(): void {
     this.engine.mutePadVoices = true;
     this.engine.voiceSink = {
-      start: (pad, velocity, when, reverseOverride) => this.onStart(pad, velocity, when, reverseOverride),
+      start: (pad, velocity, when, reverseOverride, nativeOwned) => this.onStart(pad, velocity, when, reverseOverride, nativeOwned),
       stop: (pad) => this.onStop(pad),
       release: (pad) => this.onRelease(pad),
     };
     this.unsubscribe = this.engine.subscribe((s) => this.sync(s));
     this.unsubSnapshot = onNativeEvent('terminator.snapshot', (snap) => { this.latestSnapshot = snap; });
+    // MIDI from the devices: the engine already played the note on the direct MidiHub → engine path; the page
+    // runs the same hit through the TS engine (LEDs, playhead, chokes, step/live record) marked nativeOwned so
+    // the shadow does not trigger it twice. Note → pad = the engine's default map (note − 36).
+    this.unsubMidi = onNativeEvent('terminator.midiNote', (m) => {
+      if (!m || typeof m.note !== 'number') return;
+      const pad = m.note - 36;
+      if (pad < 0 || pad >= MAX_PADS) return;
+      this.stats.midiNotes++;
+      try {
+        if (m.on && Number(m.velocity) > 0) this.engine.triggerPad(pad, Math.max(0, Math.min(1, Number(m.velocity) / 127)), undefined, { nativeOwned: true });
+        else this.engine.releasePad(pad);
+      } catch (e) { this.stats.lastError = `midiNote: ${String((e as any)?.message ?? e)}`; }
+    });
     this.stats.attached = true;
   }
 
@@ -129,6 +144,7 @@ class NativeEngineShadow {
     this.stats.attached = false;
     this.unsubscribe?.(); this.unsubscribe = null;
     this.unsubSnapshot?.(); this.unsubSnapshot = null;
+    this.unsubMidi?.(); this.unsubMidi = null;
     this.engine.voiceSink = null;
     this.engine.mutePadVoices = false;
     for (let i = 0; i < MAX_PADS; i++) {
@@ -302,11 +318,12 @@ class NativeEngineShadow {
   }
 
   // ── voices ──
-  private onStart(pad: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined): void {
+  private onStart(pad: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean): void {
     if (this.detached || pad < 0 || pad >= MAX_PADS) return;
     // a hit right after an edit: make sure THIS pad's latest state is queued before the trigger (the subscribe
     // cadence is rAF-coalesced; the hit is now)
     try { this.syncPad(pad, this.engine.getState()); } catch { /* */ }
+    if (nativeOwned) return; // the engine played it already (direct MIDI path) — only the bookkeeping above
     const fire = async () => {
       const d = this.last[pad];
       const flip = reverseOverride !== undefined && d !== null && d.mode !== 'loop' && reverseOverride !== d.reverse;
@@ -374,10 +391,18 @@ class NativeEngineShadow {
       this.engine.triggerPad(62, 1);
       await new Promise((res) => setTimeout(res, 300));
       r.syncTrigger = this.stats.triggers > trig; // only when the page AudioContext runs (a real session); headless may be suspended
+      // a MIDI note from a device: the engine plays it directly and the page mirrors it (LED/record) — no double trigger
+      const trig2 = this.stats.triggers, notes0 = this.stats.midiNotes;
+      await native.midi({ verb: 'inject', note: 62 + 36, velocity: 100, on: true });
+      await new Promise((res) => setTimeout(res, 250));
+      r.midiMirrored = this.stats.midiNotes > notes0 && this.engine.getActivity().lastTriggeredPad === 62;
+      r.midiNoDoubleTrigger = this.stats.triggers === trig2;
+      r.midiNativeHit = this.latestSnapshot?.lastTriggeredPad === 62;
+      await native.midi({ verb: 'inject', note: 62 + 36, velocity: 0, on: false });
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger;
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;
