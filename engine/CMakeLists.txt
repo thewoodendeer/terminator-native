@@ -12,6 +12,12 @@ add_library(terminator_engine STATIC
     include/terminator/core/SampleBuffer.h
     include/terminator/core/HostClock.h
     include/terminator/core/Sampler.h
+    include/terminator/core/planners/JsMath.h
+    include/terminator/core/planners/StemMask.h
+    include/terminator/core/planners/Trims.h
+    include/terminator/core/planners/Swing.h
+    include/terminator/core/planners/LiveLanding.h
+    include/terminator/core/planners/SeqRefit.h
     include/terminator/io/AudioIO.h
     include/terminator/io/MidiHub.h
     include/terminator/io/SampleLoader.h
