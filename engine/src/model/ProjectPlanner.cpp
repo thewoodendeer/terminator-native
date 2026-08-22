@@ -9,9 +9,9 @@ using namespace ids;
 
 namespace
 {
-juce::ValueTree padNode(const juce::ValueTree& p, int index)
+juce::ValueTree padNode(const juce::ValueTree& p, int idx)
 {
-    return findChildWithProperty(p.getChildWithName(Pads), ids::index, index);
+    return findChildWithProperty(p.getChildWithName(Pads), ids::index, idx);
 }
 bool hasChop(const juce::ValueTree& padN)
 {

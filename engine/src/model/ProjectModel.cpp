@@ -181,15 +181,15 @@ void readSourceFx(juce::ValueTree out, const juce::var& obj)
             out.appendChild(n, nullptr);
         }
 }
-juce::ValueTree makeSequence(int bars, int resolution, int view, bool loop, const juce::var& grid, const juce::var& rev,
+juce::ValueTree makeSequence(int numBars, int res, int view, bool loopOn, const juce::var& gridV, const juce::var& rev,
                              const juce::var& vel)
 {
     juce::ValueTree n(Sequence);
-    n.setProperty(ids::bars, bars, nullptr);
-    n.setProperty(ids::resolution, resolution, nullptr);
+    n.setProperty(ids::bars, numBars, nullptr);
+    n.setProperty(ids::resolution, res, nullptr);
     n.setProperty(viewResolution, view, nullptr);
-    n.setProperty(ids::loop, loop, nullptr);
-    n.setProperty(ids::grid, normaliseGrid(grid), nullptr);
+    n.setProperty(ids::loop, loopOn, nullptr);
+    n.setProperty(ids::grid, normaliseGrid(gridV), nullptr);
     n.setProperty(revGrid, normaliseGrid(rev), nullptr);
     n.setProperty(velGrid, normaliseGrid(vel), nullptr);
     return n;
