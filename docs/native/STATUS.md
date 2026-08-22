@@ -128,6 +128,74 @@ Verdict: ☐ pending
 - Nothing yet — this is headless model work. His ear/hands pass is owed at 2.5 (ChopperView boots) and on the
   Phase 1 items still pending (see below).
 
+### 2.2 Pure planners ported (DONE, pushed)
+`engine/include/terminator/core/planners/` — JUCE-free, each with its TS gate re-asserted as a Catch2 case:
+- `StemMask.h` (stemMask.ts): bit order, toggle-refuses-last, normalise, combo mixdown = exact sum, ready
+  ranges merge/contain/EPS.
+- `Trims.h` (trimRegions.ts): fileToEff/effToFile (seam sides), addTrimRegion (merge + swallowed-chop dedupe),
+  keptRanges, buildEffectiveChannels (3 ms seam ramps, exact ramp values), cutTimes/mapTimesFileToEff/
+  mapFileRangesToEff.
+- `Swing.h` (swing.ts + seqSwingOffsetSec): pulse-snap formula, steps-in-an-odd-16th shift together.
+- `LiveLanding.h` (liveLanding / INPUT Q): 100 on the line, 0 keeps the time, 50 halfway, monotonic, NaN=full.
+- `SeqRefit.h` (refitSeqStorage / "the grid is a lens"): resolutions, clampVel, gcd/lcm, columnStride,
+  refitStorage (upscale/downscale lossless, recording floor). `LoopRender.h` (renderCrossfadeLoop) below.
+- `js::round`/`roundToInt` reproduce `Math.round` so the ports hold bit-for-bit.
+STILL TS-ONLY (not yet ported — needed for 2.3 chop-while-playing + auto-slice, and 2.5 UI): the transient
+detectors (broadband + drum-only, exact params), estimateBPM (tempogram), detectSilenceEnd, applySnap/
+snapToBeat/gridAnchor/snapToTransient, autoChop/autoSliceTransients, and the BLOCKS planners (blockRange/
+insertPushing/rearrange/moveBlock/planMoveBlock/nextSlotForSource/roomAfterBlock/chopPadSource*) + padClipboard.
+These are pure and portable the same way; they were not on the critical path for the render spine.
+
+### 2.3 Voice engine + analysis (PARTIAL — the pieces that set the memory/timing profile, DONE + pushed)
+- **Rendered equal-power crossfade LOOP** on the RT sampler (`LoopRender.h` + `Sampler`/`Command`
+  `setPadLoopBuffer`): the message thread renders a pad's loop buffer + steady `[loopStart,loopEnd)` and hands
+  it over; a LOOP voice plays the warm-up then wraps that period seamlessly (replaces Phase 1's hard wrap).
+  RT-safe (rtsan green); gate: no seam step > 2× the audio's own.
+- **Disk-cached multi-resolution waveform peaks** (`analysis/WaveformPeaks.h`): a pure C++ min/max pyramid
+  serialised to a small blob — deliberately NOT `juce::AudioThumbnail` (it needs juce_audio_utils → GUI, and
+  libterminator must stay UI-free for Phase 11). Gate: a 4-min stereo buffer → ~720 KB blob, COLD re-open draws
+  a full-width window in **0.79 ms** (≤ 100 ms gate).
+- **ProjectPlanner** (`model/ProjectPlanner.h`): padSourceKey / chokeGroupOf / seqTailGroup / reversedFor +
+  `patternToEvents` (swing, per-cell velocity, per-pad reverse, tail-group note length) over the tree. Gates:
+  chop-seq-standalone (velocity/swing/tail) + pad-reverse (override-vs-source).
+- **ProjectRenderer** (`render/ProjectRenderer.h`): a project tree + a bank of decoded samples → a RenderSpec
+  the **same** offline Engine renders — the "export = what you hear" spine, one DSP path. Pads resolve to
+  buffer+region (own sample or a main-track chop), params carry pitch (pad+source+fine)/mode/reverse/choke
+  (source-identity groups → stable ints); the current sequence becomes on/stop events. Gate: a 1/16 kit renders
+  master audio at the sequenced times with velocity 0.2 vs 1.0 audibly scaled; a main-track chop plays its region.
+- **NOT YET DONE in 2.3** (deferred, honest): per-source NORM as a per-voice multiplier (currently folded into
+  master gain, so it is right for a whole-project render but not for per-pad NORM independence — a later pass);
+  stems masks read from a `StemSet` in the voice (2.2 stem-slice buffers); Signalsmith stretch cache; the
+  trims→effective-buffer swap wired into the Document; the **disk-streaming source + the ≤ 400 MB idle-RSS
+  gate** (needs the real large-file streaming `AudioFormatReader` source + a device/real-song RSS measurement —
+  see "needs Victor"); the analysis thread wiring (detectors above are still TS-only).
+
+### 2.4 / 2.5 / 2.6 — NOT STARTED
+EngineClient (TS interface) + NativeEngineClient/WebAudioEngineClient, the `ui/` copy of the React app (26k
+lines) + pnpm gate, booting ChopperView in the WebView, and the packaged build. The Phase 1 static page + bridge
+v1 already prove the WebView/bridge/engine path end to end (probe); 2.4+ swap the static page for the real UI.
+
+## ⚠️ NEEDS VICTOR — CI is blocked on GitHub billing (2026-08-22)
+Every push after `938d276` fails to RUN on GitHub Actions: **"The job was not started because recent account
+payments have failed or your spending limit needs to be increased."** All 4 jobs die in ~3 s — this is a billing
+state on the `thewoodendeer` account, not a code failure. **Fix it in GitHub → Settings → Billing & plans, then
+re-run the latest `build` workflow** (`gh run rerun <id>` or the Actions tab). Until then the "CI green on all 4
+jobs" gate — especially **Windows/MSVC**, which has already caught two clang-invisible cross-platform bugs — is
+UNVERIFIABLE. What IS known:
+- Local mac gates on every commit through `6cf1e76`: `mac-debug` **0 warnings, 76/76 ctest**; `mac-rtsan`
+  **77/77**; `mac-release-universal` 76/76 in ~2 s, `lipo` = `x86_64 arm64`.
+- The last CI run that actually executed (`32592137772`, before the C4459 fix): **mac universal ✅, mac Intel ✅,
+  mac RTSan ✅**; only Windows failed on the C4459 shadow-of-`ids::` warning, which is **fixed in `6cf1e76`**
+  (verified to compile clean locally). So the expectation is all 4 green once billing is restored — but Windows
+  MUST be confirmed by hand because it is the only thing that compiles the MSVC path.
+- Two Windows-only breaks were found and fixed via CI this session: `columnStride` constexpr-with-`std::floor`
+  (C3615) and the C4459 `ids::` shadow. A third could hide in code pushed after the billing block — re-run CI first.
+
+### Remaining Phase 1 items still needing Victor's interface (unchanged from Phase 1)
+RTL ≤ 3 ms @64/48k on the Model 16 (Measure with a cable), pad-hit feel, outs 3–8 audible, device
+unplug/replug — plus now the ≤ 400 MB idle-RSS streaming gate once the streaming source lands. One consolidated
+pass when the UI boots (2.5).
+
 ### Latent bug found while porting (flagged, not yet fixed in the Electron app)
 - `refitSeqStorage` (ChopperEngine.ts): when INPUT Q < 100 raises the storage `floor` above the lossless
   resolution, the Electron code scales note indices only by the lossless factor, not by `next/old` — so notes
