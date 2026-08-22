@@ -245,7 +245,7 @@ double maxStep(const juce::AudioBuffer<float>& buf, int from, int to)
 }
 } // namespace
 
-TEST_CASE("render: per-source NORM rides the voice — a pad-source pad with SourceNorm 0.5 renders at half level; "
+TEST_CASE("render: per-source NORM rides the voice - a pad-source pad with SourceNorm 0.5 renders at half level; "
           "a main chop stays at unity",
           "[render][norm]")
 {
