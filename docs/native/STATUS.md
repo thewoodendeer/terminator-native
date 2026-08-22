@@ -467,6 +467,9 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 design — mac universal (probe incl. the real YouTube pull) ✅ · mac Intel ✅ · mac RTSan ✅ · Windows/MSVC ✅ (ProvisionTools
 on Windows, ProcessHub/readBinary under MSVC, the library test with backslash paths).
 
+## CI — GREEN on all 4 jobs for `9bb84bb` (run 32604238687): Phase 3.1 included (ChopSequencer under MSVC + RTSan, the
+mac probe runs the native sequencer + the real YouTube pull). End of the fourth session.
+
 ## Phase 3 — 3.1 DONE (the chop sequencer on the sample clock, headless + bridge), 2026-08-22 fourth session
 `engine/include/terminator/core/ChopSequencer.h` + `src/core/ChopSequencer.cpp`: the chop step sequencer as a native
 EventSource inside the Engine — the audio callback asks it every block for the hits in [blockStart, blockEnd) and
