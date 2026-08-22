@@ -562,6 +562,7 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         p.fineCents = static_cast<float>(static_cast<double>(json.getProperty("fine", 0.0)));
         p.attackSec = static_cast<float>(static_cast<double>(json.getProperty("attack", 0.003)));
         p.releaseSec = static_cast<float>(static_cast<double>(json.getProperty("release", 0.0)));
+        p.fadeOutSec = static_cast<float>(static_cast<double>(json.getProperty("fadeOut", 0.0)));
         p.gain = static_cast<float>(static_cast<double>(json.getProperty("gain", 1.0)));
         p.outputPair = static_cast<std::uint8_t>(static_cast<int>(json.getProperty("outputPair", 0)));
         const auto mode = json.getProperty("mode", "oneshot").toString();

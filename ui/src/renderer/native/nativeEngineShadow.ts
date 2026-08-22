@@ -14,9 +14,8 @@
  *     `releasePad`, and the TS engine's live-hit voices are routed into a silent bus (`mutePadVoices`) — so the
  *     native engine is what you hear while the UI keeps working unchanged.
  * Not mirrored yet (honest list, also in STATUS.md): the chop SEQUENCER's scheduled voices + drums + bass (still
- * Web Audio — Phase 3 transport), mixer strips / master FX (Phase 4), time-STRETCH (plays dry natively), the
- * one-shot fade-OUT tail, live re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a
- * rendered LOOP. MIDI reaching the page does not exist in the WebView (no Web MIDI): native MIDI hits the C++
+ * Web Audio — Phase 3 transport), mixer strips / master FX (Phase 4), time-STRETCH (plays dry natively), live
+ * re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered LOOP. MIDI reaching the page does not exist in the WebView (no Web MIDI): native MIDI hits the C++
  * engine directly (MidiHub, note−36) — the UI does not light them yet.
  */
 import type { ChopperEngine, ChopperState } from '../chopper/ChopperEngine';
@@ -75,7 +74,7 @@ function sameDesc(a: PadDesc | null, b: PadDesc | null): boolean {
 }
 const sameParams = (a: PadDesc, b: PadDesc) =>
   a.pitch === b.pitch && a.fine === b.fine && a.attack === b.attack && a.release === b.release && a.gain === b.gain
-  && a.mode === b.mode && a.gate === b.gate && a.reverse === b.reverse && a.choke === b.choke;
+  && a.mode === b.mode && a.gate === b.gate && a.reverse === b.reverse && a.choke === b.choke && a.fadeOut === b.fadeOut;
 const sameRegion = (a: PadDesc, b: PadDesc) => a.buf === b.buf && a.start === b.start && a.end === b.end;
 const loopOf = (d: PadDesc | null) => (d && d.mode === 'loop' && (d.fadeIn > 0 || d.fadeOut > 0))
   ? { start: d.start, end: d.end, fadeIn: d.fadeIn, fadeOut: d.fadeOut, reverse: d.reverse, buf: d.buf } : null;
@@ -308,7 +307,7 @@ class NativeEngineShadow {
       this.lastKey[i] = rec.key;
     }
     if (!prev || !sameParams(prev, d)) {
-      await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'hermite' });
+      await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, fadeOut: d.mode === 'oneshot' ? d.fadeOut : 0, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'hermite' });
     }
     const lp = loopOf(d);
     if (!sameLoop(loopOf(prev), lp) || (lp && prev && !sameRegion(prev, d))) {
@@ -327,10 +326,10 @@ class NativeEngineShadow {
     const fire = async () => {
       const d = this.last[pad];
       const flip = reverseOverride !== undefined && d !== null && d.mode !== 'loop' && reverseOverride !== d.reverse;
-      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'hermite' });
+      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'hermite' });
       this.stats.triggers++;
       await this.cmd({ type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)) });
-      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'hermite' });
+      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'hermite' });
     };
     const delayMs = when !== undefined ? (when - this.engine.ctx.currentTime) * 1000 : 0;
     const go = () => { this.chain[pad] = this.chain[pad].then(fire).catch(() => {}); };

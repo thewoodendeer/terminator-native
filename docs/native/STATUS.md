@@ -309,11 +309,11 @@ silent bus (`mutePadVoices`) so what you hear is the native sampler.
 - **HONEST boundary (what still plays through Web Audio in the WebView):** the chop SEQUENCER's scheduled voices
   (`scheduleSeqStepAudio` — its own ctx-clock path; native transport = Phase 3), drums, bass, metronome, the
   mixer strips + master FX chain (Phase 4 — native pads go dry to outs 1/2, `setMasterGain` = master volume).
-  Not mirrored yet: time-STRETCH (dry natively), the one-shot fade-OUT tail (no RT field), live re-stem of a
-  ringing voice (the next hit plays the new mix), per-hit reverse of a rendered LOOP, MIDI: the WebView has no
-  Web MIDI so native `MidiHub` plays note−36 straight into the engine — it sounds, but the page's LEDs/playhead
-  don't know (Phase 3 reads `activePads` from the snapshot; the 20 Hz snapshot now carries `activePads[]` because
-  `padActiveMask` loses bits ≥ 53 in JS). Memory: the C++ side holds a copy of every buffer the page holds (the
+  Not mirrored yet: time-STRETCH (dry natively), live re-stem of a ringing voice (the next hit plays the new
+  mix), per-hit reverse of a rendered LOOP. (Closed later this session: the one-shot fade-OUT tail —
+  `PadParams::fadeOutSec`, linear to silence over the last fadeOut of the region in buffer time, LOOP pads ignore
+  it, tests `fadeOutSec` ×2, RTSan green; and MIDI → the page, 2.5e. The 20 Hz snapshot carries `activePads[]`
+  because `padActiveMask` loses bits ≥ 53 in JS.) Memory: the C++ side holds a copy of every buffer the page holds (the
   shadow's cost — goes away when ownership moves to the Document + disk streaming).
 - **Next (ownership moves native, in order):** peaks via resource URLs so the page stops needing the PCM; the
   main buffer/pad sources decoded by PATH (library/yt/recordings/assets) so uploads vanish for files; the chop
@@ -414,9 +414,8 @@ Model 16 at 64/48k first in Preferences): judge the latency feel; try PITCH ±, 
 RELEASE (master), NOTE ON (gate) + release, LOOP with fades (the native crossfade render), REV, a mute GROUP,
 NORM on a source. **What will sound different/missing and is KNOWN:** the chop SEQUENCER plays through the old
 Web Audio path (so SEQ vs a live hit can differ in level — the native pad goes dry to outs 1/2, bypassing the
-mixer strip/FX), STRETCH is dry, the one-shot fade-OUT is not applied, stem toggles on a ringing pad apply on the
-next hit, MIDI hits sound natively but the pad LED/playhead don't move for them. Tell me: the feel, and anything
-that sounds wrong that is NOT on this list.
+mixer strip/FX), STRETCH is dry, stem toggles on a ringing pad apply on the next hit. Tell me: the feel, and anything that sounds
+wrong that is NOT on this list.
 
 ### Victor's pass (possible NOW in the real app — Phase 0/1 items)
 Open `Terminator.app` (CI artifact or `build/mac-release-universal/app/Terminator_artefacts/Release/`): accept the
