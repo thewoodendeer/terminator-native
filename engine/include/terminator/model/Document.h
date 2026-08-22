@@ -70,6 +70,13 @@ class Document
     // ── scalars ──
     void setScalar(const juce::Identifier& key, const juce::var& value, const juce::String& group = {});
 
+    // ── blocks (source-key runs) ──
+    /// The source key of a pad slot ('main'/'src:<id>'/group), or empty — for building the blocks array.
+    juce::String padSourceKey(int pad) const;
+    /// Move pad `from`'s whole block onto `to`, pushing others aside; singles swap. Remaps sequencer steps.
+    /// One undo step. Returns false on a no-op. (blocks::planMoveBlock applied to the tree.)
+    bool moveBlock(int from, int to);
+
     // ── batches (paste/dup/move/clearBlock collapse to one step) ──
     void beginBatch() { history_.beginBatch(); }
     void endBatch() { history_.endBatch(); }

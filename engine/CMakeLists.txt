@@ -35,6 +35,7 @@ add_library(terminator_engine STATIC
     include/terminator/analysis/WaveformPeaks.h
     include/terminator/core/planners/Onsets.h
     include/terminator/core/planners/Snap.h
+    include/terminator/core/planners/Blocks.h
     src/core/Engine.cpp
     src/core/Sampler.cpp
     src/io/AudioIO.cpp

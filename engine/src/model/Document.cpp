@@ -2,7 +2,9 @@
 
 #include <algorithm>
 
+#include "terminator/core/planners/Blocks.h"
 #include "terminator/core/planners/Snap.h"
+#include "terminator/model/ProjectPlanner.h"
 
 namespace terminator::model
 {
@@ -220,6 +222,152 @@ int Document::sliceAtTime(double timeSec, int targetPad, int snapMode)
     }
     project_.setProperty(ids::nextChopId, nid + 1, um());
     return nid;
+}
+
+juce::String Document::padSourceKey(int pad) const
+{
+    return ProjectPlanner(project_).padSourceKey(pad);
+}
+
+bool Document::moveBlock(int from, int to)
+{
+    // build the source-key slot array
+    int maxPad = -1;
+    for (auto p : const_cast<Document*>(this)->pads())
+        maxPad = std::max(maxPad, static_cast<int>(p[ids::index]));
+    for (auto sN : const_cast<Document*>(this)->project_.getChildWithName(ids::PadSources))
+        maxPad = std::max(maxPad, static_cast<int>(sN[ids::pad]));
+    if (maxPad < 0)
+        return false;
+    blocks::Slots slots(static_cast<std::size_t>(maxPad + 1));
+    for (int i = 0; i <= maxPad; ++i)
+    {
+        const auto k = padSourceKey(i);
+        if (k.isNotEmpty())
+            slots[static_cast<std::size_t>(i)] = k.toStdString();
+    }
+    const auto plan = blocks::planMoveBlock(slots, from, to);
+    if (!plan.valid || plan.origin.empty())
+        return false;
+
+    // snapshot every pad's full content (pad node props, its PadSource node, and index-keyed overrides)
+    struct Content
+    {
+        bool has = false;
+        juce::ValueTree pad;           // a detached copy of the Pad node (props only)
+        juce::ValueTree source;        // a detached copy of the PadSource node, or invalid
+        juce::var route, choke, group; // index-keyed map values (void = none)
+    };
+    const int n = static_cast<int>(plan.origin.size());
+    std::vector<Content> snap(static_cast<std::size_t>(std::max(n, maxPad + 1)));
+    auto padsN = pads();
+    auto srcN = project_.getChildWithName(ids::PadSources);
+    auto routesN = project_.getChildWithName(ids::PadRoutes);
+    auto chokeN = project_.getChildWithName(ids::PadChoke);
+    auto groupsN = project_.getChildWithName(ids::PadGroups);
+    for (int i = 0; i <= maxPad; ++i)
+    {
+        Content c;
+        auto p = padOf(i);
+        auto so = findChildWithProperty(srcN, ids::pad, i);
+        if (p.isValid() && (p.hasProperty(ids::chopId) || so.isValid()))
+        {
+            c.has = true;
+            c.pad = p.createCopy();
+            if (so.isValid())
+                c.source = so.createCopy();
+            c.route = mapGet(routesN, i);
+            c.choke = mapGet(chokeN, i);
+            c.group = mapGet(groupsN, i);
+        }
+        snap[static_cast<std::size_t>(i)] = std::move(c);
+    }
+
+    history_.begin({}, "move-block");
+    // clear the whole affected range, then re-place from the snapshot via origin[]
+    for (int i = 0; i < static_cast<int>(snap.size()); ++i)
+    {
+        if (auto p = padOf(i); p.isValid())
+        {
+            p.removeProperty(ids::chopId, um());
+            p.removeProperty(ids::stems, um());
+        }
+        if (auto so = findChildWithProperty(srcN, ids::pad, i); so.isValid())
+            srcN.removeChild(so, um());
+        mapRemove(routesN, i, um());
+        mapRemove(chokeN, i, um());
+        mapRemove(groupsN, i, um());
+    }
+    auto ensurePad = [&](int i) -> juce::ValueTree
+    {
+        auto p = padOf(i);
+        if (!p.isValid())
+        {
+            p = juce::ValueTree(ids::Pad);
+            p.setProperty(ids::index, i, nullptr);
+            p.setProperty(ids::pitch, 0, nullptr);
+            p.setProperty(ids::mode, "oneshot", nullptr);
+            padsN.appendChild(p, um());
+        }
+        return p;
+    };
+    for (int newIdx = 0; newIdx < n; ++newIdx)
+    {
+        const int oldIdx = plan.origin[static_cast<std::size_t>(newIdx)];
+        if (oldIdx < 0 || oldIdx >= static_cast<int>(snap.size()) || !snap[static_cast<std::size_t>(oldIdx)].has)
+            continue;
+        const auto& c = snap[static_cast<std::size_t>(oldIdx)];
+        auto p = ensurePad(newIdx);
+        // copy the moving pad's play props (keep the destination index)
+        for (int k = 0; k < c.pad.getNumProperties(); ++k)
+        {
+            const auto pn = c.pad.getPropertyName(k);
+            if (pn == ids::index)
+                continue;
+            p.setProperty(pn, c.pad[pn], um());
+        }
+        if (c.source.isValid())
+        {
+            auto so = c.source.createCopy();
+            so.setProperty(ids::pad, newIdx, nullptr);
+            srcN.appendChild(so, um());
+        }
+        if (!c.route.isVoid())
+            mapSet(routesN, newIdx, c.route, um());
+        if (!c.choke.isVoid())
+            mapSet(chokeN, newIdx, c.choke, um());
+        if (!c.group.isVoid())
+            mapSet(groupsN, newIdx, c.group, um());
+    }
+    // remap sequencer step references old->new across every sequence grid
+    std::vector<int> oldToNew(static_cast<std::size_t>(std::max(n, maxPad + 1)), -1);
+    for (int newIdx = 0; newIdx < n; ++newIdx)
+        if (plan.origin[static_cast<std::size_t>(newIdx)] >= 0)
+            oldToNew[static_cast<std::size_t>(plan.origin[static_cast<std::size_t>(newIdx)])] = newIdx;
+    for (auto seq : project_.getChildWithName(ids::Sequences))
+    {
+        auto grid = seq[ids::grid];
+        if (auto* rows = grid.getArray())
+        {
+            juce::Array<juce::var> ng;
+            for (auto& row : *rows)
+            {
+                juce::Array<juce::var> nr;
+                if (auto* cells = row.getArray())
+                    for (auto& cell : *cells)
+                    {
+                        const int old = static_cast<int>(cell);
+                        const int nw = (old >= 0 && old < static_cast<int>(oldToNew.size()))
+                                           ? oldToNew[static_cast<std::size_t>(old)]
+                                           : old;
+                        nr.add(nw < 0 ? old : nw);
+                    }
+                ng.add(juce::var(nr));
+            }
+            seq.setProperty(ids::grid, juce::var(ng), um());
+        }
+    }
+    return true;
 }
 
 } // namespace terminator::model
