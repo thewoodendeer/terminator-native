@@ -291,6 +291,33 @@ TEST_CASE(
         REQUIRE(r.data[0][400] == Approx(1.0f));
         REQUIRE(r.engine.snapshot().activeVoices == 1);
     }
+    SECTION("fadeOutSec: a one-shot ramps linearly to silence over the LAST fadeOut of its region (buffer time)")
+    {
+        auto s = test::dc(48000, 1.0f);
+        auto p = r.params(0);
+        p.fadeOutSec = 500.0f / 48000.0f; // the last 500 frames of a 1000-frame region
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, s.get(), 0, 1000));
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        auto out = r.capture(0, 3); // 1440 samples
+        REQUIRE(out[499] == Approx(1.0f).epsilon(1e-3));
+        REQUIRE(out[750] == Approx(0.5f).epsilon(0.02));
+        REQUIRE(out[999] == Approx(0.0f).margin(0.01));
+        REQUIRE(out[1100] == Approx(0.0f).margin(1e-4)); // past the region: the release tail from ~silence
+    }
+    SECTION("fadeOutSec is ignored by LOOP pads (their fades live in the rendered loop)")
+    {
+        auto s = test::dc(48000, 1.0f);
+        auto p = r.params(0);
+        p.mode = PadMode::loop;
+        p.fadeOutSec = 0.01f;
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, s.get(), 0, 100));
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        auto out = r.capture(0, 1);
+        REQUIRE(out[95] == Approx(1.0f).epsilon(1e-4));
+        REQUIRE(out[350] == Approx(1.0f).epsilon(1e-4));
+    }
     SECTION("pitch range: pad PITCH + source PITCH can reach +36 (rate 8x), clamped at +-48")
     {
         auto s = test::ramp(4800);

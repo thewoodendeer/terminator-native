@@ -72,11 +72,12 @@ struct Voice
     PadMode mode = PadMode::oneShot;
     Interpolation interpolation = Interpolation::hermite;
     std::int16_t chokeGroup = -1;
-    bool gate = false;         // note-off (release) ends this voice — PadParams::gate or PadMode::gate
-    bool released = false;     // gate note-off received
-    bool tailStarted = false;  // one-shot reached the region end → release tail running
-    bool loopRendered = false; // playing a rendered crossfade-loop buffer (wrap loopLo→loopHi, not the region)
-    std::int64_t loopLo = 0;   // steady period bracket in the loop buffer's frames
+    bool gate = false;          // note-off (release) ends this voice — PadParams::gate or PadMode::gate
+    float fadeOutFrames = 0.0f; // one-shot/gate tail: multiply by (frames left in the region / this) when closer
+    bool released = false;      // gate note-off received
+    bool tailStarted = false;   // one-shot reached the region end → release tail running
+    bool loopRendered = false;  // playing a rendered crossfade-loop buffer (wrap loopLo→loopHi, not the region)
+    std::int64_t loopLo = 0;    // steady period bracket in the loop buffer's frames
     std::int64_t loopHi = 0;
     bool started = false; // rendered at least one sample (a not-yet-started voice re-stems in place)
     // The read set: numSrc buffers summed per sample. numSrc 1 + src[0]==sample = the plain path; a partial stem

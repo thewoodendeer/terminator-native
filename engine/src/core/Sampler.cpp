@@ -91,6 +91,7 @@ void Sampler::setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING
     q.fineCents = std::clamp(q.fineCents, -50.0f, 50.0f);
     q.attackSec = std::clamp(q.attackSec, 0.0f, 0.5f);
     q.releaseSec = std::clamp(q.releaseSec, 0.0f, 0.5f);
+    q.fadeOutSec = std::clamp(q.fadeOutSec, 0.0f, 60.0f);
     q.gain = std::clamp(q.gain, 0.0f, 4.0f);
     pads_[p.pad].params = q;
 }
@@ -321,6 +322,10 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     v->reverse = useLoopRender ? 0 : p.params.reverse;
     v->mode = p.params.mode;
     v->gate = p.params.gate != 0 || p.params.mode == PadMode::gate;
+    // the one-shot/gate fade-OUT tail, in the BUFFER's frames (the region's own time) — never for LOOP pads
+    v->fadeOutFrames = (p.params.mode == PadMode::loop || p.params.fadeOutSec <= 0.0f)
+                           ? 0.0f
+                           : static_cast<float>(static_cast<double>(p.params.fadeOutSec) * p.sample->sampleRate);
     v->interpolation = p.params.interpolation;
     v->outputPair = p.params.outputPair;
     v->chokeGroup = p.params.chokeGroup;
@@ -521,7 +526,14 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
                 outSampleR = outSampleL;
         }
         v.started = true;
-        const float g = v.env * v.gain * v.xfGain;
+        float g = v.env * v.gain * v.xfGain;
+        if (v.fadeOutFrames > 0.0f && !v.loopRendered && v.mode != PadMode::loop)
+        {
+            // linear to silence over the last fadeOutFrames of the region (forward: to the end; reverse: to the start)
+            const double remain = v.reverse ? (v.position - regionStart) : (regionEnd - v.position);
+            if (remain < static_cast<double>(v.fadeOutFrames))
+                g *= static_cast<float>(std::max(0.0, remain) / static_cast<double>(v.fadeOutFrames));
+        }
         if (l != nullptr)
             l[i] += outSampleL * g;
         if (r != nullptr)

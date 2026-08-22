@@ -53,6 +53,9 @@ struct PadParams
     float fineCents = 0.0f;      // −50..+50
     float attackSec = 0.003f;    // 0..0.5
     float releaseSec = 0.0f;     // 0..0.5
+    float fadeOutSec = 0.0f;     // one-shot/gate: linear fade to silence over the LAST fadeOut seconds of the region
+                             // (buffer time — TS startVoice's fade-out envelope ending AT the region end); 0 = none.
+                             // LOOP pads bake their fades into the rendered loop instead
     float gain = 1.0f;           // 0..4 (per-pad NORM × user gain)
     std::uint8_t outputPair = 0; // 0 = outs 1/2, 1 = outs 3/4, …
     PadMode mode = PadMode::oneShot;
