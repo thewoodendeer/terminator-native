@@ -41,6 +41,11 @@ class MidiHub : private juce::MidiInputCallback, private juce::Timer
     juce::String lastMessageDescription() const; // e.g. "Note On C3 vel 100 (port 0)"
 
     std::function<void()> onPortsChanged; // message thread
+    /// Every note on/off that reached a pad queue, mirrored to the message thread (after the engine already got it on
+    /// the driver thread) — the UI lights pads / records steps from it (the native app's page has no Web MIDI).
+    std::function<void(int note, int velocity, bool on, int channel)> onNote; // message thread
+    /// Feed a note as if it arrived on port 0 (tests / the probe): the engine queue + onNote, exactly like a device.
+    void injectNote(int note, int velocity, bool on, int channel = 1);
 
     static constexpr int kLagHistory = 48;
 

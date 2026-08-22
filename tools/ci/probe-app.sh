@@ -36,6 +36,8 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"release": ?true' "$OUT" || { echo "::error::shadow self-test: sample release failed"; exit 1; }
   grep -Eq '"syncBound": ?true' "$OUT" || { echo "::error::shadow self-test: a pad source loaded into the TS engine was not mirrored (describe/diff/upload/bind) to the native pad"; exit 1; }
   grep -Eq '"syncUnbound": ?true' "$OUT" || { echo "::error::shadow self-test: removing the pad source did not unbind the native pad"; exit 1; }
+  grep -Eq '"midiMirrored": ?true' "$OUT" || { echo "::error::shadow self-test: an injected MIDI note did not reach the page's engine (terminator.midiNote → triggerPad nativeOwned)"; exit 1; }
+  grep -Eq '"midiNoDoubleTrigger": ?true' "$OUT" || { echo "::error::shadow self-test: a MIDI note triggered the native pad twice (direct path + shadow)"; exit 1; }
   # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and
   # when the library already holds a file the shell served it byte-complete
   grep -Eq '"systemOk": ?true' "$OUT" || { echo "::error::library self-test: the library tree did not load (system folders missing)"; exit 1; }

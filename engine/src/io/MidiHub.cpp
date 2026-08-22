@@ -149,6 +149,19 @@ void MidiHub::handleIncomingMidiMessage(juce::MidiInput* source, const juce::Mid
     if (message.isActiveSense() || message.isMidiClock())
         return; // not routed to pads; clock handled in Phase 3
     engine_.midiQueue(port).push(e);
+    if (onNote && (message.isNoteOnOrOff()))
+    {
+        const bool on = message.isNoteOn();
+        const int note = message.getNoteNumber();
+        const int vel = message.getVelocity();
+        const int ch = message.getChannel();
+        juce::MessageManager::callAsync(
+            [this, note, vel, on, ch]
+            {
+                if (onNote)
+                    onNote(note, vel, on, ch);
+            });
+    }
 
     const int count = lagCount_.fetch_add(1, std::memory_order_relaxed);
     lagHistory_[count % kLagHistory] = lagSec * 1000.0;
@@ -158,6 +171,24 @@ void MidiHub::handleIncomingMidiMessage(juce::MidiInput* source, const juce::Mid
     lastData1_.store(n > 1 ? raw[1] : 0, std::memory_order_relaxed);
     lastData2_.store(n > 2 ? raw[2] : 0, std::memory_order_relaxed);
     lastPort_.store(port, std::memory_order_relaxed);
+}
+
+void MidiHub::injectNote(int note, int velocity, bool on, int channel)
+{
+    const auto msg = on ? juce::MidiMessage::noteOn(channel, note, static_cast<juce::uint8>(velocity))
+                        : juce::MidiMessage::noteOff(channel, note, static_cast<juce::uint8>(velocity));
+    MidiEvent e;
+    e.hostTimeNs = AudioIO::hostTimeNowNs();
+    e.port = 0;
+    const auto* raw = msg.getRawData();
+    const int n = std::min(3, msg.getRawDataSize());
+    for (int i = 0; i < n; ++i)
+        e.data[i] = raw[i];
+    e.size = static_cast<std::uint8_t>(n);
+    engine_.midiQueue(0).push(e);
+    messageCount_.fetch_add(1, std::memory_order_relaxed);
+    if (onNote)
+        onNote(note, velocity, on, channel);
 }
 
 double MidiHub::medianInputLagMs() const

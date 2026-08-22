@@ -186,6 +186,17 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     audioIO_.onDeviceChanged = [this] { emitToAll("terminator.devicesChanged", deviceInfoVar()); };
     midi_.onPortsChanged = [this]
     { emitToAll("terminator.midiChanged", handleMidi(juce::var(new juce::DynamicObject()))); };
+    // every note the engine got from a device, mirrored to the page (LEDs, step/live record, the playhead) — the
+    // sound already fired on the direct MidiHub → engine path; the page's shadow marks its hit nativeOwned
+    midi_.onNote = [this](int note, int velocity, bool on, int channel)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("note", note);
+        o->setProperty("velocity", velocity);
+        o->setProperty("on", on);
+        o->setProperty("channel", channel);
+        emitToAll("terminator.midiNote", juce::var(o));
+    };
 
     browser_->goToURL(startUrlFor({}));
 
@@ -715,6 +726,13 @@ juce::var WebShell::handleMidi(const juce::var& req)
 {
     const auto verb = req.isObject() ? req.getProperty("verb", "list").toString() : juce::String("list");
     juce::String err;
+    if (verb == "inject") // tests / the probe: a note as if it arrived on port 0 (engine queue + the page event)
+    {
+        midi_.injectNote(
+            static_cast<int>(req.getProperty("note", 36)), static_cast<int>(req.getProperty("velocity", 100)),
+            static_cast<bool>(req.getProperty("on", true)), static_cast<int>(req.getProperty("channel", 1)));
+        return ok(true);
+    }
     if (verb == "enable")
         err = midi_.enableInput(req["id"].toString(), static_cast<bool>(req.getProperty("enabled", true)));
     else if (verb == "enableAll")
