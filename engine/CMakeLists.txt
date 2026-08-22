@@ -30,6 +30,7 @@ add_library(terminator_engine STATIC
     include/terminator/model/ProjectModel.h
     include/terminator/model/EditHistory.h
     include/terminator/model/Document.h
+    include/terminator/model/ProjectPlanner.h
     include/terminator/analysis/WaveformPeaks.h
     src/core/Engine.cpp
     src/core/Sampler.cpp
@@ -42,6 +43,7 @@ add_library(terminator_engine STATIC
     src/model/ProjectModel.cpp
     src/model/EditHistory.cpp
     src/model/Document.cpp
+    src/model/ProjectPlanner.cpp
     src/analysis/WaveformPeaks.cpp)
 add_library(terminator::engine ALIAS terminator_engine)
 
