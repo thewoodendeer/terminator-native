@@ -4,10 +4,13 @@
  * already speaks (LibraryTree / SampleBrowser / ChopperView / Preferences → FOLDERS). Files are served by the
  * shell at `/lib/b64/<base64url(path)>` — only under the roots this module registers (`serveRoots`), which is
  * what `libraryFileUrl(nodeId)` (→ libFileUrl in libraryBridge.ts) points at.
- * Not native yet: YouTube import (yt-dlp child process — the job reports an error phase right away).
+ * YouTube import + the GET SAMPLE / LOAD LINK pull (`downloadYouTube`) run the BUNDLED yt-dlp through
+ * `terminatorProcess` (youtubeNative.ts) — every pull lands in the library's YouTube folder, exactly like Electron.
  */
 import { createLibraryCore, type FsApi, type LibNode, type LibraryCore } from './libraryCore';
 import { isNative, native, nativeBoot } from './juceBridge';
+import { bundledTools, spawnTool } from './processBridge';
+import { createYouTubeNative, extractVideoId, playlistIdOf, YouTubeError, type YouTubeNative } from './youtubeNative';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -64,11 +67,13 @@ export interface LibraryOverlayDeps {
 }
 
 /** Build the `window.terminator.library*` keys (+ the FOLDERS-tab root methods) for the native shell. */
-export function buildLibraryOverlay(deps: LibraryOverlayDeps): { keys: AnyRecord; core: LibraryCore } {
+export function buildLibraryOverlay(deps: LibraryOverlayDeps): { keys: AnyRecord; core: LibraryCore; yt: YouTubeNative } {
   const boot = nativeBoot();
   const sep = (boot?.dirs.sep === '\\' ? '\\' : '/') as '/' | '\\';
   const music = boot?.dirs.music ?? '';
-  const core = createLibraryCore(nativeFsApi(), { defaultRoot: music ? `${music}${sep}Terminator` : `${sep}Terminator`, sep });
+  const fsApi = nativeFsApi();
+  const core = createLibraryCore(fsApi, { defaultRoot: music ? `${music}${sep}Terminator` : `${sep}Terminator`, sep });
+  const yt = createYouTubeNative({ fs: fsApi, path: core.path, tempDir: boot?.dirs.temp || `${sep}tmp`, spawn: spawnTool, tools: bundledTools });
   const startRoot = deps.settingsSync().libraryDir;
   if (typeof startRoot === 'string' && startRoot) core.setLibraryRoot(startRoot);
 
@@ -78,6 +83,7 @@ export function buildLibraryOverlay(deps: LibraryOverlayDeps): { keys: AnyRecord
   const libTarget = (v: unknown) => (v === null || v === undefined) ? null : libStr(v, 4096) || null;
   const libIndex = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : undefined;
 
+  let ytJobSeq = 0;
   const changedListeners = new Set<() => void>();
   core.onLibraryChanged(() => { for (const l of changedListeners) { try { l(); } catch { /* */ } } });
   const ytListeners = new Set<(p: AnyRecord) => void>();
@@ -124,12 +130,57 @@ export function buildLibraryOverlay(deps: LibraryOverlayDeps): { keys: AnyRecord
       if (!(data instanceof ArrayBuffer) || data.byteLength === 0 || data.byteLength > 2 * 1024 * 1024 * 1024) throw new Error('invalid sample data');
       return core.saveRecording(libStr(filename, 200), new Uint8Array(data));
     }),
-    libraryYouTubeImport: async (_url: unknown, _targetId: unknown) => {
-      const jobId = `native-${Date.now().toString(36)}`;
-      setTimeout(() => { for (const l of ytListeners) { try { l({ jobId, phase: 'error', error: 'YouTube import is not in the native app yet' }); } catch { /* */ } } }, 0);
+    // YouTube → library (the Electron main.ts job, verbatim-in-logic): one job per import; progress + completion
+    // go out as yt-progress events keyed by jobId; the tree updates as tracks land.
+    libraryYouTubeImport: async (url: unknown, targetId: unknown) => {
+      const link = libStr(url, 2048).trim();
+      const target = libTarget(targetId);
+      const jobId = `yt-${++ytJobSeq}`;
+      const send = (p: AnyRecord) => { for (const l of ytListeners) { try { l({ jobId, ...p }); } catch { /* */ } } };
+      const run = async () => {
+        try {
+          if (playlistIdOf(link) && !/[?&]v=/.test(link)) {
+            send({ phase: 'enumerating', done: 0, total: 0, title: '' });
+            const info = await yt.enumeratePlaylist(link);
+            if (!info.entries.length) throw new YouTubeError('failed', 'That playlist has no downloadable videos.');
+            const { node, dir } = await core.ensureYouTubeFolder(info.playlistTitle, target);
+            send({ phase: 'downloading', done: 0, total: info.entries.length, title: info.playlistTitle, folderId: node.id, skipped: info.skipped, capped: info.capped });
+            const sum = await yt.importPlaylistAudio(jobId, info.entries, dir,
+              p => send({ phase: 'downloading', done: p.done, total: p.total, title: p.currentTitle, folderId: node.id }),
+              async dl => { await core.addYouTubeFile(node.id, dl.audioPath, dl.title, dl.videoId, dl.durationSec); });
+            send({ phase: sum.cancelled ? 'cancelled' : 'done', done: sum.imported, total: info.entries.length, failed: sum.failed, title: info.playlistTitle, folderId: node.id });
+          } else {
+            send({ phase: 'downloading', done: 0, total: 1, title: link, percent: 0 });
+            const dir = core.systemDir('youtube');
+            const dl = await yt.downloadVideoToDir(link, dir, p => send({ phase: 'downloading', done: 0, total: 1, title: link, percent: p.percent }), jobId);
+            const node = await core.addYouTubeFile(target ?? 'youtube', dl.audioPath, dl.title, dl.videoId, dl.durationSec);
+            send({ phase: 'done', done: 1, total: 1, title: dl.title, nodeId: node.id });
+          }
+        } catch (e: any) {
+          const code = e instanceof YouTubeError ? e.code : 'failed';
+          send({ phase: code === 'cancelled' ? 'cancelled' : 'error', error: e?.message ?? String(e), code });
+        }
+      };
+      void run();
       return { jobId };
     },
-    libraryYouTubeCancel: async (_jobId: unknown) => ({ ok: true }),
+    libraryYouTubeCancel: async (jobId: unknown) => { yt.cancelJob(libStr(jobId, 64)); return { ok: true }; },
+    /** GET SAMPLE / LOAD LINK / preset + session restore (ChopperView.fetchTrackData → ipc.downloadYouTube): on the
+     *  computer already → its library URL; else download into the YouTube folder (named by title), register, hand
+     *  back the URL — the Electron pullYouTube, verbatim-in-logic. */
+    downloadYouTube: async (idOrUrl: unknown) => {
+      try {
+        if (typeof idOrUrl !== 'string' || idOrUrl.length > 2048) return { ok: false, error: 'invalid url' };
+        const videoId = extractVideoId(idOrUrl); // throws on a malformed id
+        const have = await core.findYouTubeFile(videoId);
+        if (have) return { ok: true, cacheUrl: keys.libraryFileUrl(have.id), title: have.name, durationSec: have.meta?.durationSec ?? 0, videoId };
+        const dir = core.systemDir('youtube');
+        await fsApi.mkdir(dir);
+        const dl = await yt.downloadVideoToDir(idOrUrl, dir, () => {}, `load:${videoId}`);
+        const node = await core.addYouTubeFile('youtube', dl.audioPath, dl.title, dl.videoId, dl.durationSec);
+        return { ok: true, cacheUrl: keys.libraryFileUrl(node.id), title: dl.title, durationSec: dl.durationSec, videoId: dl.videoId };
+      } catch (e: any) { return { ok: false, error: e?.message ?? String(e) }; }
+    },
     onLibraryChanged: (handler: () => void): Unsub => { changedListeners.add(handler); return () => changedListeners.delete(handler); },
     onLibraryYouTubeProgress: (handler: (p: AnyRecord) => void): Unsub => { ytListeners.add(handler); return () => ytListeners.delete(handler); },
     /** The URL the shell serves a library file at (sync — the cached tree resolves ids; null before the first load / unknown). */
@@ -158,7 +209,7 @@ export function buildLibraryOverlay(deps: LibraryOverlayDeps): { keys: AnyRecord
     revealLibraryRoot: async () => { await native.fs({ verb: 'mkdir', path: core.libraryRoot() }); const r = await native.fs({ verb: 'openPath', path: core.libraryRoot() }); return r?.ok ? { ok: true } : { error: r?.error ?? 'could not open' }; },
     onLibraryMoveProgress: (cb: (p: { done: number; total: number }) => void): Unsub => { moveListeners.add(cb); return () => moveListeners.delete(cb); },
   };
-  return { keys, core };
+  return { keys, core, yt };
 }
 
 declare global {
@@ -168,12 +219,33 @@ declare global {
 /** The probe's read-only self-test (tools/ci/probe-app.sh): the tree loads, the roots are registered, and — when
  *  the library already holds a managed file — the shell serves it at its /lib/b64/ URL. Never writes to the
  *  user's library beyond the first-run bootstrap the real app does anyway. */
-export function installLibraryProbe(core: LibraryCore, keys: AnyRecord): void {
+export function installLibraryProbe(core: LibraryCore, keys: AnyRecord, yt?: YouTubeNative): void {
   if (!isNative()) return;
   window.__terminatorNativeLibrary = {
     selfTest: async () => {
       const r: AnyRecord = {};
       try {
+        // the bundled yt-dlp (+ qjs) answers --version through terminatorProcess — no network
+        const tools = await bundledTools();
+        r.ytdlpBundled = !!tools.ytdlp;
+        r.qjsBundled = !!tools.qjs;
+        if (tools.ytdlp && yt) {
+          try { r.ytdlpVersion = await yt.version(); r.ytdlpOk = /^\d{4}\.\d{2}\.\d{2}/.test(r.ytdlpVersion); }
+          catch (e: any) { r.ytdlpOk = false; r.ytdlpError = e?.message ?? String(e); }
+          // opt-in (window.__terminatorProbeNet, TERMINATOR_PROBE_NET=1): a real pull of the shortest public video
+          // ("Me at the zoo", 19 s) into a TEMP folder — the end-to-end YouTube path, never the user's library
+          if ((window as any).__terminatorProbeNet && r.ytdlpOk) {
+            const boot = nativeBoot();
+            const tmpRoot = `${boot?.dirs.temp ?? '/tmp'}${boot?.dirs.sep ?? '/'}terminator-probe-yt-${Date.now().toString(36)}`;
+            const t0 = Date.now();
+            try {
+              const dl = await yt.downloadVideoToDir('jNQXAC9IVRw', tmpRoot, () => {}, 'probe-net');
+              const st = await native.fs({ verb: 'stat', path: dl.audioPath });
+              r.ytDownload = { ok: !!st?.isFile && Number(st.size) > 10000, title: dl.title, durationSec: dl.durationSec, bytes: Number(st?.size) || 0, ms: Date.now() - t0, file: dl.audioPath.split(/[\\/]/).pop() };
+            } catch (e: any) { r.ytDownload = { ok: false, error: e?.message ?? String(e), ms: Date.now() - t0 }; }
+            finally { await native.fs({ verb: 'trash', path: tmpRoot }).catch(() => null); }
+          }
+        }
         const t = await core.getLibrary();
         r.root = t.libraryRoot;
         r.nodes = Object.keys(t.nodes).length;
@@ -212,7 +284,7 @@ export function installLibraryProbe(core: LibraryCore, keys: AnyRecord): void {
         } else r.servedFile = 'none';
         const blocked = await fetch(new URL('/lib/b64/' + b64url('/etc/hosts'), location.href).href).then(x => x.status).catch(() => -1);
         r.outsideRootBlocked = blocked !== 200;
-        r.ok = r.systemOk && (managed ? r.servedOk === true : true) && r.outsideRootBlocked;
+        r.ok = r.systemOk && (managed ? r.servedOk === true : true) && r.outsideRootBlocked && (r.ytdlpBundled ? r.ytdlpOk === true : true);
       } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
       return r;
     },

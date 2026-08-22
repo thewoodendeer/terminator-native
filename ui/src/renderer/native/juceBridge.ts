@@ -22,7 +22,7 @@ type JuceBackend = { addEventListener: (id: string, fn: (payload: any) => void) 
 const backend = (): JuceBackend | undefined => (typeof window !== 'undefined' ? ((window as any).__JUCE__?.backend as JuceBackend | undefined) : undefined);
 
 export interface NativeDirs {
-  dataDir: string; projectsDir: string; projectsIsDefault: boolean; settingsFile: string; home: string; music: string; sep: string;
+  dataDir: string; projectsDir: string; projectsIsDefault: boolean; settingsFile: string; home: string; music: string; temp?: string; sep: string;
 }
 
 /** True when the page runs inside the Terminator 3.0 JUCE shell (WKWebView / WebView2). */
@@ -58,6 +58,7 @@ export const native = {
   midi: lazy<AnyRecord, AnyRecord>('terminatorMidi'),
   pads: lazy<AnyRecord, AnyRecord>('terminatorPads'),
   samples: lazy<AnyRecord, AnyRecord>('terminatorSamples'),
+  process: lazy<AnyRecord, AnyRecord>('terminatorProcess'),
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),

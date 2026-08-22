@@ -242,7 +242,7 @@ export function installNativeIPC(): void {
   // the Sample Library (~/Music/Terminator) — libraryCore over terminatorFs, files served at /lib/b64/
   const library = buildLibraryOverlay({ getSettings, setSettings, settingsSync: () => settingsCache });
   Object.assign(overlay, library.keys);
-  installLibraryProbe(library.core, library.keys);
+  installLibraryProbe(library.core, library.keys, library.yt);
 
   (window as any).terminator = { ...base, ...overlay };
   (window as any).__terminatorNativeIpc = { installed: true, version: boot?.version ?? '' };

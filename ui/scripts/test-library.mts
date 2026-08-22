@@ -33,7 +33,10 @@ const nodeFs: FsApi = {
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tlib-'));
 const ext = fs.mkdtempSync(path.join(os.tmpdir(), 'tlib-ext-'));
-const lib = createLibraryCore(nodeFs, { defaultRoot: root, sep: '/' });
+// the platform's separator, like the app passes (boot.dirs.sep): on Windows the core must produce backslash paths
+// so its joins match Node's (CI found the mismatch 2026-08-22: mixed separators fail string compares)
+const lib = createLibraryCore(nodeFs, { defaultRoot: root, sep: process.platform === 'win32' ? '\\' : '/' });
+const P = lib.path; // compare paths the way the core normalises them
 const wav = (p: string) => fs.writeFileSync(p, Buffer.from('RIFF....WAVEfmt '));
 wav(path.join(ext, 'kick one.wav')); wav(path.join(ext, 'snare.mp3')); fs.writeFileSync(path.join(ext, 'notes.txt'), 'x');
 const loose = path.join(os.tmpdir(), `tlib-loose-${Date.now()}.wav`); wav(loose);
@@ -88,7 +91,7 @@ try {
   const linkKid = (t.nodes[linkId].children ?? [])[0];
   const copied = await lib.copy([linkKid], f.id);
   t = await lib.getLibrary();
-  ok('copy linked file → Imports/ copy (yours)', copied.length === 1 && t.nodes[copied[0]].type === 'file' && t.nodes[copied[0]].path!.startsWith(path.join(root, 'Imports')) && fs.existsSync(t.nodes[copied[0]].path!));
+  ok('copy linked file → Imports/ copy (yours)', copied.length === 1 && t.nodes[copied[0]].type === 'file' && P.under(t.nodes[copied[0]].path!, P.join(root, 'Imports')) && fs.existsSync(t.nodes[copied[0]].path!));
   // copy a folder (recursive, new ids)
   const fCopy = await lib.copy([f.id], null);
   t = await lib.getLibrary();
@@ -155,9 +158,9 @@ try {
   // moveLibrary
   const dest = path.join(os.tmpdir(), `tlib-moved-${Date.now()}`);
   const mv = await lib.moveLibrary(dest);
-  ok('moveLibrary copies managed files + writes the index there', mv.moved >= 3 && fs.existsSync(path.join(dest, 'library.json')) && fs.existsSync(path.join(dest, 'Imports', 'Renamed Kick.wav')) && lib.libraryRoot() === dest);
+  ok('moveLibrary copies managed files + writes the index there', mv.moved >= 3 && fs.existsSync(path.join(dest, 'library.json')) && fs.existsSync(path.join(dest, 'Imports', 'Renamed Kick.wav')) && P.norm(lib.libraryRoot()) === P.norm(dest), `${lib.libraryRoot()} vs ${dest}`);
   t = await lib.getLibrary();
-  ok('after move: nodes point into the new root', Object.values(t.nodes).filter(n => n.type === 'file' && !n.mirrored && !n.readonly).every(n => n.path!.startsWith(dest)));
+  ok('after move: nodes point into the new root', Object.values(t.nodes).filter(n => n.type === 'file' && !n.mirrored && !n.readonly).every(n => P.under(n.path!, dest)));
   fs.rmSync(dest, { recursive: true, force: true });
 } catch (e) {
   failed.push(`exception: ${(e as any)?.stack ?? e}`);
