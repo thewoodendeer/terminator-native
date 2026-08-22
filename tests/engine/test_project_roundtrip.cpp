@@ -108,7 +108,7 @@ TEST_CASE("project: the 8 real projects round-trip through the ValueTree lossles
     }
 }
 
-TEST_CASE("project: legacy shapes — no sequences[] → the single-pattern fields; drums._inputQuantize migrates; "
+TEST_CASE("project: legacy shapes - no sequences[] -> the single-pattern fields; drums._inputQuantize migrates; "
           "masks normalise; bad resolutions fall back",
           "[model][legacy]")
 {

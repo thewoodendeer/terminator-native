@@ -58,7 +58,7 @@ TEST_CASE("WaveformPeaks: the finest level equals a direct 256-frame min/max sca
     }
 }
 
-TEST_CASE("WaveformPeaks: a zoomed-out window still bounds the audio (coarse level ⊇ fine)", "[peaks]")
+TEST_CASE("WaveformPeaks: a zoomed-out window still bounds the audio (coarse level superset-of fine)", "[peaks]")
 {
     auto buf = makeBuffer(48000 * 10, 2, 48000.0);
     WaveformPeaks p;

@@ -117,7 +117,7 @@ TEST_CASE("planner: patternToEvents carries velocity, swing pushes odd 16ths, ta
     CHECK(at(1, 3) > 3 * stepDur + 0.005);
 }
 
-TEST_CASE("planner: reversedFor — per-pad override beats source; source REV moves un-overridden pads", "[planner]")
+TEST_CASE("planner: reversedFor - per-pad override beats source; source REV moves un-overridden pads", "[planner]")
 {
     auto p = twoPadKit();
     // give the two pads a shared source so a source REV can move both

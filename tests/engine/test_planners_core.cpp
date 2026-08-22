@@ -156,7 +156,7 @@ TEST_CASE("swing: downbeats never move, odd 16ths go late, a 32nd inside an odd 
 }
 
 // ── trims ──────────────────────────────────────────────────────────────────────────────────────────
-TEST_CASE("trims: file↔effective mapping, region merge, kept ranges", "[planners][trims]")
+TEST_CASE("trims: file<->effective mapping, region merge, kept ranges", "[planners][trims]")
 {
     using namespace trims;
     TrimList t;
@@ -237,7 +237,7 @@ TEST_CASE("trims: cutTimes / mapTimesFileToEff / mapFileRangesToEff", "[planners
 }
 
 // ── sequencer refit ────────────────────────────────────────────────────────────────────────────────
-TEST_CASE("seq refit: the grid is a lens — resolution changes never move notes", "[planners][seq]")
+TEST_CASE("seq refit: the grid is a lens - resolution changes never move notes", "[planners][seq]")
 {
     using namespace seq;
     CHECK(acceptStoredResolution(16) == 16);
