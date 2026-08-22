@@ -21,7 +21,8 @@ add_executable(terminator-tests
     engine/test_project_render.cpp
     engine/test_onsets.cpp
     engine/test_snap_chops.cpp
-    engine/test_blocks.cpp)
+    engine/test_blocks.cpp
+    engine/test_stems_voice.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

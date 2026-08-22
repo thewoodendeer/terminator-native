@@ -18,9 +18,25 @@ inline float hermite4(float xm1, float x0, float x1, float x2, float t) noexcept
     return ((c3 * t + c2) * t + c1) * t + c0;
 }
 
-inline float readSample(const float* ch, std::int64_t numFrames, std::int64_t i) noexcept
+/// One tap summed over the voice's read set (the stem combo = the exact per-sample sum of its lit planes).
+inline float readTap(const float* const* chans, int n, std::int64_t numFrames, std::int64_t i) noexcept
 {
-    return (i < 0 || i >= numFrames) ? 0.0f : ch[i];
+    if (i < 0 || i >= numFrames)
+        return 0.0f;
+    float acc = 0.0f;
+    for (int k = 0; k < n; ++k)
+        acc += chans[k][i];
+    return acc;
+}
+
+inline bool sameReadSet(const Voice& v, const SampleBuffer* const* set, int n) noexcept
+{
+    if (v.numSrc != n)
+        return false;
+    for (int k = 0; k < n; ++k)
+        if (v.src[k] != set[k])
+            return false;
+    return true;
 }
 } // namespace
 
@@ -49,6 +65,8 @@ void Sampler::setPadSample(std::uint16_t pad, const SampleBuffer* sample, std::i
             beginFade(v, kStopFadeSec);
     auto& p = pads_[pad];
     p.sample = sample;
+    for (auto& plane : p.stemPlanes) // stems belong to the buffer they were split from; the mask is the pad's
+        plane = nullptr;
     if (sample == nullptr)
     {
         p.startFrame = p.endFrame = 0;
@@ -91,6 +109,95 @@ void Sampler::setPadLoopBuffer(std::uint16_t pad, const SampleBuffer* sample, st
     }
     p.loopStartFrame = std::clamp<std::int64_t>(loopStart, 0, sample->numFrames);
     p.loopEndFrame = std::clamp<std::int64_t>(loopEnd, p.loopStartFrame + 1, sample->numFrames);
+}
+
+int Sampler::resolveReadSet(const Pad& p, const SampleBuffer* (&out)[kStemPlanes]) noexcept TERMINATOR_NONBLOCKING
+{
+    out[0] = p.sample;
+    out[1] = out[2] = out[3] = nullptr;
+    const auto mask = static_cast<std::uint8_t>(p.stemMask & kStemMaskAll);
+    if (mask == 0 || mask == kStemMaskAll)
+        return 1;
+    int n = 0;
+    for (int k = 0; k < kStemPlanes; ++k)
+    {
+        if ((mask & (1u << k)) == 0)
+            continue;
+        if (p.stemPlanes[k] == nullptr) // a lit stem is missing (not split / not decoded) → the ORIGINAL plays
+        {
+            out[0] = p.sample;
+            out[1] = out[2] = out[3] = nullptr;
+            return 1;
+        }
+        out[n++] = p.stemPlanes[k];
+    }
+    return n > 0 ? n : 1;
+}
+
+void Sampler::setPadStems(std::uint16_t pad, const SampleBuffer* const planes[kStemPlanes],
+                          std::uint8_t mask) noexcept TERMINATOR_NONBLOCKING
+{
+    if (pad >= kMaxPads)
+        return;
+    auto& p = pads_[pad];
+    p.stemMask = static_cast<std::uint8_t>(mask & kStemMaskAll);
+    for (int k = 0; k < kStemPlanes; ++k)
+    {
+        const SampleBuffer* b = planes != nullptr ? planes[k] : nullptr;
+        // a plane must be the base buffer's twin: same length + rate, ≥1 channel
+        if (b != nullptr && (p.sample == nullptr || b->numFrames != p.sample->numFrames ||
+                             b->sampleRate != p.sample->sampleRate || b->numChannels < 1))
+            b = nullptr;
+        p.stemPlanes[k] = b;
+    }
+    if (!p.hasSample())
+        return;
+
+    // LIVE restem (restemVoice): every ringing voice of the pad whose read set changed swaps to the new one at
+    // its current position — a twin voice fades in over 12 ms while the old one fades out. Loop renders carry
+    // their own mix (the message thread re-renders + re-sends them), so rendered-loop voices keep playing.
+    const SampleBuffer* set[kStemPlanes];
+    const int n = resolveReadSet(p, set);
+    const int xf = std::max(1, static_cast<int>(static_cast<double>(kRestemFadeSec) * sampleRate_));
+    for (auto& v : voices_)
+    {
+        if (!v.active() || v.pad != pad || v.stage == Voice::Stage::fading || v.loopRendered)
+            continue;
+        if (v.sample != p.sample || sameReadSet(v, set, n))
+            continue;
+        if (!v.started) // scheduled in this block but not yet rendered: just re-point it (TS: "not started yet")
+        {
+            for (int k = 0; k < kStemPlanes; ++k)
+                v.src[k] = set[k];
+            v.numSrc = static_cast<std::uint8_t>(n);
+            v.stemMask = p.stemMask;
+            continue;
+        }
+        Voice* t = allocateVoice();
+        if (t == nullptr || t == &v) // could only steal the very voice we are swapping: swap in place instead
+        {
+            if (t == &v)
+                ++activeVoices_; // allocateVoice un-counted it as a steal
+            for (int k = 0; k < kStemPlanes; ++k)
+                v.src[k] = set[k];
+            v.numSrc = static_cast<std::uint8_t>(n);
+            v.stemMask = p.stemMask;
+            continue;
+        }
+        *t = v; // same position / rate / envelope / pending offsets — the twin continues the note
+        t->serial = nextSerial_++;
+        for (int k = 0; k < kStemPlanes; ++k)
+            t->src[k] = set[k];
+        t->numSrc = static_cast<std::uint8_t>(n);
+        t->stemMask = p.stemMask;
+        t->startOffset = 0;
+        t->fadeOffset = -1;
+        t->xfGain = 0.0f;
+        t->xfStep = 1.0f / static_cast<float>(xf);
+        t->xfRemaining = xf;
+        ++activeVoices_;
+        beginFadeNow(v, kRestemFadeSec); // linear env → 0 over the same 12 ms: the sum stays continuous
+    }
 }
 
 Voice* Sampler::allocateVoice() noexcept TERMINATOR_NONBLOCKING
@@ -199,6 +306,18 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     v->endFrame = useLoopRender ? p.loopSample->numFrames : p.endFrame;
     v->loopLo = p.loopStartFrame;
     v->loopHi = p.loopEndFrame;
+    if (useLoopRender)
+    {
+        v->src[0] = p.loopSample;
+        v->numSrc = 1;
+        v->stemMask = kStemMaskAll;
+    }
+    else
+    {
+        const int n = resolveReadSet(p, v->src);
+        v->numSrc = static_cast<std::uint8_t>(n);
+        v->stemMask = p.stemMask;
+    }
     v->reverse = useLoopRender ? 0 : p.params.reverse;
     v->mode = p.params.mode;
     v->interpolation = p.params.interpolation;
@@ -281,9 +400,19 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
     }
     const auto* s = v.sample;
     const std::int64_t nFrames = s->numFrames;
-    const int nCh = s->numChannels;
-    const float* chL = s->channel(0);
-    const float* chR = nCh > 1 ? s->channel(1) : chL;
+    // the read set: 1 buffer (base / loop render) or the lit stem planes, summed per tap; a mono plane among
+    // stereo ones repeats its only channel on the right (mixMaskChannels semantics)
+    const int nSrc = std::clamp<int>(v.numSrc, 1, kStemPlanes);
+    const float* chL[kStemPlanes];
+    const float* chR[kStemPlanes];
+    bool stereo = false;
+    for (int k = 0; k < nSrc; ++k)
+    {
+        const SampleBuffer* b = v.src[k] != nullptr ? v.src[k] : s;
+        chL[k] = b->channel(0);
+        chR[k] = b->numChannels > 1 ? b->channel(1) : chL[k];
+        stereo = stereo || b->numChannels > 1;
+    }
     const double regionStart = static_cast<double>(v.startFrame);
     const double regionEnd = static_cast<double>(v.endFrame); // exclusive
     const double regionLen = regionEnd - regionStart;
@@ -358,6 +487,14 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
             }
         }
 
+        // ---- restem crossfade (twin voice fading in) ----
+        if (v.xfRemaining > 0)
+        {
+            v.xfGain += v.xfStep;
+            if (--v.xfRemaining == 0)
+                v.xfGain = 1.0f;
+        }
+
         // ---- read + interpolate ----
         float outSampleL = 0.0f, outSampleR = 0.0f;
         const double fpos = v.position;
@@ -365,25 +502,26 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
         const float t = static_cast<float>(fpos - static_cast<double>(i0));
         if (v.interpolation == Interpolation::hermite)
         {
-            outSampleL = hermite4(readSample(chL, nFrames, i0 - 1), readSample(chL, nFrames, i0),
-                                  readSample(chL, nFrames, i0 + 1), readSample(chL, nFrames, i0 + 2), t);
-            outSampleR = (nCh > 1) ? hermite4(readSample(chR, nFrames, i0 - 1), readSample(chR, nFrames, i0),
-                                              readSample(chR, nFrames, i0 + 1), readSample(chR, nFrames, i0 + 2), t)
-                                   : outSampleL;
+            outSampleL = hermite4(readTap(chL, nSrc, nFrames, i0 - 1), readTap(chL, nSrc, nFrames, i0),
+                                  readTap(chL, nSrc, nFrames, i0 + 1), readTap(chL, nSrc, nFrames, i0 + 2), t);
+            outSampleR = stereo ? hermite4(readTap(chR, nSrc, nFrames, i0 - 1), readTap(chR, nSrc, nFrames, i0),
+                                           readTap(chR, nSrc, nFrames, i0 + 1), readTap(chR, nSrc, nFrames, i0 + 2), t)
+                                : outSampleL;
         }
         else
         {
-            const float a = readSample(chL, nFrames, i0), b = readSample(chL, nFrames, i0 + 1);
+            const float a = readTap(chL, nSrc, nFrames, i0), b = readTap(chL, nSrc, nFrames, i0 + 1);
             outSampleL = a + (b - a) * t;
-            if (nCh > 1)
+            if (stereo)
             {
-                const float c = readSample(chR, nFrames, i0), d = readSample(chR, nFrames, i0 + 1);
+                const float c = readTap(chR, nSrc, nFrames, i0), d = readTap(chR, nSrc, nFrames, i0 + 1);
                 outSampleR = c + (d - c) * t;
             }
             else
                 outSampleR = outSampleL;
         }
-        const float g = v.env * v.gain;
+        v.started = true;
+        const float g = v.env * v.gain * v.xfGain;
         if (l != nullptr)
             l[i] += outSampleL * g;
         if (r != nullptr)

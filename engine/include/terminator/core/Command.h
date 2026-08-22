@@ -29,6 +29,8 @@ enum class CommandType : std::uint32_t
     setNoteMap,         // noteMap — MIDI note → pad (−1 = unmapped)
     startCalibration,   // calibration — emit a click on out channel, record in channel
     setPadLoopBuffer,   // padLoop — attach/clear a pad's pre-rendered crossfade-loop buffer + its steady bracket
+    setPadStems,        // padStems — attach the pad's stem planes (drums/bass/other/vocals) + its 4-bit mask; a ringing
+                        // voice re-stems live (12 ms crossfade)
 };
 
 enum class PadMode : std::uint8_t
@@ -109,6 +111,14 @@ struct Command
             std::int64_t loopEnd;
             std::uint16_t pad;
         } padLoop;
+
+        struct PadStems
+        {
+            const SampleBuffer* planes[4]; // drums, bass, other, vocals — each the same length/rate as the pad's base
+                                           // buffer (nullptr = that stem is absent); lifetime owned like a sample
+            std::uint16_t pad;
+            std::uint8_t mask; // bit i = plane i lit; 0 / 15 / a lit plane missing = the base buffer plays
+        } padStems;
 
         struct Calibration
         {
@@ -228,6 +238,16 @@ struct Command
         c.payload.padLoop.sample = sample;
         c.payload.padLoop.loopStart = loopStart;
         c.payload.padLoop.loopEnd = loopEnd;
+        return c;
+    }
+    static Command setPadStems(std::uint16_t pad, const SampleBuffer* const planes[4], std::uint8_t mask) noexcept
+    {
+        Command c;
+        c.type = CommandType::setPadStems;
+        c.payload.padStems.pad = pad;
+        c.payload.padStems.mask = mask;
+        for (int i = 0; i < 4; ++i)
+            c.payload.padStems.planes[i] = planes != nullptr ? planes[i] : nullptr;
         return c;
     }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,

@@ -12,6 +12,9 @@
 namespace terminator
 {
 
+inline constexpr int kStemPlanes = 4;            // drums, bass, other, vocals (StemMask.h bit order)
+inline constexpr std::uint8_t kStemMaskAll = 15; // every plane lit = the base buffer plays
+
 struct Pad
 {
     const SampleBuffer* sample = nullptr;
@@ -24,6 +27,13 @@ struct Pad
     const SampleBuffer* loopSample = nullptr;
     std::int64_t loopStartFrame = 0;
     std::int64_t loopEndFrame = 0;
+    // STEMS (message thread decodes the cached stem assets and hands them over like samples): up to 4 planes
+    // (drums, bass, other, vocals), each the same length/rate as `sample`, + the pad's 4-bit mask. A voice with a
+    // partial mask SUMS the lit planes while reading (mixMaskChannels semantics: the combo = the exact sum;
+    // reverse/varispeed identical to the base path). Mask 0 / 15, no planes, or a lit plane missing = the base
+    // buffer plays (never silence — the TS "original until ready" rule). A LOOP render carries its own mix.
+    const SampleBuffer* stemPlanes[kStemPlanes] = {nullptr, nullptr, nullptr, nullptr};
+    std::uint8_t stemMask = kStemMaskAll;
 
     bool hasSample() const noexcept { return sample != nullptr && endFrame > startFrame; }
     std::int64_t lengthFrames() const noexcept { return endFrame - startFrame; }
@@ -67,6 +77,18 @@ struct Voice
     bool loopRendered = false; // playing a rendered crossfade-loop buffer (wrap loopLo→loopHi, not the region)
     std::int64_t loopLo = 0;   // steady period bracket in the loop buffer's frames
     std::int64_t loopHi = 0;
+    bool started = false; // rendered at least one sample (a not-yet-started voice re-stems in place)
+    // The read set: numSrc buffers summed per sample. numSrc 1 + src[0]==sample = the plain path; a partial stem
+    // mask lists its lit planes here (src[k] all share `sample`'s length/rate). `sample` stays the base buffer
+    // (playhead read-back, rate ratio, run-off check).
+    const SampleBuffer* src[kStemPlanes] = {nullptr, nullptr, nullptr, nullptr};
+    std::uint8_t numSrc = 0;
+    std::uint8_t stemMask = kStemMaskAll; // the mask this read set resolved from (15 = base)
+    // Restem crossfade: a twin voice fades IN over kRestemFadeSec while the old one fades out (Stage::fading) —
+    // both linear, so the sum is continuous. xfGain multiplies the envelope; 1 / 0 remaining = no crossfade.
+    float xfGain = 1.0f;
+    float xfStep = 0.0f;
+    std::int32_t xfRemaining = 0;
 
     bool active() const noexcept { return stage != Stage::idle; }
 };
@@ -76,6 +98,7 @@ class Sampler
   public:
     static constexpr float kStopFadeSec = 0.003f;   // choke / stop ramp
     static constexpr float kMinReleaseSec = 0.005f; // gate release floor (dossier: max(5 ms, release))
+    static constexpr float kRestemFadeSec = 0.012f; // live re-stem crossfade (restemVoice XF = 0.012)
 
     Sampler() = default;
 
@@ -89,6 +112,13 @@ class Sampler
     /// bracket the steady period in that buffer's frames. A ringing loop voice keeps its old render until re-hit.
     void setPadLoopBuffer(std::uint16_t pad, const SampleBuffer* sample, std::int64_t loopStart,
                           std::int64_t loopEnd) noexcept TERMINATOR_NONBLOCKING;
+    /// Attach the pad's stem planes (drums/bass/other/vocals; nullptr = absent) + mask. Planes that do not match
+    /// the base buffer's length/rate are dropped. A ringing (non-fading) voice of the pad whose read set changes
+    /// re-stems LIVE: a twin voice at the same position/rate/envelope reads the new set with a 12 ms linear
+    /// fade-in while the old one fades out over 12 ms (restemVoice). Send setPadSample first: a new sample
+    /// clears the planes (stems belong to a buffer), the mask stays.
+    void setPadStems(std::uint16_t pad, const SampleBuffer* const planes[kStemPlanes],
+                     std::uint8_t mask) noexcept TERMINATOR_NONBLOCKING;
     void setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING;
     void trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
     void release(std::uint16_t pad, std::int32_t offsetInBlock = 0) noexcept TERMINATOR_NONBLOCKING;
@@ -108,6 +138,8 @@ class Sampler
     const Pad& pad(int i) const noexcept { return pads_[i]; }
 
   private:
+    /// The pad's read set for a fresh voice: its lit planes, or the base buffer. Returns the count (≥1).
+    static int resolveReadSet(const Pad& p, const SampleBuffer* (&out)[kStemPlanes]) noexcept TERMINATOR_NONBLOCKING;
     Voice* allocateVoice() noexcept TERMINATOR_NONBLOCKING;
     void beginFade(Voice& v, float seconds, std::int32_t offsetInBlock = 0) noexcept TERMINATOR_NONBLOCKING;
     void beginFadeNow(Voice& v, float seconds) noexcept TERMINATOR_NONBLOCKING;
