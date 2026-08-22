@@ -1,0 +1,170 @@
+# Terminator native — CI. Gate for every push: configure + build + tests on macOS arm64 (universal binary,
+# lipo-verified), macOS Intel (native x86_64 run of the tests), macOS RTSan (Homebrew LLVM), Windows x64
+# (MSVC + WebView2 + ASIO SDK fetched, never committed).
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/build/_deps
+
+jobs:
+  mac-universal:
+    name: macOS universal (arm64 runner)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install ninja
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-mac-${{ hashFiles('cmake/Dependencies.cmake') }}
+      - name: Configure
+        run: cmake --preset mac-release-universal
+      - name: Build
+        run: cmake --build --preset mac-release-universal -j4
+      - name: Test
+        run: ctest --preset mac-release-universal
+      - name: Verify universal binaries (lipo)
+        run: |
+          set -e
+          APP="build/mac-release-universal/app/Terminator_artefacts/Release/Terminator.app/Contents/MacOS/Terminator"
+          CLI="build/mac-release-universal/tools/terminator-render/terminator-render_artefacts/Release/terminator-render"
+          for f in "$APP" "$CLI"; do
+            echo "== $f"; lipo -info "$f"
+            lipo -info "$f" | grep -q "x86_64" || { echo "::error::missing x86_64 slice in $f"; exit 1; }
+            lipo -info "$f" | grep -q "arm64"  || { echo "::error::missing arm64 slice in $f"; exit 1; }
+          done
+          # the Intel slice of the CLI must run under Rosetta on this arm64 runner
+          arch -x86_64 "$CLI" --version
+      - name: Smoke — launch the app, probe the WebView + bridge + engine
+        run: tools/ci/probe-app.sh "build/mac-release-universal/app/Terminator_artefacts/Release/Terminator.app/Contents/MacOS/Terminator" build/probe-mac.json
+      - name: Package app
+        run: |
+          cd build/mac-release-universal/app/Terminator_artefacts/Release
+          ditto -c -k --keepParent Terminator.app Terminator-mac-universal-unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Terminator-mac-universal-unsigned
+          path: build/mac-release-universal/app/Terminator_artefacts/Release/Terminator-mac-universal-unsigned.zip
+          retention-days: 14
+
+  mac-intel:
+    name: macOS Intel (x86_64 runner)
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install ninja
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-mac-${{ hashFiles('cmake/Dependencies.cmake') }}
+      - name: Configure
+        run: cmake --preset mac-release
+      - name: Build
+        run: cmake --build --preset mac-release -j4
+      - name: Test
+        run: ctest --preset mac-release
+      - name: Arch check
+        run: |
+          CLI="build/mac-release/tools/terminator-render/terminator-render_artefacts/Release/terminator-render"
+          lipo -info "$CLI"; lipo -info "$CLI" | grep -q x86_64
+
+  mac-rtsan:
+    name: macOS RealtimeSanitizer (Homebrew LLVM)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install ninja llvm
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-mac-${{ hashFiles('cmake/Dependencies.cmake') }}
+      - name: Configure (RTSan)
+        run: cmake --preset mac-rtsan
+      - name: Build
+        run: cmake --build --preset mac-rtsan -j4
+      - name: Test under RTSan
+        run: ctest --preset mac-rtsan
+
+  windows:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Cache FetchContent
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-win-${{ hashFiles('cmake/Dependencies.cmake') }}
+      - name: WebView2 SDK (NuGet → JUCE's default search path)
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:USERPROFILE "AppData\Local\PackageManagement\NuGet\Packages"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          nuget install Microsoft.Web.WebView2 -OutputDirectory $dest -NonInteractive
+          Get-ChildItem $dest
+      - name: ASIO SDK (Steinberg — fetched, never committed)
+        id: asio
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "asiosdk.zip"
+          Invoke-WebRequest -Uri "https://www.steinberg.net/asiosdk" -OutFile $zip -UserAgent "Mozilla/5.0"
+          Expand-Archive -Path $zip -DestinationPath (Join-Path $env:RUNNER_TEMP "asiosdk") -Force
+          $dir = Get-ChildItem (Join-Path $env:RUNNER_TEMP "asiosdk") -Directory | Select-Object -First 1
+          if (-not (Test-Path (Join-Path $dir.FullName "common\iasiodrv.h"))) { throw "iasiodrv.h not found in $($dir.FullName)" }
+          "TERMINATOR_ASIO_SDK_DIR=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "ASIO SDK at $($dir.FullName)"
+      - name: ASIO status
+        shell: pwsh
+        run: |
+          if ("${{ steps.asio.outcome }}" -ne "success") { Write-Host "::warning::ASIO SDK download failed — building WITHOUT ASIO (WASAPI/DirectSound only)" }
+          else { Write-Host "ASIO SDK ok: $env:TERMINATOR_ASIO_SDK_DIR" }
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset win-release -DTERMINATOR_ASIO_SDK_DIR="$env:TERMINATOR_ASIO_SDK_DIR"
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset win-release -j4
+      - name: Test
+        shell: pwsh
+        run: ctest --preset win-release
+      - name: Smoke — launch the app, probe the WebView2 + bridge + engine (soft: runner may lack WebView2/audio)
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          $out = "build/probe-win.json"
+          $env:TERMINATOR_PROBE_FILE = $out
+          $p = Start-Process -FilePath "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); Write-Host "::warning::app did not quit in 60 s"; exit 1 }
+          if (-not (Test-Path $out)) { Write-Host "::warning::no probe file written"; exit 1 }
+          Get-Content $out
+          if (-not (Select-String -Path $out -Pattern '"hasJuce":true' -Quiet)) { Write-Host "::warning::bridge not injected in WebView2"; exit 1 }
+          Write-Host "PROBE OK"
+      - name: Package app
+        shell: pwsh
+        run: Compress-Archive -Path "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -DestinationPath "build/Terminator-win-x64-unsigned.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Terminator-win-x64-unsigned
+          path: build/Terminator-win-x64-unsigned.zip
+          retention-days: 14
