@@ -19,7 +19,8 @@ add_executable(terminator-tests
     engine/test_waveform_peaks.cpp
     engine/test_project_planner.cpp
     engine/test_project_render.cpp
-    engine/test_onsets.cpp)
+    engine/test_onsets.cpp
+    engine/test_snap_chops.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
