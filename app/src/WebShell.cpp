@@ -24,6 +24,32 @@ class WebShell::Browser final : public juce::WebBrowserComponent
     std::function<void(const juce::String&)> onLoaded_;
 };
 
+// Preferences: a second DocumentWindow hosting the React preferences page (ui/dist/preferences/preferences.html)
+// through the SAME bridge options as the main window — one backend, two pages. Closing hides it (the page keeps
+// its state); the shell owns it for the app's lifetime.
+class WebShell::PrefsWindow final : public juce::DocumentWindow
+{
+  public:
+    PrefsWindow(const juce::WebBrowserComponent::Options& options, const juce::String& url,
+                std::function<void(const juce::String&)> onLoaded)
+        : juce::DocumentWindow("Terminator Preferences", juce::Colours::black, juce::DocumentWindow::closeButton),
+          browser_(std::make_unique<Browser>(options, std::move(onLoaded)))
+    {
+        setUsingNativeTitleBar(true);
+        setContentNonOwned(browser_.get(), false);
+        setResizable(false, false);
+        centreWithSize(560, 680);
+        setAlwaysOnTop(true);
+        browser_->goToURL(url);
+    }
+    ~PrefsWindow() override { browser_ = nullptr; }
+    void closeButtonPressed() override { setVisible(false); }
+    Browser& browser() noexcept { return *browser_; }
+
+  private:
+    std::unique_ptr<Browser> browser_;
+};
+
 namespace
 {
 constexpr int kSnapshotHz = 20;
@@ -140,6 +166,23 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
 
     uiDir_ = resolveUiDir();
 
+    browser_ = std::make_unique<Browser>(makeOptions(), [this](const juce::String& url) { pageLoaded(url); });
+    addAndMakeVisible(*browser_);
+
+    services_.onSettingsChanged = [this](const juce::var& settings)
+    { emitToAll("terminator.settingsChanged", settings); };
+    audioIO_.onDeviceChanged = [this] { emitToAll("terminator.devicesChanged", deviceInfoVar()); };
+    midi_.onPortsChanged = [this]
+    { emitToAll("terminator.midiChanged", handleMidi(juce::var(new juce::DynamicObject()))); };
+
+    browser_->goToURL(startUrlFor({}));
+
+    startTimerHz(kSnapshotHz);
+    setSize(1200, 800);
+}
+
+juce::WebBrowserComponent::Options WebShell::makeOptions()
+{
     // Runs before every page script: collect uncaught errors + unhandled rejections so the headless probe (and a
     // future crash-report) can read them — the WebView has no console we can see in CI.
     static const char* kErrorCollector = R"JS((function(){
@@ -180,7 +223,27 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
                                 { complete(handleMidi(args.size() > 0 ? args[0] : juce::var())); })
             .withNativeFunction("terminatorPads", [this](const juce::Array<juce::var>& args,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
-                                { handlePads(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); });
+                                { handlePads(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
+            .withNativeFunction(
+                "terminatorWindow",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                {
+                    const auto verb =
+                        args.size() > 0 ? args[0].getProperty("verb", juce::var()).toString() : juce::String();
+                    if (verb == "preferences")
+                    {
+                        openPreferences();
+                        complete(ok(true));
+                    }
+                    else if (verb == "closePreferences")
+                    {
+                        if (prefsWindow_ != nullptr)
+                            prefsWindow_->setVisible(false);
+                        complete(ok(true));
+                    }
+                    else
+                        complete(ok(false, "unknown window verb '" + verb + "'"));
+                });
 #if JUCE_WINDOWS
     opts = opts.withBackend(juce::WebBrowserComponent::Options::Backend::webview2)
                .withWinWebView2Options(
@@ -190,31 +253,36 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
                        .withStatusBarDisabled()
                        .withBackgroundColour(juce::Colours::black));
 #endif
-    browser_ = std::make_unique<Browser>(opts, [this](const juce::String& url) { pageLoaded(url); });
-    addAndMakeVisible(*browser_);
+    return opts;
+}
 
-    services_.onSettingsChanged = [this](const juce::var& settings)
-    {
-        if (pageReady_)
-            browser_->emitEventIfBrowserIsVisible("terminator.settingsChanged", settings);
-    };
-    audioIO_.onDeviceChanged = [this]
-    {
-        if (pageReady_)
-            browser_->emitEventIfBrowserIsVisible("terminator.devicesChanged", deviceInfoVar());
-    };
-    midi_.onPortsChanged = [this]
-    {
-        if (pageReady_)
-            browser_->emitEventIfBrowserIsVisible("terminator.midiChanged",
-                                                  handleMidi(juce::var(new juce::DynamicObject())));
-    };
-
+juce::String WebShell::startUrlFor(const juce::String& page) const
+{
     const auto devUrl = juce::SystemStats::getEnvironmentVariable("TERMINATOR_UI_URL", {});
-    browser_->goToURL(devUrl.isNotEmpty() ? devUrl : juce::WebBrowserComponent::getResourceProviderRoot());
+    auto root = devUrl.isNotEmpty() ? devUrl : juce::WebBrowserComponent::getResourceProviderRoot();
+    if (!root.endsWithChar('/'))
+        root += "/";
+    return root + page;
+}
 
-    startTimerHz(kSnapshotHz);
-    setSize(1200, 800);
+void WebShell::emitToAll(const juce::String& event, const juce::var& payload)
+{
+    if (pageReady_)
+        browser_->emitEventIfBrowserIsVisible(event, payload);
+    if (prefsWindow_ != nullptr && prefsReady_)
+        prefsWindow_->browser().emitEventIfBrowserIsVisible(event, payload);
+}
+
+void WebShell::openPreferences()
+{
+    if (prefsWindow_ == nullptr)
+    {
+        prefsReady_ = false;
+        prefsWindow_ = std::make_unique<PrefsWindow>(makeOptions(), startUrlFor("preferences/preferences.html"),
+                                                     [this](const juce::String&) { prefsReady_ = true; });
+    }
+    prefsWindow_->setVisible(true);
+    prefsWindow_->toFront(true);
 }
 
 WebShell::~WebShell()
@@ -223,6 +291,7 @@ WebShell::~WebShell()
     audioIO_.onDeviceChanged = nullptr;
     midi_.onPortsChanged = nullptr;
     services_.onSettingsChanged = nullptr;
+    prefsWindow_ = nullptr;
     browser_ = nullptr;
 }
 
@@ -734,6 +803,7 @@ void WebShell::runProbeAsyncChecks()
                     r.eula = t.eulaStatus ? await t.eulaStatus() : null;
                     r.projectFiles = t.listProjectFiles ? (await t.listProjectFiles()).length : -1;
                     r.layout = t.loadLayout ? await t.loadLayout() : undefined;
+                    r.openPreferences = t.openPreferences ? await t.openPreferences() : null;
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();
@@ -763,7 +833,19 @@ void WebShell::runProbe()
                                  {
                                      juce::String out;
                                      if (const auto* v = result.getResult())
-                                         out = v->toString();
+                                     {
+                                         // merge what only the shell knows (the Preferences window state)
+                                         auto parsed = juce::JSON::parse(v->toString());
+                                         if (auto* o = parsed.getDynamicObject())
+                                         {
+                                             o->setProperty("prefsWindow",
+                                                            prefsWindow_ != nullptr && prefsWindow_->isVisible());
+                                             o->setProperty("prefsReady", prefsReady_);
+                                             out = juce::JSON::toString(parsed, true);
+                                         }
+                                         else
+                                             out = v->toString();
+                                     }
                                      else if (const auto* e = result.getError())
                                          out = "{\"error\":" + juce::JSON::toString(e->message) + "}";
                                      probeFile_.deleteFile();

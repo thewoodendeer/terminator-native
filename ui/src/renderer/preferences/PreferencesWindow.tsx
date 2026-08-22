@@ -1,3 +1,9 @@
+// NATIVE (Terminator 3.0): the preferences page is hosted in a second JUCE window — install the native
+// window.terminator first (no-op elsewhere) and swap the AUDIO / MIDI device UI for the native panes.
+import '../native/ipc-native';
+import { isNative } from '../native/juceBridge';
+import NativeAudioPane from '../native/NativeAudioPane';
+import NativeMidiPane from '../native/NativeMidiPane';
 import React, { useEffect, useState, useCallback, CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -533,7 +539,25 @@ function PreferencesApp() {
 
       {/* Body */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 14 }}>
-        {tab === 'audio' && (
+        {tab === 'audio' && isNative() && (
+          <>
+            <NativeAudioPane />
+            <div style={card}>
+              <div style={{ ...row, marginBottom: 0 }}>
+                <label style={label}>Sequencer Resolution (PPQ)</label>
+                <select
+                  style={selectStyle}
+                  value={audio.ppq}
+                  onChange={e => setAudio(a => ({ ...a, ppq: Number(e.target.value) }))}
+                >
+                  {PPQ_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.value} PPQ — {o.desc}</option>)}
+                </select>
+                <div style={hint}>{PPQ_OPTIONS.find(o => o.value === audio.ppq)?.desc ?? ''}</div>
+              </div>
+            </div>
+          </>
+        )}
+        {tab === 'audio' && !isNative() && (
           <>
             <div style={card}>
               <div style={row}>
@@ -603,8 +627,9 @@ function PreferencesApp() {
 
         {tab === 'midi' && (
           <>
+            {isNative() && <NativeMidiPane />}
             <div style={card}>
-              <label style={label}>MIDI Inputs</label>
+              <label style={label}>MIDI Inputs{isNative() ? ' (Web MIDI — the in-page engines, until Phase 3 moves them native)' : ''}</label>
               {midiInputs.length === 0 && <div style={{ color: 'var(--text-dim)', padding: '6px 0' }}>No MIDI inputs connected</div>}
               {midiInputs.map(d => (
                 <div key={d.id} style={toggleRow}>

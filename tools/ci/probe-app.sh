@@ -18,15 +18,17 @@ if kill -0 "$PID" 2>/dev/null; then
 fi
 wait "$PID" || { echo "::error::app exited non-zero"; exit 1; }
 echo "== probe output"; cat "$OUT"; echo
-grep -q '"hasJuce":true' "$OUT" || { echo "::error::window.__JUCE__ missing — WebView bridge not injected"; exit 1; }
-if grep -q '"uiMode":"react"' "$OUT"; then
+grep -Eq '"hasJuce": ?true' "$OUT" || { echo "::error::window.__JUCE__ missing — WebView bridge not injected"; exit 1; }
+if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   echo "== the React UI is bundled — asserting ChopperView rendered"
-  grep -q '"chopperView":true' "$OUT" || { echo "::error::React UI served but ChopperView did not render (see errors above)"; exit 1; }
-  grep -q '"errors":\[\]' "$OUT" || { echo "::error::the page reported uncaught errors"; exit 1; }
-  echo "React UI OK"
+  grep -Eq '"chopperView": ?true' "$OUT" || { echo "::error::React UI served but ChopperView did not render (see errors above)"; exit 1; }
+  grep -Eq '"errors": ?\[\]' "$OUT" || { echo "::error::the page reported uncaught errors"; exit 1; }
+  grep -Eq '"prefsWindow": ?true' "$OUT" || { echo "::error::window.terminator.openPreferences() did not open the native Preferences window"; exit 1; }
+  grep -Eq '"prefsReady": ?true' "$OUT" || { echo "::error::the Preferences page did not finish loading in its window"; exit 1; }
+  echo "React UI OK (ChopperView + Preferences window)"
 else
   grep -q '@juce-framework/webview loaded' "$OUT" || { echo "::error::page did not load the JUCE webview package"; exit 1; }
   grep -q 'Terminator 3\.' "$OUT" || { echo "::error::terminatorInfo() did not reach the page"; exit 1; }
-  grep -q '"snapshot":"prepared' "$OUT" && echo "engine prepared on a real device" || echo "::warning::no audio device on this machine (engine not prepared) — bridge still OK"
+  grep -Eq '"snapshot": ?"prepared' "$OUT" && echo "engine prepared on a real device" || echo "::warning::no audio device on this machine (engine not prepared) — bridge still OK"
 fi
 echo "PROBE OK"

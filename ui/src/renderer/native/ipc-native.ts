@@ -5,7 +5,8 @@
  * web build stands in with ipc-browser's IndexedDB shim). Inside the native shell this module OVERLAYS the
  * browser shim: everything the shell can do natively is routed over the JUCE bridge (juceBridge.ts →
  * terminatorFs / terminatorSettings in app/src/ShellServices.cpp); everything it cannot do yet keeps the
- * browser-shim behaviour (IndexedDB, blob downloads) or stays undefined so the UI hides the control.
+ * browser-shim behaviour (IndexedDB, blob downloads) or stays undefined so the UI hides the control. The Preferences window is native (a second JUCE window hosting
+ * preferences.html — `openPreferences` → terminatorWindow).
  *
  * Import order matters: main.tsx imports THIS module first; it imports ipc-browser (whose side effect installs
  * the shim), then replaces window.terminator with the overlay — all before App.tsx evaluates and reads it.
@@ -222,6 +223,9 @@ export function installNativeIPC(): void {
     },
     loadNamedPreset: (name: string) => (typeof name === 'string' && name) ? readJson<object>(join(presetsDir(), `named_${safeFilename(name)}.json`)) : Promise.resolve(null),
     deleteNamedPreset: async (name: string) => { if (typeof name !== 'string' || !name) return { error: 'invalid name' }; await native.fs({ verb: 'trash', path: join(presetsDir(), `named_${safeFilename(name)}.json`) }); return { ok: true }; },
+
+    // windows
+    openPreferences: async () => { const r = await native.window({ verb: 'preferences' }); return { ok: !!r?.ok }; },
 
     // system
     revealInFinder: (filePath: string) => { void native.fs({ verb: 'reveal', path: filePath }); },

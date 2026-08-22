@@ -111,6 +111,13 @@ Paths must be absolute; relative or over-long paths are refused. Errors: `{ ok:f
 `terminator-settings.json` keys, verbatim — Phase 8 imports that file here), saves, emits
 `terminator.settingsChanged` → `{ ok, settings }`. `app.eula`, `app.recentProjects`, `app.projectsDir` live here.
 
+## `terminatorWindow(req)` — windows
+`verb`: `preferences` → opens (or fronts) the **Preferences window**: a second JUCE `DocumentWindow` hosting the
+React `preferences/preferences.html` from the same resource provider with the SAME bridge options (one backend,
+two pages; events go to both). `closePreferences` hides it. The page swaps its AUDIO/MIDI device UI for the
+native panes (`ui/src/renderer/native/NativeAudioPane.tsx` = Ableton layout over `terminatorAudio`,
+`NativeMidiPane.tsx` over `terminatorMidi`).
+
 ### Boot user script
 Before any page script the shell injects `window.__TERMINATOR_NATIVE__ = { version, settings, dirs }` so the
 synchronous boot reads the Electron preload offered (`getSettingsSync`) work; plus an error collector

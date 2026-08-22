@@ -1,7 +1,8 @@
 #pragma once
 // WebShell — the WebView that renders the UI, plus the bridge (docs/native/BRIDGE-PROTOCOL.md):
 //   JS → C++ : native functions  terminatorInfo() · terminatorCommand(cmd) · terminatorAudio(req) ·
-//              terminatorMidi(req) · terminatorPads(req) · terminatorFs(req) · terminatorSettings(req)
+//              terminatorMidi(req) · terminatorPads(req) · terminatorFs(req) · terminatorSettings(req) ·
+//              terminatorWindow(req)
 //   C++ → JS : event "terminator.snapshot" at 20 Hz with the engine StateSnapshot + device/MIDI stats
 // The page is served at WebBrowserComponent::getResourceProviderRoot(): the built React UI (ui/dist, copied
 // into the app bundle's Resources/ui at build time — or TERMINATOR_UI_DIR=<dir> to point at any dist folder)
@@ -38,6 +39,11 @@ class WebShell final : public juce::Component, private juce::Timer
 
   private:
     class Browser;
+    class PrefsWindow;
+    juce::WebBrowserComponent::Options makeOptions();         // the bridge (native functions, user scripts, resources)
+    juce::String startUrlFor(const juce::String& page) const; // "" = the root page, "preferences/preferences.html"
+    void emitToAll(const juce::String& event, const juce::var& payload); // main window + Preferences (when open)
+    void openPreferences();
     void timerCallback() override;
     void pageLoaded(const juce::String& url);
     void runProbe();
@@ -66,6 +72,7 @@ class WebShell final : public juce::Component, private juce::Timer
     ShellServices services_; // terminatorFs / terminatorSettings — the window.terminator shim's backend
     juce::String audioError_;
     std::unique_ptr<Browser> browser_;
+    std::unique_ptr<PrefsWindow> prefsWindow_; // Preferences = a second window hosting the React preferences page
     std::unique_ptr<juce::FileChooser> chooser_;
     std::uint32_t padSampleIds_[kMaxPads] = {};
     juce::String padSampleNames_[kMaxPads];
@@ -76,8 +83,9 @@ class WebShell final : public juce::Component, private juce::Timer
     double calibrationResultMs_ = -1.0;
     int calibrationReportedSamples_ = 0;
     juce::File probeFile_;
-    juce::File uiDir_;       // invalid = no built UI present → the embedded Phase-1 static page is served
-    bool pageReady_ = false; // no events to the page before it has loaded (window.__JUCE__ is injected with it)
+    juce::File uiDir_;        // invalid = no built UI present → the embedded Phase-1 static page is served
+    bool pageReady_ = false;  // no events to the page before it has loaded (window.__JUCE__ is injected with it)
+    bool prefsReady_ = false; // the Preferences page has loaded (events may be sent to it)
     bool probeArmed_ = false;
     int probeCountdown_ = 0;
 

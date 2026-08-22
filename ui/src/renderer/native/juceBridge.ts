@@ -48,6 +48,7 @@ export const native = {
   pads: lazy<AnyRecord, AnyRecord>('terminatorPads'),
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
+  window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),
 };
 
 /** Subscribe to a shell event (`terminator.snapshot` 20 Hz, `terminator.devicesChanged`, `terminator.midiChanged`,
