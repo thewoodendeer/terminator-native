@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState, PointerEvent as ReactPointerEvent
 import { createPortal } from 'react-dom';
 import './HardwareView.css';
 import { ChopperEngine, ChopperState, ChopPreset, SEQ_MAX_STEPS, NO_SAMPLE_ID } from './ChopperEngine';
+import { attachNativeEngineShadow } from '../native/nativeEngineShadow';
 import { DrumEngine, TrackKey, Genre, GENRES, GENRE_LABELS } from '../drums/DrumEngine';
 import { DrumSection } from '../drums/DrumSection';
 import { DrumBrowser, type DrumSample } from '../DrumBrowser';
@@ -601,6 +602,8 @@ export function HardwareView() {
   useEffect(() => () => arranger.stop(), []);
   useEffect(() => { engine.setPadLock(padLockFrom); }, [engine, padLockFrom]);
   useEffect(() => () => { loudTap.dispose(); engine.dispose(); }, [engine, loudTap]);
+  // Terminator 3.0: the pads sound through the native C++ engine (no-op in Electron / the browser)
+  useEffect(() => attachNativeEngineShadow(engine), [engine]);
 
   // Tap the master output with an AnalyserNode for the LED spectrum display.
   // Listen-only: never connect the analyser onward to the destination (that

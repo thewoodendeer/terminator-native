@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { isSubscribed, isSignedIn, isDemo, recordPull, pullsRemaining, FREE_PAD_LIMIT, goToDesktopDownload } from '../lib/subscription';
 import { SubscribeModal } from '../components/SubscribeModal';
 import { ChopperEngine, ChopperState, ChopPreset, MetronomeSound, SEQ_MAX_STEPS, NO_SAMPLE_ID } from './ChopperEngine';
+import { attachNativeEngineShadow } from '../native/nativeEngineShadow';
 
 const isWeb = (import.meta as any).env?.MODE === 'web';
 declare const __TERMINATOR_VERSION__: string;
@@ -1819,6 +1820,8 @@ export function ChopperView() {
   useEffect(() => {
     return () => { engine.dispose(); };
   }, [engine]);
+  // Terminator 3.0: the pads sound through the native C++ engine (no-op in Electron / the browser)
+  useEffect(() => attachNativeEngineShadow(engine), [engine]);
 
   // Keep keyboard focus on the document so pad keys always work after clicking UI elements
   useEffect(() => {

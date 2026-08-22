@@ -46,6 +46,7 @@ export const native = {
   audio: lazy<AnyRecord, AnyRecord>('terminatorAudio'),
   midi: lazy<AnyRecord, AnyRecord>('terminatorMidi'),
   pads: lazy<AnyRecord, AnyRecord>('terminatorPads'),
+  samples: lazy<AnyRecord, AnyRecord>('terminatorSamples'),
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),

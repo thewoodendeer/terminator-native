@@ -700,6 +700,22 @@ export class ChopperEngine {
   private nextChopId = 1;
   private voices: Map<number, PadVoice> = new Map();
   private activePadSet = new Set<number>();
+  /** NATIVE ENGINE SHADOW (Terminator 3.0, ui/src/renderer/native/nativeEngineShadow.ts): when set, every live
+   *  pad voice this engine starts / stops / releases is mirrored to the C++ engine, and the Web Audio voices of
+   *  the LIVE-HIT path (startVoice / restemVoice) are routed into a silent bus so the native engine is what you
+   *  hear — while the voice records, LEDs, playhead, chokes and the sequencer's own scheduled voices keep
+   *  working unchanged. Null (Electron / web) = no-op. The sequencer's scheduled voices (scheduleSeqStepAudio)
+   *  are NOT muted: the chop sequencer stays Web Audio until the native transport lands (Phase 3). */
+  voiceSink: { start(padIdx: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined): void; stop(padIdx: number): void; release(padIdx: number): void } | null = null;
+  /** Route live-hit voices into a silent bus (the native engine sounds instead). Set with voiceSink. */
+  mutePadVoices = false;
+  private mutedBus: GainNode | null = null;
+  /** Where a LIVE-HIT voice's gain connects: the pad's bus, or the silent bus under the native shadow. */
+  private padVoiceOut(padIdx: number): AudioNode {
+    if (!this.mutePadVoices) return this.busFor(padIdx);
+    if (!this.mutedBus) { this.mutedBus = this.ctx.createGain(); this.mutedBus.gain.value = 0; this.mutedBus.connect(this.ctx.destination); }
+    return this.mutedBus;
+  }
   private selectedPad: number | null = null;
   private lockedPadFrom: number | null = null; // free-tier: pads at/after this index are gated off (null = unlocked)
   private chopMode = true;
@@ -4449,7 +4465,7 @@ export class ChopperEngine {
       gain.gain.setValueAtTime(vel, t);
     }
     src.connect(gain);
-    gain.connect(this.busFor(padIdx));
+    gain.connect(this.padVoiceOut(padIdx));
 
     const startCtxTime = t;
 
@@ -4479,6 +4495,7 @@ export class ChopperEngine {
       this.voices.set(padIdx, lv);
       this.activePadSet.add(padIdx);
       this.emitActivity();
+      this.voiceSink?.start(padIdx, velocity, when, reverseOverride);
       return;
     }
 
@@ -4532,6 +4549,7 @@ export class ChopperEngine {
     this.voices.set(padIdx, voice);
     this.activePadSet.add(padIdx);
     this.emitActivity();
+    this.voiceSink?.start(padIdx, velocity, when, reverseOverride);
   }
 
   /** LIVE stem toggle (his ask 2026-08-20: hear the chips without restarting
@@ -4603,7 +4621,7 @@ export class ChopperEngine {
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(level, now + XF);
     src.connect(gain);
-    gain.connect(this.busFor(padIdx));
+    gain.connect(this.padVoiceOut(padIdx));
 
     if (looping) {
       const lb = this.loopBufferFor(srcBuf, playStart, playDur, fadeIn, fadeOut);
@@ -4692,6 +4710,7 @@ export class ChopperEngine {
     // tails out on its own.
     const v = this.voices.get(padIdx);
     if (v && v.gate) {
+      this.voiceSink?.release(padIdx);
       const rel = Math.max(0.005, this.masterState.release || 0);
       const t = this.ctx.currentTime;
       try {
@@ -4737,6 +4756,7 @@ export class ChopperEngine {
   private stopVoice(padIdx: number): void {
     const v = this.voices.get(padIdx);
     if (!v) return;
+    this.voiceSink?.stop(padIdx);
     const t = this.ctx.currentTime;
     try {
       v.gain.gain.cancelScheduledValues(t);
