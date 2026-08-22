@@ -87,7 +87,7 @@ void Sampler::setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING
     if (p.pad >= kMaxPads)
         return;
     auto q = p;
-    q.pitchSemitones = std::clamp(q.pitchSemitones, -24.0f, 24.0f);
+    q.pitchSemitones = std::clamp(q.pitchSemitones, -48.0f, 48.0f);
     q.fineCents = std::clamp(q.fineCents, -50.0f, 50.0f);
     q.attackSec = std::clamp(q.attackSec, 0.0f, 0.5f);
     q.releaseSec = std::clamp(q.releaseSec, 0.0f, 0.5f);
@@ -320,6 +320,7 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     }
     v->reverse = useLoopRender ? 0 : p.params.reverse;
     v->mode = p.params.mode;
+    v->gate = p.params.gate != 0 || p.params.mode == PadMode::gate;
     v->interpolation = p.params.interpolation;
     v->outputPair = p.params.outputPair;
     v->chokeGroup = p.params.chokeGroup;
@@ -342,10 +343,9 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
         v->envRemaining = 0;
         v->stage = Voice::Stage::sustain;
     }
-    v->releaseSamples =
-        std::max(1, static_cast<int>(static_cast<double>(std::max(
-                                         p.params.releaseSec, p.params.mode == PadMode::gate ? kMinReleaseSec : 0.0f)) *
-                                     sampleRate_));
+    v->releaseSamples = std::max(
+        1, static_cast<int>(static_cast<double>(std::max(p.params.releaseSec, v->gate ? kMinReleaseSec : 0.0f)) *
+                            sampleRate_));
     ++activeVoices_;
 }
 
@@ -363,7 +363,7 @@ void Sampler::release(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TE
 {
     for (auto& v : voices_)
     {
-        if (!v.active() || v.pad != pad || v.mode != PadMode::gate || v.released)
+        if (!v.active() || v.pad != pad || !v.gate || v.released)
             continue;
         v.released = true;
         if (offsetInBlock > 0)

@@ -240,6 +240,78 @@ TEST_CASE(
         REQUIRE(r.data[0][100 + 250] == 0.0f);
         REQUIRE(r.engine.snapshot().activeVoices == 0);
     }
+    SECTION("PadParams::gate: a gated ONE-SHOT releases on note-off (the TS NOTE ON flag, any mode)")
+    {
+        auto s = test::dc(48000, 1.0f);
+        auto p = r.params(0);
+        p.mode = PadMode::oneShot;
+        p.gate = 1;
+        p.releaseSec = 0.0f; // 5 ms floor
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, s.get()));
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        r.run();
+        r.engine.commands().push(Command::releasePadAtSample(0, 480 + 100));
+        r.run();
+        REQUIRE(r.data[0][99] == Approx(1.0f).epsilon(1e-4));
+        REQUIRE(r.data[0][100 + 120] == Approx(0.5f).epsilon(0.02));
+        REQUIRE(r.data[0][100 + 250] == 0.0f);
+        REQUIRE(r.engine.snapshot().activeVoices == 0);
+    }
+    SECTION("PadParams::gate on a LOOP pad: loops while held, note-off fades it over the release")
+    {
+        auto s = test::dc(48000, 1.0f);
+        auto p = r.params(0);
+        p.mode = PadMode::loop;
+        p.gate = 1;
+        p.releaseSec = 0.0f;
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, s.get(), 0, 100)); // a 100-frame loop
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        r.run(3); // 1440 samples — way past the 100-frame region: still looping
+        REQUIRE(r.data[0][479] == Approx(1.0f).epsilon(1e-4));
+        REQUIRE(r.engine.snapshot().activeVoices == 1);
+        r.engine.commands().push(Command::releasePad(0));
+        r.run();
+        REQUIRE(r.data[0][120] == Approx(0.5f).epsilon(0.02));
+        REQUIRE(r.data[0][300] == 0.0f);
+        REQUIRE(r.engine.snapshot().activeVoices == 0);
+    }
+    SECTION("an un-gated LOOP pad ignores note-off (free-running until retrigger/stop)")
+    {
+        auto s = test::dc(48000, 1.0f);
+        auto p = r.params(0);
+        p.mode = PadMode::loop;
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, s.get(), 0, 100));
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        r.run();
+        r.engine.commands().push(Command::releasePad(0));
+        r.run();
+        REQUIRE(r.data[0][400] == Approx(1.0f));
+        REQUIRE(r.engine.snapshot().activeVoices == 1);
+    }
+    SECTION("pitch range: pad PITCH + source PITCH can reach +36 (rate 8x), clamped at +-48")
+    {
+        auto s = test::ramp(4800);
+        auto p = r.params(0);
+        p.pitchSemitones = 36.0f;
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, s.get()));
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        r.run();
+        // ramp(n) = i/n: at rate 8 output sample 100 reads source frame 800
+        REQUIRE(r.data[0][100] == Approx(800.0f / 4800.0f).epsilon(0.01));
+        auto q = r.params(1);
+        q.pitchSemitones = 100.0f; // clamps to 48 → rate 16 (pad 1: pad 0's voice is still ringing)
+        r.engine.commands().push(Command::setPadParams(q));
+        r.engine.commands().push(Command::setPadSample(1, s.get()));
+        r.engine.commands().push(Command::stopPad(0));
+        r.run(); // pad 0's 3 ms stop fade completes inside this block
+        r.engine.commands().push(Command::triggerPad(1, 1.0f));
+        r.run();
+        REQUIRE(r.data[0][50] == Approx(800.0f / 4800.0f).epsilon(0.01));
+    }
     SECTION("one-shot ignores note-off")
     {
         auto s = test::dc(48000, 1.0f);

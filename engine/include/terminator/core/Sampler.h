@@ -72,6 +72,7 @@ struct Voice
     PadMode mode = PadMode::oneShot;
     Interpolation interpolation = Interpolation::hermite;
     std::int16_t chokeGroup = -1;
+    bool gate = false;         // note-off (release) ends this voice — PadParams::gate or PadMode::gate
     bool released = false;     // gate note-off received
     bool tailStarted = false;  // one-shot reached the region end → release tail running
     bool loopRendered = false; // playing a rendered crossfade-loop buffer (wrap loopLo→loopHi, not the region)

@@ -55,8 +55,8 @@ bool stemsApply(const StemPlanes& planes, std::uint8_t mask, const SampleBuffer&
     return true;
 }
 
-/// The region's audio as the voice will read it (base, or the lit planes summed), reversed when the pad is —
-/// the input to the LOOP render (loopBufferFor renders from the resolved, already-reversed source buffer).
+} // namespace
+
 std::vector<std::vector<float>> regionChannels(const SampleBuffer& base, const StemPlanes* planes, std::uint8_t mask,
                                                std::int64_t s0, std::int64_t n, bool reverse)
 {
@@ -90,8 +90,6 @@ std::vector<std::vector<float>> regionChannels(const SampleBuffer& base, const S
     return out;
 }
 
-/// loopBufferFor: the rendered crossfade loop of a LOOP pad's region (fades in BUFFER seconds). No fades → no
-/// render (the sampler hard-wraps the raw region, exactly like TS looping the raw region).
 std::shared_ptr<SampleBuffer> renderPadLoop(const SampleBuffer& base, const StemPlanes* planes, std::uint8_t mask,
                                             std::int64_t s0, std::int64_t n, double fadeInSec, double fadeOutSec,
                                             bool reverse, std::int64_t& loopStart, std::int64_t& loopEnd)
@@ -117,7 +115,6 @@ std::shared_ptr<SampleBuffer> renderPadLoop(const SampleBuffer& base, const Stem
     loopEnd = r.loopStart + r.period;
     return out;
 }
-} // namespace
 
 RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBank& bank,
                                   const ProjectRenderOptions& opts)

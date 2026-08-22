@@ -49,7 +49,7 @@ enum class Interpolation : std::uint8_t
 struct PadParams
 {
     std::uint16_t pad = 0;
-    float pitchSemitones = 0.0f; // −24..+24
+    float pitchSemitones = 0.0f; // −48..+48 (pad PITCH ±24 + its source's PITCH ±24, summed by the UI)
     float fineCents = 0.0f;      // −50..+50
     float attackSec = 0.003f;    // 0..0.5
     float releaseSec = 0.0f;     // 0..0.5
@@ -57,6 +57,9 @@ struct PadParams
     std::uint8_t outputPair = 0; // 0 = outs 1/2, 1 = outs 3/4, …
     PadMode mode = PadMode::oneShot;
     std::uint8_t reverse = 0;
+    std::uint8_t gate =
+        0; // NOTE ON: release() ends the voice (any mode — a gated LOOP loops while held); PadMode::gate
+           // implies it. 0 = the voice plays out on its own (one-shot / free-running loop)
     std::int16_t chokeGroup = -1; // −1 = the pad itself; ≥0 = a shared mute group id; −2 = poly (never choked)
     Interpolation interpolation = Interpolation::hermite;
 };

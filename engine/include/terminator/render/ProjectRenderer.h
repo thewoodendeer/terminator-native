@@ -7,6 +7,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <vector>
 
 #include <juce_data_structures/juce_data_structures.h>
 
@@ -39,6 +40,20 @@ struct ProjectRenderOptions
     double tailSeconds = 0.5;         // extra time after the last note so tails ring out
     bool classicInterpolation = true; // linear = golden-match the Web Audio engine; false = hermite (native default)
 };
+
+/// The region's audio as the voice will read it (base, or the lit planes summed), reversed when the pad is —
+/// the input to the LOOP render (TS loopBufferFor renders from the resolved, already-reversed source buffer).
+/// `planes` null = the base buffer alone. [s0, s0+n) in base frames; every channel returned has n frames.
+std::vector<std::vector<float>> regionChannels(const SampleBuffer& base, const StemPlanes* planes, std::uint8_t mask,
+                                               std::int64_t s0, std::int64_t n, bool reverse);
+
+/// TS loopBufferFor: the rendered crossfade loop of a LOOP pad's region (fades in BUFFER seconds) as a fresh
+/// SampleBuffer `[warm-up | steady period]`, with [loopStart, loopEnd) bracketing the steady period in its
+/// frames. No fades → nullptr (the sampler hard-wraps the raw region, exactly like TS looping the raw region).
+/// Message-thread / offline use (allocates). Shared by the offline ProjectRenderer and the live shell.
+std::shared_ptr<SampleBuffer> renderPadLoop(const SampleBuffer& base, const StemPlanes* planes, std::uint8_t mask,
+                                            std::int64_t s0, std::int64_t n, double fadeInSec, double fadeOutSec,
+                                            bool reverse, std::int64_t& loopStart, std::int64_t& loopEnd);
 
 /// Assemble the RenderSpec (pads + events) from the project + bank. Missing sources → silent pads.
 RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBank& bank,
