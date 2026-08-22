@@ -12,7 +12,9 @@ NOT committed — `scripts/sync-assets.sh` copies them from a local Electron che
 cd ui && npm ci && npm run gate      # = tsc --noEmit (baseline below) + vite build --mode native → ui/dist
 ```
 - **tsc baseline = 5 errors**, the SAME five the Electron renderer carries (ChopperView `ipc` possibly
-  undefined ×2, exporters `Uint8Array`, mpcSample `replaceAll` ×2). Zero NEW errors on top of that is the gate.
+  undefined ×2, exporters `Uint8Array`, mpcSample `replaceAll` ×2), recorded in `tsc-baseline.json` (file + TS
+  code + message, line-number-free). `npm run typecheck` = `scripts/typecheck.mjs`: zero NEW errors on top of
+  the baseline passes; a baseline error that disappears is reported → `npm run typecheck:update-baseline`.
 - `ui/dist` is bundled into the app after every CMake build (`app/CMakeLists.txt` → `Contents/Resources/ui` on
   macOS, `ui/` next to the exe on Windows) and served by the shell's resource provider at
   `WebBrowserComponent::getResourceProviderRoot()` (`juce://juce.backend/` on macOS — a secure context with

@@ -1,0 +1,27 @@
+[
+  {
+    "file": "src/renderer/chopper/ChopperView.tsx",
+    "code": "TS18048",
+    "message": "'ipc' is possibly 'undefined'."
+  },
+  {
+    "file": "src/renderer/chopper/ChopperView.tsx",
+    "code": "TS18048",
+    "message": "'ipc' is possibly 'undefined'."
+  },
+  {
+    "file": "src/renderer/chopper/exporters/index.ts",
+    "code": "TS2322",
+    "message": "Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'Uint8Array<ArrayBuffer>'."
+  },
+  {
+    "file": "src/renderer/chopper/exporters/mpcSample.ts",
+    "code": "TS2550",
+    "message": "Property 'replaceAll' does not exist on type 'string'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later."
+  },
+  {
+    "file": "src/renderer/chopper/exporters/mpcSample.ts",
+    "code": "TS2550",
+    "message": "Property 'replaceAll' does not exist on type 'string'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later."
+  }
+]

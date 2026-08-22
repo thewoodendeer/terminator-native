@@ -2,13 +2,14 @@
   "name": "terminator-ui",
   "private": true,
   "version": "3.0.0-alpha.0",
-  "description": "Terminator 3.0 — the React UI, copied from the Electron renderer (terminator/src/renderer) and bound to the native engine through EngineClient (docs/native/BRIDGE-PROTOCOL.md).",
+  "description": "Terminator 3.0 \u2014 the React UI, copied from the Electron renderer (terminator/src/renderer) and bound to the native engine through EngineClient (docs/native/BRIDGE-PROTOCOL.md).",
   "type": "module",
   "scripts": {
     "dev": "vite --mode native",
     "build": "vite build --mode native",
-    "typecheck": "tsc --noEmit",
-    "gate": "npm run typecheck && npm run build"
+    "typecheck": "node scripts/typecheck.mjs",
+    "gate": "npm run typecheck && npm run build",
+    "typecheck:update-baseline": "node scripts/typecheck.mjs --update"
   },
   "dependencies": {
     "@audio/stretch-transient": "1.2.1",
