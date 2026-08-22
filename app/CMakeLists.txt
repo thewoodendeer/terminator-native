@@ -34,7 +34,9 @@ target_sources(Terminator PRIVATE
     src/ShellServices.h
     src/ShellServices.cpp
     src/SampleRegistry.h
-    src/SampleRegistry.cpp)
+    src/SampleRegistry.cpp
+    src/ProcessHub.h
+    src/ProcessHub.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1
@@ -71,3 +73,25 @@ add_custom_target(TerminatorBundleUi ALL
     COMMENT "Bundling the React UI from ${TERMINATOR_UI_DIST} (if built)"
     VERBATIM)
 add_dependencies(TerminatorBundleUi Terminator)
+
+# yt-dlp (pinned onedir nightly) + quickjs-ng qjs for YouTube import — cmake/ProvisionTools.cmake downloads the
+# pinned, SHA-256-verified assets once into third_party/.tools-cache and lays them into the bundle: macOS
+# Resources/bin/{ytdlp,qjs}, Windows <exe dir>/bin/{ytdlp,qjs}. -DTERMINATOR_BUNDLE_TOOLS=OFF for an offline /
+# engine-only build (the app then reports "yt-dlp is missing from this build" for YouTube links).
+option(TERMINATOR_BUNDLE_TOOLS "Download + bundle yt-dlp and qjs into the app (YouTube import)" ON)
+if(TERMINATOR_BUNDLE_TOOLS)
+    if(APPLE)
+        set(_terminator_tools_dest "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Resources/bin")
+        set(_terminator_tools_platform mac)
+    else()
+        set(_terminator_tools_dest "$<TARGET_FILE_DIR:Terminator>/bin")
+        set(_terminator_tools_platform win)
+    endif()
+    add_custom_target(TerminatorBundleTools ALL
+        COMMAND "${CMAKE_COMMAND}" -DPLATFORM=${_terminator_tools_platform} -DDEST=${_terminator_tools_dest}
+                -DCACHE=${PROJECT_SOURCE_DIR}/third_party/.tools-cache
+                -P "${PROJECT_SOURCE_DIR}/cmake/ProvisionTools.cmake"
+        COMMENT "Bundling yt-dlp + qjs (pinned, SHA-256 verified; cached in third_party/.tools-cache)"
+        VERBATIM)
+    add_dependencies(TerminatorBundleTools Terminator)
+endif()

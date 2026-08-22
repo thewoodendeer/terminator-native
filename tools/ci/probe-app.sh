@@ -40,6 +40,17 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   # when the library already holds a file the shell served it byte-complete
   grep -Eq '"systemOk": ?true' "$OUT" || { echo "::error::library self-test: the library tree did not load (system folders missing)"; exit 1; }
   grep -Eq '"outsideRootBlocked": ?true' "$OUT" || { echo "::error::library self-test: /lib/b64/ served a path OUTSIDE the registered roots"; exit 1; }
+  if grep -Eq '"ytdlpBundled": ?true' "$OUT"; then
+    grep -Eq '"ytdlpOk": ?true' "$OUT" || { echo "::error::the bundled yt-dlp did not answer --version through terminatorProcess (see ytdlpError)"; exit 1; }
+    echo "yt-dlp bundled + runs: $(grep -Eo '"ytdlpVersion": ?"[^"]*"' "$OUT") (qjs: $(grep -Eo '"qjsBundled": ?[a-z]+' "$OUT"))"
+    if grep -Eq '"ytDownload":' "$OUT"; then
+      # TERMINATOR_PROBE_NET=1 asked for the real pull — YouTube/network flakiness is a warning, not a build failure
+      if grep -Eq '"ytDownload": ?\{[^}]*"ok": ?true' "$OUT"; then echo "YouTube pull OK (end-to-end through the bundled yt-dlp + qjs): $(grep -Eo '"ytDownload": ?\{[^}]*\}' "$OUT")";
+      else echo "::warning::the end-to-end YouTube pull did not succeed: $(grep -Eo '"ytDownload": ?\{[^}]*\}' "$OUT")"; fi
+    fi
+  else
+    echo "::warning::yt-dlp not bundled in this build (TERMINATOR_BUNDLE_TOOLS=OFF?) — YouTube import unavailable"
+  fi
   if grep -Eq '"servedUrl":' "$OUT"; then
     grep -Eq '"servedOk": ?true' "$OUT" || { echo "::error::library self-test: a managed library file was not served byte-complete at its /lib/b64/ URL"; exit 1; }
     echo "library file served OK (fetch); audio element: $(grep -Eo '"audioCanPlay": ?[a-z]+' "$OUT")"

@@ -163,7 +163,9 @@ juce::var WebShell::ok(bool okFlag, const juce::String& error)
 WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore& samples, SampleLoader& loader,
                    Settings& settings, juce::String audioError)
     : engine_(engine), audioIO_(audioIO), midi_(midi), samples_(samples), loader_(loader), settings_(settings),
-      services_(settings), registry_(engine, samples, loader), audioError_(std::move(audioError))
+      services_(settings), registry_(engine, samples, loader),
+      processes_([this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); }),
+      audioError_(std::move(audioError))
 {
     const auto probePath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_FILE", {});
     if (probePath.isNotEmpty())
@@ -205,9 +207,15 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
 
     // TERMINATOR_PROBE_AUDIO=1: the library self-test also tries an <audio> load through the resource provider
     // (kept opt-in: a media load through the scheme handler is the one thing that can stall the page)
-    const juce::String probeAudio = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_AUDIO", {}).isNotEmpty()
-                                        ? "window.__terminatorProbeAudio = true;"
-                                        : "void 0;";
+    // TERMINATOR_PROBE_NET=1: the library self-test also pulls one short public YouTube video through the bundled
+    // yt-dlp into a TEMP root (network; never the user's library) — the end-to-end YouTube import smoke test
+    const juce::String probeAudio =
+        juce::String(juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_AUDIO", {}).isNotEmpty()
+                         ? "window.__terminatorProbeAudio = true;"
+                         : "void 0;") +
+        juce::String(juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_NET", {}).isNotEmpty()
+                         ? "window.__terminatorProbeNet = true;"
+                         : "void 0;");
     auto opts =
         juce::WebBrowserComponent::Options{}
             .withNativeIntegrationEnabled()
@@ -244,6 +252,10 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                 "terminatorSamples",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
                 { complete(registry_.handle(args.size() > 0 ? args[0] : juce::var())); })
+            .withNativeFunction(
+                "terminatorProcess",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                { complete(processes_.handle(args.size() > 0 ? args[0] : juce::var())); })
             .withNativeFunction(
                 "terminatorWindow",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)

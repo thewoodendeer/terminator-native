@@ -2,7 +2,7 @@
 // WebShell — the WebView that renders the UI, plus the bridge (docs/native/BRIDGE-PROTOCOL.md):
 //   JS → C++ : native functions  terminatorInfo() · terminatorCommand(cmd) · terminatorAudio(req) ·
 //              terminatorMidi(req) · terminatorPads(req) · terminatorSamples(req) · terminatorFs(req) ·
-//              terminatorSettings(req) · terminatorWindow(req)
+//              terminatorSettings(req) · terminatorWindow(req) · terminatorProcess(req)
 //   C++ → JS : event "terminator.snapshot" at 20 Hz with the engine StateSnapshot + device/MIDI stats
 // The page is served at WebBrowserComponent::getResourceProviderRoot(): the built React UI (ui/dist, copied
 // into the app bundle's Resources/ui at build time — or TERMINATOR_UI_DIR=<dir> to point at any dist folder)
@@ -23,6 +23,7 @@
 #include "terminator/io/SampleStore.h"
 #include "terminator/io/Settings.h"
 
+#include "ProcessHub.h"
 #include "SampleRegistry.h"
 #include "ShellServices.h"
 
@@ -72,6 +73,7 @@ class WebShell final : public juce::Component, private juce::Timer
     Settings& settings_;
     ShellServices services_;  // terminatorFs / terminatorSettings — the window.terminator shim's backend
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
+    ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
     juce::String audioError_;
     std::unique_ptr<Browser> browser_;
     std::unique_ptr<PrefsWindow> prefsWindow_; // Preferences = a second window hosting the React preferences page

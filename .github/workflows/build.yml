@@ -55,6 +55,8 @@ jobs:
           # the Intel slice of the CLI must run under Rosetta on this arm64 runner
           arch -x86_64 "$CLI" --version
       - name: Smoke — launch the app, probe the WebView + bridge + engine
+        env:
+          TERMINATOR_PROBE_NET: "1" # + one real YouTube pull through the bundled yt-dlp + qjs (a network miss is a warning)
         run: tools/ci/probe-app.sh "build/mac-release-universal/app/Terminator_artefacts/Release/Terminator.app/Contents/MacOS/Terminator" build/probe-mac.json
       - name: Package app
         run: |

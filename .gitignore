@@ -22,6 +22,9 @@ CMakeUserPresets.json
 ui/node_modules/
 ui/dist/
 
+# provisioned tools (yt-dlp + qjs downloads — cmake/ProvisionTools.cmake)
+third_party/.tools-cache/
+
 # never
 .env
 .env.*

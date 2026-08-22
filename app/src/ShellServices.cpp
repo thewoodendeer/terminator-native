@@ -71,6 +71,7 @@ juce::var ShellServices::dirsVar() const
     put(o, "settingsFile", settings_.file().getFullPathName());
     put(o, "home", juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName());
     put(o, "music", juce::File::getSpecialLocation(juce::File::userMusicDirectory).getFullPathName());
+    put(o, "temp", juce::File::getSpecialLocation(juce::File::tempDirectory).getFullPathName());
     put(o, "sep", juce::String(juce::File::getSeparatorString()));
     return o;
 }
