@@ -175,28 +175,34 @@ EngineClient (TS interface) + NativeEngineClient/WebAudioEngineClient, the `ui/`
 lines) + pnpm gate, booting ChopperView in the WebView, and the packaged build. The Phase 1 static page + bridge
 v1 already prove the WebView/bridge/engine path end to end (probe); 2.4+ swap the static page for the real UI.
 
-## ⚠️ NEEDS VICTOR — CI is blocked on GitHub billing (2026-08-22)
-Every push after `938d276` fails to RUN on GitHub Actions: **"The job was not started because recent account
-payments have failed or your spending limit needs to be increased."** All 4 jobs die in ~3 s — this is a billing
-state on the `thewoodendeer` account, not a code failure. **Fix it in GitHub → Settings → Billing & plans, then
-re-run the latest `build` workflow** (`gh run rerun <id>` or the Actions tab). Until then the "CI green on all 4
-jobs" gate — especially **Windows/MSVC**, which has already caught two clang-invisible cross-platform bugs — is
-UNVERIFIABLE. What IS known:
-- Local mac gates on every commit through `6cf1e76`: `mac-debug` **0 warnings, 76/76 ctest**; `mac-rtsan`
-  **77/77**; `mac-release-universal` 76/76 in ~2 s, `lipo` = `x86_64 arm64`.
-- The last CI run that actually executed (`32592137772`, before the C4459 fix): **mac universal ✅, mac Intel ✅,
-  mac RTSan ✅**; only Windows failed on the C4459 shadow-of-`ids::` warning, which is **fixed in `6cf1e76`**
-  (verified to compile clean locally). So the expectation is all 4 green once billing is restored — but Windows
-  MUST be confirmed by hand because it is the only thing that compiles the MSVC path.
-- Two Windows-only breaks were found and fixed via CI this session: `columnStride` constexpr-with-`std::floor`
-  (C3615) and the C4459 `ids::` shadow. A third could hide in code pushed after the billing block — re-run CI first.
+## CI — GREEN on all 4 jobs (2026-08-22, run 32594435703)
+mac universal ✅ · mac Intel ✅ · mac RTSan ✅ · **Windows/MSVC ✅**. The whole Phase-2 engine/model/render batch
+is verified on every platform.
+- **What was blocking it, and how it was cleared:** the private repo's 2,000 included GitHub-Actions minutes/mo
+  hit 100% mid-session, so runs died instantly ("payments failed / spending limit"). Victor's call: **make the
+  repo PUBLIC** (Actions minutes are free/unlimited on public repos) "until you're done building". Done —
+  `thewoodendeer/terminator-native` is PUBLIC now. A pre-flight scan confirmed no secrets, no keys, no real home
+  path (only `~/`), commits under the `thewoodendeer` pseudonym, and fixtures carrying only public song
+  titles/R2 ids. **NEEDS VICTOR (low priority): flip the repo back to PRIVATE once the build is far enough along**
+  (or when the monthly minutes reset on Sept 1) — it was private by design.
+- **Five Windows-only breaks were found and fixed via CI this session (all clang-invisible):** (1) `columnStride`
+  constexpr calling `std::floor` → C3615, made `inline`; (2) locals shadowing `ids::` names under
+  `using namespace ids` → C4459, renamed; (3) `M_PI` undefined on MSVC → guarded in 6 files; (4) [the SPSC test
+  hang, earlier]; (5) **non-ASCII TEST_CASE names** (arrows/dashes) mangled by `catch_discover_tests` PRE_TEST on
+  the Windows command line → the test ran 0 assertions and ctest failed it → all test names are ASCII now. MSVC
+  is the only thing that compiles the Windows path, so it stays the cross-platform oracle — keep test names
+  ASCII, avoid `using namespace ids` in .cpp, and no `constexpr` fn that calls libm.
 
-### Remaining Phase 1 items still needing Victor's interface (unchanged from Phase 1)
-RTL ≤ 3 ms @64/48k on the Model 16 (Measure with a cable), pad-hit feel, outs 3–8 audible, device
-unplug/replug — plus now the ≤ 400 MB idle-RSS streaming gate once the streaming source lands. One consolidated
-pass when the UI boots (2.5).
+### 2.3 onset / BPM / silence detectors (DONE, pushed)
+`core/planners/Onsets.h` (impl in `src/analysis/Onsets.cpp`): `detectTransients` (broadband HOP256/FRAME512,
+flux mean+0.1σ, 30 ms gap), `detectDrumTransients` (banded LP200/HP1500, mean+0.5σ, 50 ms, kick eLow/eHigh>0.4
+snare>0.15, merge/dedupe), `detectSilenceEnd` (RMS 0.015 / 256), `estimateBpm` (tempogram HOP1024/FRAME2048,
+comb [1,.7,.5,.4], fold 75..165). Exact-param ports — unlocks auto-chop + snap-to-transient (still-TS list now
+shrinks to: applySnap/snapToBeat/gridAnchor, autoChop/autoSliceTransients, the BLOCKS planners, padClipboard).
+Gate: synthetic click tracks read 120 and 90 BPM; broadband finds impulses within 20 ms; banded finds
+kicks+snares; silence-end lands on the first sound; a <8 s buffer returns 0.
 
-### Latent bug found while porting (flagged, not yet fixed in the Electron app)
+### Latent bug found while porting### Latent bug found while porting (flagged, not yet fixed in the Electron app)
 - `refitSeqStorage` (ChopperEngine.ts): when INPUT Q < 100 raises the storage `floor` above the lossless
   resolution, the Electron code scales note indices only by the lossless factor, not by `next/old` — so notes
   can land on the wrong step the first time the floor kicks in. The C++ port does the full `next/old` scaling
