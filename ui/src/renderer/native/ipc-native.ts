@@ -18,13 +18,15 @@
  * Finder/Explorer, open external links, clipboard text, the Preferences window, **the Sample Library**
  * (`library*` + the FOLDERS-tab root methods — libraryNative.ts: the Electron library logic ported over
  * terminatorFs; files served by the shell at /lib/b64/; Finder drops come in as bytes via libraryImportFiles).
- * NOT yet native (browser-shim or undefined): .tprojz bundles + the asset store (binary transport),
- * drums/stems/YouTube pulls (libraryYouTubeImport reports an error phase), menu shortcuts / Recent submenu /
- * open-with-file events, drag-out, licence, cloud presets.
+ * plus the ASSET STORE + `.tprojz` bundles (assetsNative.ts — <dataDir>/assets with a read fallback into the
+ * Electron app's store, bundle bytes via readBinary/writeBinary) and YouTube pulls (the bundled yt-dlp).
+ * NOT yet native (browser-shim or undefined): drums/stems, menu shortcuts / Recent submenu / open-with-file
+ * events, drag-out, licence, cloud presets.
  */
 import { installBrowserIPC } from '../ipc-browser';
 import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
 import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
+import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } from './assetsNative';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -99,7 +101,12 @@ export function installNativeIPC(): void {
     if (typeof filePath !== 'string' || !filePath || filePath.length > 4096) return { error: 'invalid path' };
     const ext = projectExtOf(filePath);
     if (!ext) return { error: 'not a project file' };
-    if (ext === BUNDLE_EXT) return { error: 'Project bundles (.tprojz) are not supported in the native app yet — open the .tproj' };
+    if (ext === BUNDLE_EXT) {
+      // .tprojz → the raw bytes (the renderer unpacks: project.json + manifest + samples → the asset store)
+      const rb = await readBinaryFile(filePath);
+      if (!rb) return { error: 'Could not open project — file missing or unreadable' };
+      return { path: filePath, name: projectBaseName(filePath), bundle: rb.bytes };
+    }
     const r = await native.fs({ verb: 'readText', path: filePath });
     if (!r?.ok) return { error: 'Could not open project — file missing or unreadable' };
     try {
@@ -183,7 +190,24 @@ export function installNativeIPC(): void {
       if (isAbs) outPath = target.toLowerCase().endsWith(PROJECT_EXT) ? target : `${target}${PROJECT_EXT}`;
       else outPath = join(projectsDir(), safeFilename(target.toLowerCase().endsWith(PROJECT_EXT) ? target : `${target}${PROJECT_EXT}`));
       const r = await native.fs({ verb: 'writeText', path: outPath, text: JSON.stringify(data, null, 2) });
-      return r?.ok ? { ok: true, path: r.path, name: projectBaseName(r.path) } : { error: r?.error ?? 'write failed' };
+      if (!r?.ok) return { error: r?.error ?? 'write failed' };
+      // A stale bundle twin of the same name would shadow this in the Open list.
+      await native.fs({ verb: 'trash', path: outPath.replace(/\.tproj$/i, BUNDLE_EXT) }).catch(() => null);
+      return { ok: true, path: r.path, name: projectBaseName(r.path) };
+    },
+    // Write a project BUNDLE (.tprojz bytes built by the renderer). Same target rules as saveProjectFile.
+    saveProjectBundle: async (target: string, bytes: Uint8Array | ArrayBuffer) => {
+      if (typeof target !== 'string' || !target) return { error: 'invalid path' };
+      if (!(bytes instanceof Uint8Array) && !(bytes instanceof ArrayBuffer)) return { error: 'invalid bundle data' };
+      const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const isAbs = /^(\/|[A-Za-z]:[\\/])/.test(target);
+      let outPath: string;
+      if (isAbs) outPath = target.toLowerCase().endsWith(BUNDLE_EXT) ? target : `${target.replace(/\.tproj$/i, '')}${BUNDLE_EXT}`;
+      else outPath = join(projectsDir(), safeFilename(target.toLowerCase().endsWith(BUNDLE_EXT) ? target : `${target.replace(/\.tproj$/i, '')}${BUNDLE_EXT}`));
+      const w = await writeBinaryFile(outPath, buf);
+      if (!w.ok) return { error: w.error ?? 'write failed' };
+      await native.fs({ verb: 'trash', path: outPath.replace(/\.tprojz$/i, PROJECT_EXT) }).catch(() => null);
+      return { ok: true, path: outPath, name: projectBaseName(outPath) };
     },
     deleteProjectFile: async (filePath: string) => {
       if (typeof filePath !== 'string' || !filePath || !projectExtOf(filePath)) return { error: 'not a project file' };
@@ -238,6 +262,11 @@ export function installNativeIPC(): void {
     pathForFile: (_file: File): string => '', // WKWebView/WebView2 drops carry no paths — native drag-in comes via the shell (later)
     onShortcut: (_key: string, _h: () => void): Unsub => () => {}, // native menu accelerators: later
   };
+
+  // the ASSET STORE (<dataDir>/assets, the Electron layout) + the read fallback into the Electron app's store
+  const assets = buildAssetKeys({ dataDir, join });
+  Object.assign(overlay, assets.keys);
+  installAssetsProbe(assets);
 
   // the Sample Library (~/Music/Terminator) — libraryCore over terminatorFs, files served at /lib/b64/
   const library = buildLibraryOverlay({ getSettings, setSettings, settingsSync: () => settingsCache });
