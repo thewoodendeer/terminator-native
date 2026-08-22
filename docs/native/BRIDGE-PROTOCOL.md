@@ -105,6 +105,20 @@ Keys are page-chosen, single-use strings (`main:N` / `src:N` / `probe:N`); the s
   hit re-syncs its pad synchronously before `triggerPad`. A 4-minute 44.1k stereo song ≈ 42 MB float32 → ≈ 14
   chunks, ~1–2 s, pads on that buffer wait for `end` before their first native hit.
 
+## `terminatorProcess(req)` — the bundled command-line tools as child processes (2.5c YouTube import)
+`spawn` {`id`, `tool`:"ytdlp", `args`:[…]} → {ok} — the ONLY executables are the bundled ones (`tool` is a name,
+never a path; unknown tool → refused); for yt-dlp the shell prepends `--no-update` + `--js-runtimes quickjs:<bundled
+qjs dir>` (additive: a deno on the machine still ranks first) · `kill` {`id`} · `list` → {running:[ids]} · `tools` →
+{`ytdlp`, `qjs`, `ytdlpDir`, `qjsDir`, `binDir`} ('' when not bundled). Events: `terminator.processOutput` {`id`,
+`data`} (merged stdout+stderr, ≤ 8 KB per event — emitEvent's escape is quadratic) · `terminator.processExit`
+{`id`, `code`}. At most 16 concurrent children; a reader thread per child; the hub kills every child on quit.
+The tools ride in the app: macOS `Contents/Resources/bin/{ytdlp/yt-dlp_macos + _internal/, qjs/qjs}` (qjs universal
+via lipo), Windows `<exe>/bin/{ytdlp/yt-dlp.exe + _internal/, qjs/qjs.exe}` — `cmake/ProvisionTools.cmake`, pinned
+yt-dlp nightly `2026.08.16.020253` (the Electron pin) + quickjs-ng `v0.16.2`, SHA-256 verified, cached in
+`third_party/.tools-cache`; `-DTERMINATOR_BUNDLE_TOOLS=OFF` skips it. The page side is
+`ui/src/renderer/native/processBridge.ts` + `youtubeNative.ts` (the Electron youtubeDownloader.ts ported) and the
+library's YouTube job + `downloadYouTube` pull in `libraryNative.ts`. `dirs` (terminatorFs / boot) now carries `temp`.
+
 ## `terminatorFs(req)` — the `window.terminator` shim's file/dialog backend (Phase 2.4b)
 Generic, message-thread verbs the React app composes into the Electron-era IPC surface in
 `ui/src/renderer/native/ipc-native.ts` (projects, recents, EULA, layout/MIDI-map/bass-patch files, presets, the

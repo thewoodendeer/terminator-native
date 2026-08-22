@@ -65,3 +65,9 @@ for `mac-rtsan`.
 Sparkle (Mac) + WinSparkle (Win) feeds under R2 prefix `terminator-native/`. Binaries first, feed last,
 never reuse a live version. Mac: hardened runtime + notarisation via the Keychain profile. Windows: OV/EV
 cert bought at Phase 9. Not before.
+
+## Bundled tools (yt-dlp + qjs) — 2.5c
+`cmake/ProvisionTools.cmake` (target `TerminatorBundleTools`, runs with every app build) downloads the pinned
+yt-dlp nightly + quickjs-ng `qjs`, SHA-256 verified, into `third_party/.tools-cache` (gitignored) and lays them into
+the bundle. Offline / engine-only: `-DTERMINATOR_BUNDLE_TOOLS=OFF`. Bumping yt-dlp or qjs = the tag/version AND the
+hashes together, in that one file; then re-run the probe with `TERMINATOR_PROBE_NET=1` (a real pull).

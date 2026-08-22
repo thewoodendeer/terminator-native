@@ -345,10 +345,36 @@ app with the SAME on-disk format the Electron app writes — a user's library mo
   move / copy / duplicate / delete (Trash); Preferences → FOLDERS → the library root. YouTube import says it is not
   native yet.
 
+### 2.5c — YOUTUBE IMPORT is native (DONE, 2026-08-22 fourth session)
+Links and playlists pull through the BUNDLED yt-dlp, into the library's YouTube folder — the Electron behaviour.
+- **The runtime question, answered:** yt-dlp ≥ 2025.11 solves YouTube's JS challenge through an external JS
+  runtime (deno / node / quickjs / bun); Electron used itself as Node. The native app bundles **quickjs-ng v0.16.2
+  `qjs` (1.3 MB, universal via lipo)** — verified: `[debug] JS runtimes: quickjs-ng-0.16.2`, challenge provider
+  `quickjs`, itag 140 m4a extracted. No Node/Deno/Python/ffmpeg to install.
+- **Provisioning:** `cmake/ProvisionTools.cmake` (target `TerminatorBundleTools`, ALL) downloads the pinned yt-dlp
+  nightly `2026.08.16.020253` (the Electron pin — ONEDIR; the mac `_internal/Python.framework` stripped like the
+  Electron script) + qjs, SHA-256 verified, cached in `third_party/.tools-cache`, into `Resources/bin` (mac) /
+  `<exe>/bin` (win). ~82 MB of yt-dlp in the bundle (the Electron DMG carries the same). `-DTERMINATOR_BUNDLE_TOOLS=OFF`
+  for offline/engine-only builds.
+- **Bridge:** `terminatorProcess` (`app/src/ProcessHub.*`) — spawn/kill/list/tools; only the bundled tools run;
+  `--no-update --js-runtimes quickjs:<dir>` prepended by the shell; merged output streamed in ≤ 8 KB events from a
+  reader thread; exit events. Page: `processBridge.ts` + `youtubeNative.ts` (youtubeDownloader.ts ported) +
+  the job runner and `downloadYouTube` (pullYouTube) in `libraryNative.ts`.
+- **Gate evidence:** probe: `ytdlpBundled`, `qjsBundled`, `--version` through the bridge = `2026.08.16.020253`;
+  with `TERMINATOR_PROBE_NET=1` (CI mac job has it) a REAL pull of "Me at the zoo" (19 s) into a temp root:
+  **309,157 B m4a in 2.1 s**, named by title, then trashed. Build 0 warnings, clang-format clean, ui gate green.
+- **CI fix:** the Windows job's library test failed on separators (the harness passed `sep: '/'`; Windows paths
+  are backslash) — the test now uses the platform separator like the app does and compares via the core's `norm`.
+- **Victor's pass:** sample browser → YOUTUBE row "+ link" → paste a video link → it lands in YOUTUBE named by
+  title; a playlist link → a folder under YOUTUBE filling up (3 at a time, cancel works); LOAD LINK / GET SAMPLE
+  in the LOAD section → the song pulls into YOUTUBE and loads. Known: the first launch after a fresh install pays
+  macOS's one-time code-signature validation of yt-dlp's ~100 dylibs (seconds), then 0.3 s per pull.
+
 ### 2.5 / 2.6 — PARTIAL / NOT STARTED
 2.5: ChopperView boots natively with the real UI, Preferences native, **the pads sound through the native engine
-(2.5a)**, **the sample library is native (2.5b)**. Missing: yt-dlp pulls, RECORD SAMPLE (the page's recorder saves
-through `librarySaveRecording` — native capture is Phase 5), the sequencer/drums/bass through the engine (Phase 3). 2.6: the CI artifact
+(2.5a)**, **the sample library is native (2.5b)**, **YouTube import is native (2.5c)**. Missing: RECORD SAMPLE
+(the page's recorder saves through `librarySaveRecording` — native capture is Phase 5), the sequencer/drums/bass
+through the engine (Phase 3), library/YouTube loads by PATH (no PCM upload). 2.6: the CI artifact
 (`Terminator-mac-universal-unsigned.zip`) is an unsigned universal .app with the UI bundled; "the chopper's pads
 work natively" is now true, "the chopper works natively" (sequencer, mixer) is not yet — not claimed.
 
@@ -397,9 +423,8 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 1. `gh run list` — confirm CI is green for the 2.5a commits (mac-universal probe asserts the shadow; Windows/MSVC
    compiles SampleRegistry + the gate flag). Then Victor's pad pass above (his latency verdict decides how much
    of Phase 3 goes first).
-2. 2.5 tail: yt-dlp child process (a generic `terminatorProcess` spawn verb + the pinned onedir nightly bundled by
-   CMake, the Electron `youtubeDownloader.ts` logic in the page like the library); library loads by PATH
-   (`terminatorSamples loadFile`) so library pulls never upload PCM; RECORD minimal.
+2. 2.5 tail: library/YouTube loads by PATH (`terminatorSamples loadFile` + the pad source keyed by path) so pulls
+   never upload PCM; RECORD minimal; the R2 pull → library copy.
 3. Ownership moves native: peaks via resource URLs; pad sources by PATH; chop seq on the native transport
    (Phase 3 start); LEDs/playhead from `activePads`/`lastTriggeredPadPositionSec`.
 4. **Phase 4 is now specced to Victor's brief** (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" + decision

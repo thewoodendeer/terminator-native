@@ -56,6 +56,12 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `/lib/b64/` URL; optional `importFiles` on the bridge type + mapping), `chopper/LibraryTree.tsx` (a Finder drop
   with no paths — every WebView drop — goes through `importFiles` with the File bytes). Gate: `scripts/
   test-library.mts` (39 cases, the Electron harness mirrored, Node ≥ 22.6 type-stripping) runs inside `npm run gate`.
+- **YouTube import (2.5c, 2026-08-22):** NEW `src/renderer/native/processBridge.ts` (`terminatorProcess`: the
+  bundled yt-dlp as a child process, output + exit events) + `src/renderer/native/youtubeNative.ts` (the Electron
+  `src/main/youtubeDownloader.ts` ported: one-video download named by title, `--flat-playlist -J` enumeration,
+  3-worker batch, cancel, error mapping, the 403 re-run); `libraryNative.ts` runs the import job (the Electron
+  main.ts `library:youtubeImport` logic) and `downloadYouTube` (the `pullYouTube` GET SAMPLE path → the library's
+  YouTube folder → `cacheUrl` = the shell's `/lib/b64/` URL). No edits to the shared renderer for this.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 
