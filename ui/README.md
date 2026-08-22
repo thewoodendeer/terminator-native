@@ -9,7 +9,7 @@ NOT committed — `scripts/sync-assets.sh` copies them from a local Electron che
 
 ## Build + gate
 ```
-cd ui && npm ci && npm run gate      # = tsc --noEmit (baseline below) + vite build --mode native → ui/dist
+cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-library.mts + vite build --mode native → ui/dist
 ```
 - **tsc baseline = 5 errors**, the SAME five the Electron renderer carries (ChopperView `ipc` possibly
   undefined ×2, exporters `Uint8Array`, mpcSample `replaceAll` ×2), recorded in `tsc-baseline.json` (file + TS
@@ -48,6 +48,14 @@ cd ui && npm ci && npm run gate      # = tsc --noEmit (baseline below) + vite bu
 - NEW `src/renderer/native/nativeEngineShadow.ts` (audio through the C++ engine — see its header) and the one-line
   `useEffect(() => attachNativeEngineShadow(engine), [engine])` in `chopper/ChopperView.tsx` + `chopper/HardwareView.tsx`
   (+ their import). `juceBridge.ts` grew `native.samples` (`terminatorSamples`).
+- **The Sample Library (2.5, 2026-08-22):** NEW `src/renderer/native/libraryCore.ts` (the Electron
+  `src/main/library.ts` logic ported verbatim-in-logic onto an injectable `FsApi` — pure, Node-runnable) +
+  `src/renderer/native/libraryNative.ts` (FsApi over `terminatorFs`, the `window.terminator.library*` keys + the
+  FOLDERS-tab root methods, `libraryFileUrl`, `libraryImportFiles`, the probe self-test); `ipc-native.ts` installs
+  them. Edits: `chopper/libraryBridge.ts` (`libFileUrl` asks `window.terminator.libraryFileUrl` first → the shell's
+  `/lib/b64/` URL; optional `importFiles` on the bridge type + mapping), `chopper/LibraryTree.tsx` (a Finder drop
+  with no paths — every WebView drop — goes through `importFiles` with the File bytes). Gate: `scripts/
+  test-library.mts` (39 cases, the Electron harness mirrored, Node ≥ 22.6 type-stripping) runs inside `npm run gate`.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

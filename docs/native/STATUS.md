@@ -319,10 +319,36 @@ silent bus (`mutePadVoices`) so what you hear is the native sampler.
   main buffer/pad sources decoded by PATH (library/yt/recordings/assets) so uploads vanish for files; the chop
   sequencer on the native transport (Phase 3) with `triggerPadAtSample`; LEDs/playhead from the snapshot.
 
+### 2.5b — THE SAMPLE LIBRARY is native (DONE, 2026-08-22 fourth session)
+`~/Music/Terminator` (library.json + Recordings/YouTube/Imports/User Samples, linked folders) works in the native
+app with the SAME on-disk format the Electron app writes — a user's library moves between the two apps unchanged.
+- **Design:** the Electron library logic (`src/main/library.ts`, 968 lines) is ported verbatim-in-logic into the
+  page as `ui/src/renderer/native/libraryCore.ts` over an injectable `FsApi` (first-party code; one implementation
+  of the library.json semantics), `libraryNative.ts` wires it to `terminatorFs` and installs the `window.terminator.
+  library*` surface + the Preferences FOLDERS root methods (point/move/reset/reveal) + `libraryFileUrl`. The shell
+  grew generic fs verbs (`stat`/`move`/`copy`/`writeBinary`/`openPath`/`serveRoots`) and serves library files at
+  `/lib/b64/<path>` (path-checked against the roots the page registered; `<audio>` preview + `fetch` both work).
+  Finder drops (no paths in a WebView) come in as bytes (`importFiles` → Imports/ or the USER SAMPLES folder).
+  Not native yet: YouTube import (the job reports an error phase); "import R2 as a real copy" keeps a reference.
+- **Gate evidence:** `ui/scripts/test-library.mts` **39/39** (the Electron harness's cases + importFiles, USER
+  SAMPLES on-disk ops, resolveReadable safety, moveLibrary) in `npm run gate`; probe on Victor's REAL library (698
+  nodes incl. a linked Ableton folder): tree loaded, a recording (338,924 B) served byte-complete at its URL,
+  `audioCanPlay: true` with `TERMINATOR_PROBE_AUDIO=1`, `/etc/hosts` refused. Build 0 warnings, clang-format clean.
+- **Gotcha found + fixed — JUCE `emitEvent` is quadratic:** it escapes every C++→JS payload with `String::replace`
+  → a 230 KB `readText` reply froze the message thread for minutes (caught by `sample` on the hung probe). Large
+  replies (> 24 KB JSON) are now stashed and fetched through `/blob/<token>` (`ShellServices::maybeLarge`,
+  transparent in `juceBridge.ts`). This also protects opening big `.tproj` files. Rule: never answer > ~24 KB
+  through `complete()`/`emitEvent` — stash it.
+- **Victor's pass:** open the sample browser in the native app — RECORDINGS / YOUTUBE / IMPORTS / USER SAMPLES +
+  your folders + the linked Ableton folder should match the Electron app; preview a library file; LOAD one (main
+  track and onto a pad); drag a WAV from Finder onto IMPORTS or a USER SAMPLES folder; new folder / rename /
+  move / copy / duplicate / delete (Trash); Preferences → FOLDERS → the library root. YouTube import says it is not
+  native yet.
+
 ### 2.5 / 2.6 — PARTIAL / NOT STARTED
 2.5: ChopperView boots natively with the real UI, Preferences native, **the pads sound through the native engine
-(2.5a above)**. Missing: the sample browser on `~/Music/Terminator/library.json` (read-only), yt-dlp pulls,
-RECORD SAMPLE minimal, the sequencer/drums/bass through the engine (Phase 3). 2.6: the CI artifact
+(2.5a)**, **the sample library is native (2.5b)**. Missing: yt-dlp pulls, RECORD SAMPLE (the page's recorder saves
+through `librarySaveRecording` — native capture is Phase 5), the sequencer/drums/bass through the engine (Phase 3). 2.6: the CI artifact
 (`Terminator-mac-universal-unsigned.zip`) is an unsigned universal .app with the UI bundled; "the chopper's pads
 work natively" is now true, "the chopper works natively" (sequencer, mixer) is not yet — not claimed.
 
@@ -371,8 +397,9 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 1. `gh run list` — confirm CI is green for the 2.5a commits (mac-universal probe asserts the shadow; Windows/MSVC
    compiles SampleRegistry + the gate flag). Then Victor's pad pass above (his latency verdict decides how much
    of Phase 3 goes first).
-2. 2.5 tail: library read-only (`~/Music/Terminator/library.json` via the resource provider + `terminatorSamples
-   loadFile` by path so library pulls never upload PCM), yt-dlp child process, RECORD minimal.
+2. 2.5 tail: yt-dlp child process (a generic `terminatorProcess` spawn verb + the pinned onedir nightly bundled by
+   CMake, the Electron `youtubeDownloader.ts` logic in the page like the library); library loads by PATH
+   (`terminatorSamples loadFile`) so library pulls never upload PCM; RECORD minimal.
 3. Ownership moves native: peaks via resource URLs; pad sources by PATH; chop seq on the native transport
    (Phase 3 start); LEDs/playhead from `activePads`/`lastTriggeredPadPositionSec`.
 4. **Phase 4 is now specced to Victor's brief** (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" + decision

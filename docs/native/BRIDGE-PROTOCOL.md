@@ -125,6 +125,25 @@ session autosave). `req.verb`:
 | `clipboardReadText` | — | `{ ok, text }` |
 Paths must be absolute; relative or over-long paths are refused. Errors: `{ ok:false, error }`.
 
+**More verbs (2.5 library, 2026-08-22):** `stat` {path} → {exists,isDir,isFile,size,modifiedAt,createdAt} · `move`
+{from,to} (rename, across volumes; refuses an existing target / a folder into itself) · `copy` {from,to} (file, or
+folder recursively — dot-files skipped) · `writeBinary` {path, data base64, append?} (recordings + WebView drops —
+the page holds the bytes; chunked appends from JS) · `openPath` {path} (open a folder in Finder/Explorer) ·
+`serveRoots` {roots:[…]} (what `/lib/b64/` may serve — the page's library module registers the library root + its
+linked folders after every load/save; nothing is servable before). `list` entries also carry `createdAt`.
+
+**Resource URLs the shell serves (GET through the page's origin):** `/lib/b64/<base64url(absolute path)>` → the
+file's bytes + MIME, ONLY if it sits under a registered root and exists (else 404 — the probe asserts `/etc/hosts`
+is refused); WebKit's `<audio>` preview streams it (probe `audioCanPlay: true`). `/blob/<token>` → a LARGE native-
+function reply (see below), one-shot, 60 s expiry.
+
+**LARGE REPLIES (gotcha, found 2026-08-22):** JUCE's `emitEvent` escapes every C++→JS payload into a JS string
+literal with `String::replace("\\", …)` — QUADRATIC in the payload; a 230 KB `readText` (library.json) stalled the
+message thread for minutes (the whole app froze — the timer, the probe, everything). `ShellServices::maybeLarge`
+turns any reply whose JSON exceeds 24 KB into `{ ok:true, __largeReply:"/blob/<token>", bytes }`; `juceBridge.ts`'s
+`lazy()` fetches it transparently, so callers never see it. Applied to `readText` and `list`; apply it to any new
+verb that can answer big (never send > ~24 KB through `complete()`/`emitEvent`).
+
 ## `terminatorSettings(req)` — the UI's settings
 `verb`: `get` → `{ ok, settings }` · `set` {`patch`} → shallow-merges into settings.json **`app`** (the Electron
 `terminator-settings.json` keys, verbatim — Phase 8 imports that file here), saves, emits
