@@ -44,6 +44,20 @@ inline double totalTrimmedSec(const TrimList& t) noexcept
         s += r.endSec - r.startSec;
     return s;
 }
+/// The EFFECTIVE duration of a `fileDurationSec` source under `t` (regions clamped to the file) — what the
+/// caller's rebuilt effective buffer lasts; the Document keeps its Analysis.bufferDurationSec at this.
+inline double effectiveDurationSec(double fileDurationSec, const TrimList& t) noexcept
+{
+    double removed = 0.0;
+    for (const auto& r : t)
+    {
+        const double s = std::max(0.0, std::min(fileDurationSec, r.startSec));
+        const double e = std::max(0.0, std::min(fileDurationSec, r.endSec));
+        if (e > s)
+            removed += e - s;
+    }
+    return std::max(0.0, fileDurationSec - removed);
+}
 inline bool sameTrims(const TrimList& a, const TrimList& b) noexcept
 {
     if (a.size() != b.size())
