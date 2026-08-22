@@ -8,8 +8,9 @@
     "dev": "vite --mode native",
     "build": "vite build --mode native",
     "typecheck": "node scripts/typecheck.mjs",
-    "gate": "npm run typecheck && npm run build",
-    "typecheck:update-baseline": "node scripts/typecheck.mjs --update"
+    "gate": "npm run typecheck && npm run test:library && npm run build",
+    "typecheck:update-baseline": "node scripts/typecheck.mjs --update",
+    "test:library": "node scripts/test-library.mts"
   },
   "dependencies": {
     "@audio/stretch-transient": "1.2.1",

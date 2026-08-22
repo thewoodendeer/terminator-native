@@ -584,12 +584,16 @@ export default function LibraryTree({ playlists, library, query, selKey, isPlayi
     e.preventDefault();
     const h = hitRow(e.clientX, e.clientY);
     setExtOver(null);
-    const paths = Array.from(e.dataTransfer.files).map(f => library.pathForFile(f)).filter(Boolean);
-    if (!paths.length) return;
+    const files = Array.from(e.dataTransfer.files);
+    const paths = files.map(f => library.pathForFile(f)).filter(Boolean);
+    // Terminator 3.0 (WebView): drops carry no paths — the bytes go in through importFiles instead.
+    if (!paths.length && !(library.importFiles && files.length)) return;
     const tgt = h ? dropTarget(h) : { targetId: null as string | null };
     const t = tgt ?? { targetId: null as string | null };
     // Files dropped on TERMINATOR / a linked folder land in IMPORTS.
-    const r = await library.importPaths(paths, t.targetId ?? (h && !tgt ? 'imports' : null), t.index);
+    const r = paths.length
+      ? await library.importPaths(paths, t.targetId ?? (h && !tgt ? 'imports' : null), t.index)
+      : await library.importFiles!(files, t.targetId ?? (h && !tgt ? 'imports' : null), t.index);
     if (r && 'error' in (r as any)) onStatus(`Import failed: ${(r as any).error}`);
     else onStatus(`Imported ${(r as string[]).length} item${(r as string[]).length === 1 ? '' : 's'}`);
   };

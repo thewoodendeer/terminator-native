@@ -40,6 +40,9 @@ export interface LibraryBridge {
   pickFolder: () => Promise<string[] | { error: string }>;
   pickFiles: (targetId: string | null) => Promise<string[] | { error: string }>;
   saveRecording: (payload: { filename: string; data: ArrayBuffer }) => Promise<LibNode | { error: string }>;
+  /** Terminator 3.0 (WebView drops carry no paths): the dropped Files' BYTES → Imports/ (or the USER SAMPLES
+   *  folder they landed on). Absent in Electron (importPaths has the paths). */
+  importFiles?: (files: File[], targetId: string | null, index?: number) => Promise<string[] | { error: string }>;
   youtubeImport: (url: string, targetId: string | null) => Promise<{ jobId: string }>;
   youtubeCancel: (jobId: string) => Promise<unknown>;
   onChanged: (handler: () => void) => () => void;
@@ -47,8 +50,13 @@ export interface LibraryBridge {
   pathForFile: (file: File) => string;
 }
 
-/** Playable URL for a library file node (served off disk by the main process). */
-export const libFileUrl = (nodeId: string): string => `terminator-lib://file/${encodeURIComponent(nodeId)}`;
+/** Playable URL for a library file node (served off disk by the main process; in Terminator 3.0 the JUCE shell
+ *  serves it at /lib/b64/<path> — `window.terminator.libraryFileUrl` resolves the node synchronously). */
+export const libFileUrl = (nodeId: string): string => {
+  const t = (window as any).terminator;
+  if (t && typeof t.libraryFileUrl === 'function') { const u = t.libraryFileUrl(nodeId); if (typeof u === 'string' && u) return u; }
+  return `terminator-lib://file/${encodeURIComponent(nodeId)}`;
+};
 /** Browser entry ids for library files carry this prefix so the host can tell
  *  them from R2 ids. */
 export const LIB_ID_PREFIX = 'lib:';
@@ -75,6 +83,7 @@ export function libraryBridgeFromWindow(): LibraryBridge | undefined {
     pickFolder: t.libraryPickFolder,
     pickFiles: t.libraryPickFiles,
     saveRecording: t.librarySaveRecording,
+    importFiles: typeof t.libraryImportFiles === 'function' ? t.libraryImportFiles : undefined,
     youtubeImport: t.libraryYouTubeImport,
     youtubeCancel: t.libraryYouTubeCancel,
     onChanged: t.onLibraryChanged,

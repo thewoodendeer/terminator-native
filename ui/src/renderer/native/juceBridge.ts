@@ -30,12 +30,23 @@ export const isNative = (): boolean => !!backend();
 /** The shell's boot payload (null outside the shell). */
 export const nativeBoot = () => (typeof window !== 'undefined' ? window.__TERMINATOR_NATIVE__ ?? null : null);
 
+/** A big reply (> ~24 KB) comes back as { __largeReply: "/blob/<token>" } — JUCE's emitEvent escapes C++→JS
+ *  payloads with a quadratic String::replace, so the shell stashes large JSON and we fetch it through the resource
+ *  provider instead (ShellServices::maybeLarge). Transparent to every caller. */
+async function resolveLarge(res: any): Promise<any> {
+  if (res && typeof res === 'object' && typeof res.__largeReply === 'string') {
+    const r = await fetch(new URL(res.__largeReply, location.href).href);
+    if (!r.ok) throw new Error(`large reply fetch failed (${r.status})`);
+    return r.json();
+  }
+  return res;
+}
 function lazy<TArg, TRes>(name: string): (arg?: TArg) => Promise<TRes> {
   let f: ((...a: any[]) => Promise<any>) | null = null;
   return (arg?: TArg) => {
     if (!isNative()) return Promise.reject(new Error(`${name}: not running inside the Terminator shell`));
     f ??= getNativeFunction(name) as (...a: any[]) => Promise<any>;
-    return arg === undefined ? f() : f(arg);
+    return (arg === undefined ? f() : f(arg)).then(resolveLarge);
   };
 }
 

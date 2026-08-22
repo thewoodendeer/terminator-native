@@ -15,12 +15,16 @@
  * comes with the licence flow in Phase 8/9), recents, projects folder + .tproj open/save/list/delete (Trash)
  * with native dialogs, layout / MIDI-map / bass-patch files, per-videoId presets + named presets + the session
  * autosave (JSON files under the app data dir, same layout as Electron's terminator-presets), reveal in
- * Finder/Explorer, open external links, clipboard text. NOT yet native (browser-shim or undefined): .tprojz
- * bundles + the asset store (binary transport), library/drums/stems/YouTube, the Preferences window,
- * menu shortcuts / Recent submenu / open-with-file events, drag-out, licence, cloud presets.
+ * Finder/Explorer, open external links, clipboard text, the Preferences window, **the Sample Library**
+ * (`library*` + the FOLDERS-tab root methods — libraryNative.ts: the Electron library logic ported over
+ * terminatorFs; files served by the shell at /lib/b64/; Finder drops come in as bytes via libraryImportFiles).
+ * NOT yet native (browser-shim or undefined): .tprojz bundles + the asset store (binary transport),
+ * drums/stems/YouTube pulls (libraryYouTubeImport reports an error phase), menu shortcuts / Recent submenu /
+ * open-with-file events, drag-out, licence, cloud presets.
  */
 import { installBrowserIPC } from '../ipc-browser';
 import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
+import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -234,6 +238,11 @@ export function installNativeIPC(): void {
     pathForFile: (_file: File): string => '', // WKWebView/WebView2 drops carry no paths — native drag-in comes via the shell (later)
     onShortcut: (_key: string, _h: () => void): Unsub => () => {}, // native menu accelerators: later
   };
+
+  // the Sample Library (~/Music/Terminator) — libraryCore over terminatorFs, files served at /lib/b64/
+  const library = buildLibraryOverlay({ getSettings, setSettings, settingsSync: () => settingsCache });
+  Object.assign(overlay, library.keys);
+  installLibraryProbe(library.core, library.keys);
 
   (window as any).terminator = { ...base, ...overlay };
   (window as any).__terminatorNativeIpc = { installed: true, version: boot?.version ?? '' };
