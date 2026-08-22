@@ -446,7 +446,12 @@ sound through the native engine (2.5a EngineClient shadow, probe-proven)**.
 NOT DONE: library/yt-dlp/RECORD (2.5), the sequencer/drums/bass/mixer through the engine (Phases 3/4), stretch,
 streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #1 claim (2.6).
 
-### Next session (in order)
+### Next session (in order) — updated at the end of the fourth session
+0. `gh run list` — confirm CI green for tip `9c37f7c` (mac-universal: probe incl. the real YouTube pull; Windows:
+   ProvisionTools on Windows + MSVC compile of ProcessHub/readBinary + the library test with backslash paths).
+0b. Victor's passes (pads native / library / YouTube / projects with assets / controller) — see each section.
+0c. **Phase 3** per the DESIGN below — start with 3.1 (C++ Transport + ChopSequencer, headless, tests), then 3.2.
+(The older list follows for reference.)
 1. `gh run list` — confirm CI is green for the 2.5a commits (mac-universal probe asserts the shadow; Windows/MSVC
    compiles SampleRegistry + the gate flag). Then Victor's pad pass above (his latency verdict decides how much
    of Phase 3 goes first).
@@ -457,7 +462,41 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 4. **Phase 4 is now specced to Victor's brief** (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" + decision
    #7): premium JUCE effects + accurate summing + free routing — read it before the mixer sessions.
 
-## Phases 3–9 — NOT STARTED
+## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
+Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).
+**Shape: one native Transport, everything an EventSource; the page's sequencers become SHADOWS then move over.**
+- **3.1 C++ core (headless, tests first):** `Transport` in the Engine (int64 sample position, bpm 20..300, PPQ 960
+  beat position, `play(anchorSample)` / `stop` / `pause` / `resume` / loop range / `seek`; the snapshot carries
+  playing/paused/position/bar-beat/bpm/loopStart); an `EventSource` interface `collect(blockStart, blockEnd, out)`
+  the audio callback asks every block (no look-ahead, no timers: a frozen UI thread never stalls audio);
+  `ChopSequencer` = the first EventSource (pattern: bars, resolution, grid/velGrid, loop, swing — swing applied
+  LIVE (= export parity, the documented fix); queued pattern switch at step 0; per-mute-group note length → a
+  stop/release at the next same-group hit or the pattern end (the TS 5 ms tail cut); stepDur re-read per step so a
+  BPM change applies at the next step; non-loop stop). Commands: `setSequence{idx, bars, resolution, grid, velGrid,
+  loop, swing}` (JS→C++ is not quadratic — whole patterns are fine), `seqSelect/seqQueue{idx}`, `seqPlay{now|at}`,
+  `seqStop`, `seqPause`, `seqResume`, `setBpm`, `seqLoop{on}`. Gates: port drum-timing/chop-seq-standalone/input-q
+  assertions to the sample clock; 10-minute no-drift test; a CPU-starve test (no commands for 2 s → zero dropped
+  events); block-size invariance.
+- **3.2 The page binding (shadow):** `playSeq` → `seqPlay` natively and the TS `scheduleSeqStepAudio` voices go to the
+  silent bus (the native seq is what you hear); the TS keeps its cursor/boundaries for the UI but
+  `getSeqCursorStep/Phase` read the native position (a `transportClock` hook on the engine: the snapshot's sample
+  position extrapolated with performance.now(), re-anchored at 20 Hz). Live-record landing stays in the page for now
+  (its hit time comes from the native MIDI timestamp when the hit is MIDI — 2.5e). **The two-clock problem:** drums +
+  bass stay Web Audio on the page's AudioContext clock until 3.3/3.4; clock-rate difference ≈ 0.6–3 ms/min. Bridge:
+  the page re-anchors `drumEngine.start(atCtxTime)` / `bassEngine.start` on every native loop start, mapping native
+  sample position → ctx time via (snapshot hostTime↔sample) + `ctx.getOutputTimestamp()` (both referenced to
+  performance.now) — error < 1 ms per loop, no audible drift. Document it as a known interim.
+- **3.3 Drums native:** `DrumSequencer` EventSource (96 steps/bar, graphs velocity/SHIFT/pan/REPEAT, mute-group
+  time-ordered choke, swing on 16ths) + drum voices on the Sampler (raise kMaxPads to 128: pads 64..127 = drum
+  lanes, or a second bank) with ceilPeak/declick applied at load; routing to strips comes with Phase 4.
+- **3.4 Bass synth native** (the Model D-style worklet → C++; PPQ 96 tick map, slides, bends). **3.5 MIDI clock
+  in/out from the transport (sample-exact), MIDI-learn store unification, note-out.** **3.6 Arp, metronome (through
+  the mixer), count-in on the sample grid.** **3.7 Live-record landing on the native clock; the one-owner rule in C++.**
+- Until drums/bass are native, 3.2's "what you hear" is: live pads + chop seq native (dry, outs 1/2), drums/bass
+  through the WebView's AudioContext (the system default output). Victor's pass after 3.2: a chop pattern at 90 BPM
+  for 10 minutes against a metronome/DAW click — no drift; pattern switch at the loop boundary; pause/resume.
+
+## Phases 3–9 — NOT STARTED (Phase 3 has a design above)
 Transport/sequencers/MIDI (3), mixer/FX/console/PDC (4), recording (5), plugins (6), stems native (7),
 persistence/library/exports (8), ship (9). Each is 6–18 sessions in the plan. The Phase-2 planners already lay
 groundwork for 3 (patternToEvents, swing, refit, the transport-agnostic Engine) and 8 (the ValueTree ⇄
