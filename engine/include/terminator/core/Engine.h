@@ -4,6 +4,8 @@
 // snapshot(). Phase 1: pad sampler (voices, varispeed, envelopes, choke, per-pad output pair), test tone,
 // master gain, transport counter, host-clock mapping, MIDI note map, loopback calibration.
 #include <cstdint>
+#include <memory>
+#include <vector>
 
 #include "terminator/core/Command.h"
 #include "terminator/core/CommandQueue.h"
@@ -56,18 +58,19 @@ class Engine
     const Config& config() const noexcept { return config_; }
 
     /// Producer side of the command queue — message thread only.
-    Commands& commands() noexcept { return commands_; }
+    Commands& commands() noexcept { return *commands_; }
     /// One MIDI input queue per port (producer = that port's driver thread).
     MidiQueue& midiQueue(int port) noexcept
     {
-        return midiQueues_[port < 0 ? 0 : (port >= kMaxMidiPorts ? kMaxMidiPorts - 1 : port)];
+        const int clamped = port < 0 ? 0 : (port >= kMaxMidiPorts ? kMaxMidiPorts - 1 : port);
+        return midiQueues_[static_cast<std::size_t>(clamped)];
     }
 
     /// Latest engine state — message thread only.
     const StateSnapshot& snapshot() noexcept { return snapshot_.read(); }
 
     /// Calibration capture buffer: readable on the message thread once snapshot().calibrationState == 2.
-    const float* calibrationCapture() const noexcept { return calibCapture_; }
+    const float* calibrationCapture() const noexcept { return calibCapture_.data(); }
     std::uint32_t calibrationCaptureFrames() const noexcept { return calibRecorded_; }
     /// The click that was emitted (kCalibrationClickFrames long), for cross-correlation.
     static const float* calibrationClick() noexcept;
@@ -97,8 +100,10 @@ class Engine
     Config config_{};
     bool prepared_ = false;
 
-    Commands commands_;
-    MidiQueue midiQueues_[kMaxMidiPorts];
+    // The big fixed buffers live on the heap (allocated ONCE in the constructor — non-RT) so an Engine value is
+    // small enough for any stack (Windows threads default to 1 MB; the capture buffer alone is 1.5 MB).
+    std::unique_ptr<Commands> commands_;
+    std::vector<MidiQueue> midiQueues_;
     SnapshotPublisher<StateSnapshot> snapshot_;
     Sampler sampler_;
 
@@ -133,7 +138,7 @@ class Engine
     std::uint32_t calibTarget_ = 0;   // frames to record
     std::uint32_t calibRecorded_ = 0; // frames recorded so far
     std::uint32_t calibClickPos_ = 0; // frames of the click emitted so far
-    float calibCapture_[kCalibrationMaxFrames];
+    std::vector<float> calibCapture_;  // kCalibrationMaxFrames, allocated in the constructor
 };
 
 } // namespace terminator

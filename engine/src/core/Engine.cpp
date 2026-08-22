@@ -38,11 +38,11 @@ const float* Engine::calibrationClick() noexcept
 }
 
 Engine::Engine()
+    : commands_(std::make_unique<Commands>()), midiQueues_(kMaxMidiPorts), calibCapture_(kCalibrationMaxFrames, 0.0f)
 {
     for (int n = 0; n < 128; ++n)
         noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kMaxPads ? n - 36 : -1); // A01 = C1 (note 36)
     clickTable(); // warm the table off the RT path
-    std::fill_n(calibCapture_, kCalibrationMaxFrames, 0.0f);
 }
 
 void Engine::prepare(const Config& config)
@@ -191,7 +191,7 @@ void Engine::drainCommands(int numSamples) noexcept
 {
     Command c;
     // Bounded: at most one full queue per block, so a flooding producer cannot starve the callback.
-    for (std::size_t n = 0; n < Commands::capacity() && commands_.pop(c); ++n)
+    for (std::size_t n = 0; n < Commands::capacity() && commands_->pop(c); ++n)
         apply(c, numSamples);
 }
 
@@ -241,7 +241,7 @@ void Engine::publish(int numSamples) noexcept
     for (int ch = 0; ch < kMaxInputChannels; ++ch)
         s.inputPeak[ch] = inputPeak_[ch];
     s.commandsApplied = commandsApplied_;
-    s.commandsDropped = commands_.droppedCount();
+    s.commandsDropped = commands_->droppedCount();
     s.clock.hostNs = blockHostNs_;
     s.clock.samplePosition = samplesProcessed_ - static_cast<std::uint64_t>(numSamples);
     s.clock.blockSize = static_cast<std::uint32_t>(numSamples);
@@ -296,7 +296,7 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
         const float* in = inputs[calibIn_];
         const std::uint32_t room = calibTarget_ - calibRecorded_;
         const std::uint32_t n = std::min<std::uint32_t>(room, static_cast<std::uint32_t>(numSamples));
-        std::copy_n(in, n, calibCapture_ + calibRecorded_);
+        std::copy_n(in, n, calibCapture_.data() + calibRecorded_);
         calibRecorded_ += n;
         if (calibRecorded_ >= calibTarget_)
             calibState_ = 2;

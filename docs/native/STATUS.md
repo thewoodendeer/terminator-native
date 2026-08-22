@@ -50,8 +50,13 @@ Verdict: ☐ pending
 | 1.5 Stress: 128 voices + stealing past 256 allocation-free; block-size invariance 32…2048; rates 44.1k/96k/192k; RTSan clean | DONE (headless) | device-switch-while-playing = his pass |
 | `terminator-render` project v0 grew `pads[]` + `events[]` (sample-accurate) — the golden-render harness spine | DONE | |
 
-**Gate evidence (local, M1 Max):** `mac-debug` 0 warnings, **45/45** ctest; `mac-rtsan` see below; probe OK on the
-Phase 1 shell (64 pads, MIDI port listed, device + engine lines live). CI: see the run linked in git log.
+**Gate evidence (local, M1 Max):** `mac-debug` **45/45** ctest; `mac-rtsan` 45/45; probe OK on the Phase 1 shell
+(64 pads, MIDI port listed, device + engine lines live).
+**CI run 32588994003 (Phase 1 push):** mac universal ✅ · mac Intel ✅ · mac RTSan ✅ · **Windows: configure + build ✅
+(ASIO SDK + WebView2 resolved on the runner) but ctest ✗ — `SIGSEGV Stack overflow`: `Engine` was ~2 MB by value
+(1.5 MB calibration capture + queues) and tests/OfflineRenderer put it on a 1 MB Windows stack.** Fixed in the
+commit after this note (big buffers heap-allocated once in the constructor; sizeof(Engine) is now ~30 KB) — the
+NEXT session must confirm the re-run is green on all four jobs (`gh run list`) before starting Phase 2.
 **Gate items that need Victor (cannot be measured without the interface):** RTL ≤ 3 ms @64/48k on the Model 16
 (use **Measure** with a cable from an output to an input — the page prints samples + ms + compensation);
 pad hit → sound ≤ 1 buffer + driver (feel); outputs 3–8 audible (set a pad's out pair / the test tone pair).
