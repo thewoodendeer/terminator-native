@@ -13,6 +13,7 @@
   "dependencies": {
     "@audio/stretch-transient": "1.2.1",
     "@breezystack/lamejs": "^1.2.7",
+    "@juce-framework/webview": "^1.0.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "soundtouchjs": "^0.3.0"

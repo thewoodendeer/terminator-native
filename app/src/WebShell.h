@@ -1,7 +1,7 @@
 #pragma once
 // WebShell — the WebView that renders the UI, plus the bridge (docs/native/BRIDGE-PROTOCOL.md):
 //   JS → C++ : native functions  terminatorInfo() · terminatorCommand(cmd) · terminatorAudio(req) ·
-//              terminatorMidi(req) · terminatorPads(req)
+//              terminatorMidi(req) · terminatorPads(req) · terminatorFs(req) · terminatorSettings(req)
 //   C++ → JS : event "terminator.snapshot" at 20 Hz with the engine StateSnapshot + device/MIDI stats
 // The page is served at WebBrowserComponent::getResourceProviderRoot(): the built React UI (ui/dist, copied
 // into the app bundle's Resources/ui at build time — or TERMINATOR_UI_DIR=<dir> to point at any dist folder)
@@ -22,6 +22,8 @@
 #include "terminator/io/SampleStore.h"
 #include "terminator/io/Settings.h"
 
+#include "ShellServices.h"
+
 namespace terminator::app
 {
 
@@ -39,6 +41,7 @@ class WebShell final : public juce::Component, private juce::Timer
     void timerCallback() override;
     void pageLoaded(const juce::String& url);
     void runProbe();
+    void runProbeAsyncChecks();
     std::optional<juce::WebBrowserComponent::Resource> provideResource(const juce::String& url);
     /// Where the built React UI lives (ui/dist copied into the bundle at build time, or TERMINATOR_UI_DIR).
     static juce::File resolveUiDir();
@@ -60,6 +63,7 @@ class WebShell final : public juce::Component, private juce::Timer
     SampleStore& samples_;
     SampleLoader& loader_;
     Settings& settings_;
+    ShellServices services_; // terminatorFs / terminatorSettings — the window.terminator shim's backend
     juce::String audioError_;
     std::unique_ptr<Browser> browser_;
     std::unique_ptr<juce::FileChooser> chooser_;

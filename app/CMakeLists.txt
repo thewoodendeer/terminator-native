@@ -30,7 +30,9 @@ target_sources(Terminator PRIVATE
     src/MainWindow.h
     src/MainWindow.cpp
     src/WebShell.h
-    src/WebShell.cpp)
+    src/WebShell.cpp
+    src/ShellServices.h
+    src/ShellServices.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1

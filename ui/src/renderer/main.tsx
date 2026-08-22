@@ -7,6 +7,9 @@ import { createRoot } from 'react-dom/client';
 // first guarantees window.terminator is set by the time App.tsx evaluates.
 // In Electron the preload script populates window.terminator first; the
 // auto-installer detects that and bails (idempotent).
+// NATIVE (Terminator 3.0 JUCE shell): ipc-native imports ipc-browser itself (so the shim installs first) and
+// overlays the native-backed methods — all before App evaluates. Outside the shell it is a no-op.
+import './native/ipc-native';
 import './ipc-browser';
 import App from './App';
 import './styles/terminator.css';

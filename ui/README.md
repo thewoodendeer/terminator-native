@@ -29,11 +29,21 @@ cd ui && npm ci && npm run gate      # = tsc --noEmit (baseline below) + vite bu
 - `src/renderer/vite-env.d.ts`: declares `__TERMINATOR_NATIVE__`.
 - `src/renderer/lib/subscription.ts` + `chopper/ChopperView.tsx` (`checkLicenseGate`): the native build runs
   UNLOCKED until Phase 8/9 ports the desktop licence flow (device token in the OS keychain).
+- `src/renderer/main.tsx`: imports `./native/ipc-native` BEFORE `./ipc-browser`.
+- NEW `src/renderer/native/juceBridge.ts` (typed face of the JUCE bridge on the official `@juce-framework/webview`
+  npm package, 1.0.0 — AGPL-3.0 OR the JUCE licence, same terms as the framework we build on) and
+  `src/renderer/native/ipc-native.ts` (the native `window.terminator` overlay — what is native vs. browser-shim vs.
+  undefined is listed at the top of that file).
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 
-## Engine binding (2.4b →)
-Today the copied `ChopperEngine.ts` still plays through Web Audio INSIDE the WebView (the `ipc-browser`
-IndexedDB shim stands in for `window.terminator`). The native binding lands as `EngineClient` (typed
-interface) with `NativeEngineClient` over `@juce-framework/webview` (`/juce/index.js`, served by the shell) and
-`WebAudioEngineClient` wrapping the existing engine — see docs/native/BRIDGE-PROTOCOL.md and STATUS.md §2.4.
+## Host binding (2.4b, landed) and engine binding (next)
+`native/ipc-native.ts` gives the React app a native `window.terminator`: settings, EULA, recents, the projects
+folder + `.tproj` open/save/list/delete with native dialogs, layout/MIDI-map/bass-patch files, presets + the
+session autosave, reveal/open-external/clipboard — over `terminatorFs` / `terminatorSettings`
+(app/src/ShellServices.cpp). Still browser-shim or undefined: `.tprojz` bundles + the asset store (binary
+transport), library/drums/stems/YouTube, the Preferences window, native menu shortcuts / Recent submenu /
+open-with-file, drag-out, licence, cloud presets.
+The copied `ChopperEngine.ts` still plays through Web Audio INSIDE the WebView. The native AUDIO binding lands
+as `EngineClient` (typed interface) with `NativeEngineClient` over `juceBridge.ts` and `WebAudioEngineClient`
+wrapping the existing engine — docs/native/BRIDGE-PROTOCOL.md, STATUS.md §2.4.

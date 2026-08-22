@@ -86,6 +86,36 @@ attack, release, gain, outputPair, mode, reverse, chokeGroup}], samplesLive, byt
 `path`} · `clear` {`pad`}. Previous samples are retired through the quarantine (SampleStore) — never freed
 while a voice could still read them.
 
+## `terminatorFs(req)` — the `window.terminator` shim's file/dialog backend (Phase 2.4b)
+Generic, message-thread verbs the React app composes into the Electron-era IPC surface in
+`ui/src/renderer/native/ipc-native.ts` (projects, recents, EULA, layout/MIDI-map/bass-patch files, presets, the
+session autosave). `req.verb`:
+| verb | fields | reply |
+|---|---|---|
+| `dirs` | — | `{ ok, dataDir, projectsDir, projectsIsDefault, settingsFile, home, music, sep }` (`dataDir` = `<userApplicationData>/Terminator3`; `projectsDir` = settings `app.projectsDir` or `<dataDir>/projects`) |
+| `readText` | `path` (absolute, ≤ 64 MB) | `{ ok, text, path, name }` |
+| `writeText` | `path`, `text` | atomic write, parent folders created → `{ ok, path, name }` |
+| `exists` | `path` | `{ ok, exists, isDir }` |
+| `list` | `dir`, `exts?` (`[".tproj"]`) | `{ ok, entries: [{ name, fileName, path, isDir, size, modifiedAt(ms) }] }` (dot-files skipped) |
+| `mkdir` | `path` | `{ ok }` |
+| `trash` | `path` | moves to the Trash (never unlinks) → `{ ok }` |
+| `reveal` | `path` | Finder / Explorer reveal |
+| `openExternal` | `url` (http(s)/mailto only) | default browser |
+| `openDialog` | `title?`, `dir?`, `filters?` (`"*.tproj;*.tprojz"`), `mode` file\|dir, `multiple?` | `{ ok, path, paths }` or `{ ok, cancelled: true }` (native `FileChooser`, one at a time) |
+| `saveDialog` | `title?`, `dir?`, `defaultName?`, `filters?` | `{ ok, path }` or `{ ok, cancelled: true }` |
+| `clipboardReadText` | — | `{ ok, text }` |
+Paths must be absolute; relative or over-long paths are refused. Errors: `{ ok:false, error }`.
+
+## `terminatorSettings(req)` — the UI's settings
+`verb`: `get` → `{ ok, settings }` · `set` {`patch`} → shallow-merges into settings.json **`app`** (the Electron
+`terminator-settings.json` keys, verbatim — Phase 8 imports that file here), saves, emits
+`terminator.settingsChanged` → `{ ok, settings }`. `app.eula`, `app.recentProjects`, `app.projectsDir` live here.
+
+### Boot user script
+Before any page script the shell injects `window.__TERMINATOR_NATIVE__ = { version, settings, dirs }` so the
+synchronous boot reads the Electron preload offered (`getSettingsSync`) work; plus an error collector
+(`window.__terminatorErrors`) the probe reads.
+
 ## Events (C++ → JS)
 ### `terminator.snapshot` (20 Hz)
 ```json
@@ -96,7 +126,7 @@ while a voice could still read them.
   "lastTriggeredPadPositionSec": 0, "calibrationState": 0, "calibrationSamples": -1, "calibrationMs": -1,
   "midiMessages": 0, "midiLagMs": 0, "midiLast": "" }
 ```
-### `terminator.devicesChanged` (Device object) — hot-plug / device error · `terminator.midiChanged` (MIDI reply)
+### `terminator.devicesChanged` (Device object) — hot-plug / device error · `terminator.midiChanged` (MIDI reply) · `terminator.settingsChanged` (the `app` settings object, after a `set`)
 
 ## Project v0 (terminator-render input)
 ```json

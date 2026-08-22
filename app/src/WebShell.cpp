@@ -29,6 +29,7 @@ namespace
 constexpr int kSnapshotHz = 20;
 constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
 constexpr int kProbeDelayTicksReact = 140; // 7 s — the React UI: fonts + first render + engines constructing
+constexpr int kProbeAsyncLeadTicks = 60;   // the shim round-trip checks start 3 s before the final read
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -126,11 +127,16 @@ juce::var WebShell::ok(bool okFlag, const juce::String& error)
 WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore& samples, SampleLoader& loader,
                    Settings& settings, juce::String audioError)
     : engine_(engine), audioIO_(audioIO), midi_(midi), samples_(samples), loader_(loader), settings_(settings),
-      audioError_(std::move(audioError))
+      services_(settings), audioError_(std::move(audioError))
 {
     const auto probePath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_FILE", {});
     if (probePath.isNotEmpty())
+    {
         probeFile_ = juce::File::getCurrentWorkingDirectory().getChildFile(probePath);
+        // headless smoke: the React UI shows the EULA on a first launch (as it should) — pre-accept it IN MEMORY
+        // for this run only (nothing is saved unless the page writes settings) so ChopperView renders.
+        settings_.set("app.eula.accepted", true);
+    }
 
     uiDir_ = resolveUiDir();
 
@@ -149,7 +155,16 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
             .withNativeIntegrationEnabled()
             .withKeepPageLoadedWhenBrowserIsHidden()
             .withUserScript(kErrorCollector)
+            // window.__TERMINATOR_NATIVE__ = { version, settings, dirs } before any page script (sync boot reads)
+            .withUserScript(services_.bootUserScript(terminator::versionString()))
             .withResourceProvider([this](const juce::String& url) { return provideResource(url); })
+            .withNativeFunction("terminatorFs", [this](const juce::Array<juce::var>& args,
+                                                       juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                { services_.handleFs(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
+            .withNativeFunction(
+                "terminatorSettings",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                { complete(services_.handleSettings(args.size() > 0 ? args[0] : juce::var())); })
             .withNativeFunction("terminatorInfo", [this](const juce::Array<juce::var>&,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { complete(engineInfo()); })
@@ -178,6 +193,11 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     browser_ = std::make_unique<Browser>(opts, [this](const juce::String& url) { pageLoaded(url); });
     addAndMakeVisible(*browser_);
 
+    services_.onSettingsChanged = [this](const juce::var& settings)
+    {
+        if (pageReady_)
+            browser_->emitEventIfBrowserIsVisible("terminator.settingsChanged", settings);
+    };
     audioIO_.onDeviceChanged = [this]
     {
         if (pageReady_)
@@ -202,6 +222,7 @@ WebShell::~WebShell()
     stopTimer();
     audioIO_.onDeviceChanged = nullptr;
     midi_.onPortsChanged = nullptr;
+    services_.onSettingsChanged = nullptr;
     browser_ = nullptr;
 }
 
@@ -697,6 +718,30 @@ void WebShell::pageLoaded(const juce::String&)
     }
 }
 
+void WebShell::runProbeAsyncChecks()
+{
+    // phase 1 (≈ 3 s before the final read, after the ESM modules have run): exercise the window.terminator shim's
+    // native round-trips; the results land in window.__terminatorProbeAsync for the final probe
+    {
+        static const char* kAsyncChecks = R"JS((function(){
+            const r = { started: true }; window.__terminatorProbeAsync = r;
+            const t = window.terminator; if (!t) { r.error = 'no window.terminator'; return; }
+            (async () => {
+                try {
+                    r.nativeIpc = !!(window.__terminatorNativeIpc && window.__terminatorNativeIpc.installed);
+                    r.projectsDir = t.getProjectsDir ? await t.getProjectsDir() : null;
+                    r.settingsKeys = t.getSettings ? Object.keys(await t.getSettings()).length : -1;
+                    r.eula = t.eulaStatus ? await t.eulaStatus() : null;
+                    r.projectFiles = t.listProjectFiles ? (await t.listProjectFiles()).length : -1;
+                    r.layout = t.loadLayout ? await t.loadLayout() : undefined;
+                    r.done = true;
+                } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
+            })();
+        })();)JS";
+        browser_->evaluateJavascript(kAsyncChecks, nullptr);
+    }
+}
+
 void WebShell::runProbe()
 {
     static const char* kScript = R"JS((function(){
@@ -711,7 +756,7 @@ void WebShell::runProbe()
                                 chopperView: !!chopper, padGrid: document.querySelectorAll('.pad-grid .pad, .pad-cell, [class*="pad-grid"]').length,
                                 href: String(location.href), secureContext: !!window.isSecureContext,
                                 audioWorklet: (typeof AudioContext !== 'undefined') && ('audioWorklet' in AudioContext.prototype),
-                                errors: window.__terminatorErrors || [] });
+                                errors: window.__terminatorErrors || [], asyncChecks: window.__terminatorProbeAsync || null });
     })())JS";
     browser_->evaluateJavascript(kScript,
                                  [this](juce::WebBrowserComponent::EvaluationResult result)
@@ -729,8 +774,14 @@ void WebShell::runProbe()
 
 void WebShell::timerCallback()
 {
-    if (probeArmed_ && probeCountdown_ > 0 && --probeCountdown_ == 0)
-        runProbe();
+    if (probeArmed_ && probeCountdown_ > 0)
+    {
+        --probeCountdown_;
+        if (probeCountdown_ == kProbeAsyncLeadTicks)
+            runProbeAsyncChecks();
+        if (probeCountdown_ == 0)
+            runProbe();
+    }
 
     samples_.collect(engine_.snapshot());
     finishCalibration();
