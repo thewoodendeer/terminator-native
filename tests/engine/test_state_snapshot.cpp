@@ -42,7 +42,7 @@ TEST_CASE("SnapshotPublisher: publish never allocates", "[snapshot][rt]")
     REQUIRE(allocs == 0);
 }
 
-TEST_CASE("SnapshotPublisher: writer and reader threads — reader sees monotonic, consistent snapshots",
+TEST_CASE("SnapshotPublisher: writer and reader threads - reader sees monotonic, consistent snapshots",
           "[snapshot][threads]")
 {
     SnapshotPublisher<StateSnapshot> pub;
@@ -66,7 +66,7 @@ TEST_CASE("SnapshotPublisher: writer and reader threads — reader sees monotoni
     std::uint64_t last = 0;
     std::uint64_t reads = 0;
     bool consistent = true, monotonic = true;
-    while (!done.load(std::memory_order_acquire) || pub.read().blocksProcessed < kN)
+    do // at least one read even if the writer already finished (fast CI machines)
     {
         const auto& s = pub.read();
         if (s.samplesProcessed != s.blocksProcessed * 512)
@@ -75,7 +75,7 @@ TEST_CASE("SnapshotPublisher: writer and reader threads — reader sees monotoni
             monotonic = false;
         last = s.blocksProcessed;
         ++reads;
-    }
+    } while (!done.load(std::memory_order_acquire) || pub.read().blocksProcessed < kN);
     writer.join();
     REQUIRE(consistent);
     REQUIRE(monotonic);

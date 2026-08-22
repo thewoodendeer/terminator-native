@@ -67,7 +67,7 @@ TEST_CASE("OfflineRenderer: parses the v0 project schema", "[render][json]")
     }
 }
 
-TEST_CASE("OfflineRenderer: renders the tone fixture — length, RMS, channels, block count", "[render][dsp]")
+TEST_CASE("OfflineRenderer: renders the tone fixture - length, RMS, channels, block count", "[render][dsp]")
 {
     RenderSpec spec;
     juce::String err;
@@ -98,7 +98,7 @@ TEST_CASE("OfflineRenderer: silence fixture renders zeros; zero length renders n
     REQUIRE(z.blocksProcessed == 0);
 }
 
-TEST_CASE("OfflineRenderer: render is deterministic (same spec → identical samples)", "[render]")
+TEST_CASE("OfflineRenderer: render is deterministic (same spec -> identical samples)", "[render]")
 {
     RenderSpec spec;
     spec.testToneEnabled = true;

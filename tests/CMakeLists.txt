@@ -3,7 +3,11 @@ include(Catch)
 add_executable(terminator-tests
     support/AllocationCounter.h
     support/AllocationCounter.cpp
+    support/TestSamples.h
     engine/test_command_queue.cpp
+    engine/test_sampler.cpp
+    engine/test_clock_calibration.cpp
+    engine/test_sample_io.cpp
     engine/test_state_snapshot.cpp
     engine/test_engine.cpp
     engine/test_rt_safety.cpp
@@ -33,6 +37,11 @@ if(TARGET terminator-render)
         COMMAND terminator-render "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tone-440.json"
                 "${CMAKE_CURRENT_BINARY_DIR}/tone-440-44k.wav" --rate 44100 --seconds 0.5 --bits 16)
     set_tests_properties(cli.render.override PROPERTIES PASS_REGULAR_EXPRESSION "22050 samples \\(0.500 s\\) @ 44100 Hz")
+
+    add_test(NAME cli.render.pads
+        COMMAND terminator-render "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/pads-demo.json"
+                "${CMAKE_CURRENT_BINARY_DIR}/pads-demo.wav" --print-spec)
+    set_tests_properties(cli.render.pads PROPERTIES PASS_REGULAR_EXPRESSION "pads=2 events=2.*rendered .*pads-demo.wav · 4 ch · 48000 samples")
 
     add_test(NAME cli.render.badproject
         COMMAND terminator-render "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/bad-version.json"

@@ -1,0 +1,13 @@
+{
+  "terminatorProject": 0,
+  "render":   { "sampleRate": 48000, "blockSize": 256, "channels": 4, "lengthSeconds": 1.0 },
+  "master":   { "gain": 1.0 },
+  "pads": [
+    { "pad": 0, "file": "ramp-48k.wav", "attack": 0, "interpolation": "linear" },
+    { "pad": 1, "file": "ramp-48k.wav", "attack": 0, "pitch": 12, "outputPair": 1, "interpolation": "linear" }
+  ],
+  "events": [
+    { "pad": 0, "time": 0.1, "velocity": 1.0 },
+    { "pad": 1, "time": 0.5, "velocity": 0.5 }
+  ]
+}
