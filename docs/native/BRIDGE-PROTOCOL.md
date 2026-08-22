@@ -151,8 +151,27 @@ events are placed sample-accurately (`triggerPadAtSample` / `releasePadAtSample`
 invariant (test `[invariance]`). Phase 2 replaces this with the real `.tproj/.tprojz` reader (plan §B10) —
 the `terminatorProject` version field stays.
 
-## Roadmap for the bridge (Phase 2)
-- Typed `EngineClient` interface in TypeScript (same shape for desktop/native and web/Web-Audio).
-- Batched commands per animation frame; binary meter/playhead/waveform-peak streams (ArrayBuffer / resource URLs).
+## Roadmap for the bridge (Phase 2 → EngineClient, the next step)
+Landed: `terminatorFs` / `terminatorSettings` / `terminatorWindow` + the native `window.terminator` shim + the
+native Preferences window. NEXT = **audio through the native engine** (`EngineClient`):
+- Typed `EngineClient` interface in TypeScript (the ChopperEngine public surface, docs/native/ENGINECLIENT-SURVEY.md);
+  `NativeEngineClient` over `juceBridge.ts`, `WebAudioEngineClient` = the existing engine. Start as a SHADOW: the TS
+  engine keeps its state, every pad/chop/param change is mirrored to `setPadSample`/`setPadParams`/
+  `setPadLoopBuffer`/`setPadStems`, hits go to `triggerPad`, the TS voices are muted; then move ownership to the
+  C++ `Document` section by section.
+- **Sample bytes JS → C++ — decided design (read before coding):** the JUCE bridge carries JSON only (`var`), no
+  binary channel in either direction except resource URLs C++ → JS. Therefore: (1) **path-based first** — library
+  files, the YouTube cache, recordings and `.tproj` assets are FILES the shell can decode itself
+  (`terminatorPads loadFile {pad, path}` exists; grow it to `terminatorSamples load {path}` → a SampleStore id + peaks
+  URL, independent of pads); (2) bytes that only exist in the page (drops from Finder — WKWebView gives no paths;
+  `loadFromArrayBuffer`) go as **chunked base64 through a native function** (`terminatorSamples put {id, chunk,
+  seq, done}` — 1.33× size, fine for tens of MB, no server needed; a loopback HTTP endpoint would need a hand-rolled
+  server — not worth it); (3) recordings stop being page PCM once Phase 5 records natively; Finder drops become a
+  native `FileDragAndDropTarget` on the shell (Phase 8) that hands paths to the page. Audio never needs to travel
+  C++ → JS: the page asks for **peak pyramids** (`analysis/WaveformPeaks` blobs) and slices via resource URLs
+  (`juce://juce.backend/peaks/<id>?lod=…`).
+- Batched commands per animation frame; binary meter/playhead streams via the 20 Hz snapshot event (already) or a
+  resource URL poll; the rAF-polled reads (`getPlayheadPos`, `getSeqCursorPhase`) mirror the latest snapshot into the
+  page (ENGINECLIENT-SURVEY §6 hazard 4).
 - Schema versioning tests + bridge fuzz (plan §Testing 5).
-- Native dialogs/menus/drag-drop/file pickers exposed as native functions (file chooser already is).
+- Native menus/shortcuts/Recent/open-with-file (`anotherInstanceStarted`)/drag-out — Phase 8.
