@@ -9,10 +9,22 @@ add_library(terminator_engine STATIC
     include/terminator/core/CommandQueue.h
     include/terminator/core/StateSnapshot.h
     include/terminator/core/Engine.h
+    include/terminator/core/SampleBuffer.h
+    include/terminator/core/HostClock.h
+    include/terminator/core/Sampler.h
     include/terminator/io/AudioIO.h
+    include/terminator/io/MidiHub.h
+    include/terminator/io/SampleLoader.h
+    include/terminator/io/SampleStore.h
+    include/terminator/io/Settings.h
     include/terminator/render/OfflineRenderer.h
     src/core/Engine.cpp
+    src/core/Sampler.cpp
     src/io/AudioIO.cpp
+    src/io/MidiHub.cpp
+    src/io/SampleLoader.cpp
+    src/io/SampleStore.cpp
+    src/io/Settings.cpp
     src/render/OfflineRenderer.cpp)
 add_library(terminator::engine ALIAS terminator_engine)
 
