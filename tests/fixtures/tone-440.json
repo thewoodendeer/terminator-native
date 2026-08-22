@@ -1,0 +1,6 @@
+{
+  "terminatorProject": 0,
+  "render":   { "sampleRate": 48000, "blockSize": 512, "channels": 2, "lengthSeconds": 2.0 },
+  "master":   { "gain": 0.5 },
+  "testTone": { "enabled": true, "frequencyHz": 440, "amplitude": 0.5 }
+}

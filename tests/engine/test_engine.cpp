@@ -1,0 +1,182 @@
+#include <catch2/catch_approx.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <cmath>
+#include <vector>
+
+#include "terminator/core/Engine.h"
+
+using namespace terminator;
+using Catch::Approx;
+
+namespace
+{
+struct Buffers
+{
+    explicit Buffers(int channels, int samples)
+        : data(static_cast<std::size_t>(channels), std::vector<float>(static_cast<std::size_t>(samples), 99.0f))
+    {
+        for (auto& ch : data)
+            ptrs.push_back(ch.data());
+    }
+    std::vector<std::vector<float>> data;
+    std::vector<float*> ptrs;
+    int channels() const { return static_cast<int>(data.size()); }
+    int samples() const { return static_cast<int>(data[0].size()); }
+};
+
+double rms(const std::vector<float>& v)
+{
+    double acc = 0.0;
+    for (float x : v)
+        acc += static_cast<double>(x) * static_cast<double>(x);
+    return std::sqrt(acc / static_cast<double>(v.size()));
+}
+
+int positiveZeroCrossings(const std::vector<float>& v)
+{
+    int n = 0;
+    for (std::size_t i = 1; i < v.size(); ++i)
+        if (v[i - 1] < 0.0f && v[i] >= 0.0f)
+            ++n;
+    return n;
+}
+
+void run(Engine& e, Buffers& b, int blocks)
+{
+    for (int i = 0; i < blocks; ++i)
+        e.process(b.ptrs.data(), b.channels(), b.samples());
+}
+} // namespace
+
+TEST_CASE("Engine: process before prepare renders silence and does not crash", "[engine]")
+{
+    Engine e;
+    Buffers b(2, 256);
+    e.process(b.ptrs.data(), 2, 256);
+    for (auto& ch : b.data)
+        for (float x : ch)
+            REQUIRE(x == 0.0f);
+    REQUIRE_FALSE(e.isPrepared());
+    REQUIRE(e.snapshot().prepared == 0);
+}
+
+TEST_CASE("Engine: prepared with the tone off renders silence and counts blocks", "[engine]")
+{
+    Engine e;
+    e.prepare({48000.0, 512, 2});
+    REQUIRE(e.isPrepared());
+    Buffers b(2, 512);
+    run(e, b, 10);
+    for (auto& ch : b.data)
+        for (float x : ch)
+            REQUIRE(x == 0.0f);
+    const auto& s = e.snapshot();
+    REQUIRE(s.prepared == 1);
+    REQUIRE(s.blocksProcessed == 10);
+    REQUIRE(s.samplesProcessed == 5120);
+    REQUIRE(s.playing == 0);
+    REQUIRE(s.playheadSamples == 0); // transport not started
+    REQUIRE(s.sampleRate == 48000.0);
+    REQUIRE(s.numOutputChannels == 2);
+}
+
+TEST_CASE("Engine: test tone has the requested frequency and amplitude, master gain scales it", "[engine][dsp]")
+{
+    Engine e;
+    e.prepare({48000.0, 480, 2});
+    REQUIRE(e.commands().push(Command::setTestTone(true, 1000.0f, 0.5f)));
+    REQUIRE(e.commands().push(Command::setMasterGain(1.0f)));
+    Buffers b(2, 480);
+    run(e, b, 1); // drains commands, gain ramp settles within this block (1.0 → 1.0)
+
+    // accumulate exactly one second
+    std::vector<float> second;
+    second.reserve(48000);
+    for (int blk = 0; blk < 100; ++blk)
+    {
+        run(e, b, 1);
+        second.insert(second.end(), b.data[0].begin(), b.data[0].end());
+    }
+    REQUIRE(second.size() == 48000);
+    REQUIRE(rms(second) == Approx(0.5 / std::sqrt(2.0)).epsilon(0.01));
+    REQUIRE(positiveZeroCrossings(second) == Approx(1000).margin(1));
+    // both channels identical
+    for (std::size_t i = 0; i < b.data[0].size(); ++i)
+        REQUIRE(b.data[0][i] == b.data[1][i]);
+    float peak = 0.0f;
+    for (float x : second)
+        peak = std::max(peak, std::abs(x));
+    REQUIRE(peak == Approx(0.5).epsilon(0.01));
+
+    // master gain 0.25 → amplitude 0.125 after the one-block ramp
+    REQUIRE(e.commands().push(Command::setMasterGain(0.25f)));
+    run(e, b, 2);
+    run(e, b, 1);
+    peak = 0.0f;
+    for (float x : b.data[0])
+        peak = std::max(peak, std::abs(x));
+    REQUIRE(peak == Approx(0.125).epsilon(0.02));
+    REQUIRE(e.snapshot().masterGain == Approx(0.25f));
+    REQUIRE(e.snapshot().peak[0] == Approx(0.125f).epsilon(0.02));
+    REQUIRE(e.snapshot().testToneEnabled == 1);
+    REQUIRE(e.snapshot().testToneFrequencyHz == 1000.0f);
+}
+
+TEST_CASE("Engine: transport play/stop drives the playhead; panic silences", "[engine][transport]")
+{
+    Engine e;
+    e.prepare({44100.0, 128, 2});
+    Buffers b(2, 128);
+    e.commands().push(Command::transportPlay());
+    run(e, b, 5);
+    REQUIRE(e.snapshot().playing == 1);
+    REQUIRE(e.snapshot().playheadSamples == 5 * 128);
+    e.commands().push(Command::transportStop());
+    run(e, b, 3);
+    REQUIRE(e.snapshot().playing == 0);
+    REQUIRE(e.snapshot().playheadSamples == 5 * 128);
+    e.commands().push(Command::setTestTone(true, 440.0f, 1.0f));
+    e.commands().push(Command::transportPlay());
+    run(e, b, 2);
+    REQUIRE(e.snapshot().peak[0] > 0.0f);
+    e.commands().push(Command::panic());
+    run(e, b, 1);
+    REQUIRE(e.snapshot().playing == 0);
+    REQUIRE(e.snapshot().testToneEnabled == 0);
+    REQUIRE(e.snapshot().peak[0] == 0.0f);
+    REQUIRE(e.snapshot().commandsApplied == 5);
+}
+
+TEST_CASE("Engine: commands are applied in order at the start of the next block; release publishes unprepared",
+          "[engine]")
+{
+    Engine e;
+    e.prepare({48000.0, 64, 1});
+    Buffers b(1, 64);
+    e.commands().push(Command::setMasterGain(0.1f));
+    e.commands().push(Command::setMasterGain(0.9f)); // last one wins
+    run(e, b, 1);
+    REQUIRE(e.snapshot().masterGain == Approx(0.9f));
+    REQUIRE(e.snapshot().commandsApplied == 2);
+    e.release();
+    REQUIRE_FALSE(e.isPrepared());
+    REQUIRE(e.snapshot().prepared == 0);
+    run(e, b, 1); // silence, no crash
+    for (float x : b.data[0])
+        REQUIRE(x == 0.0f);
+}
+
+TEST_CASE("Engine: extra output channels beyond 2 are silenced, odd block sizes work", "[engine]")
+{
+    Engine e;
+    e.prepare({48000.0, 1024, 8});
+    e.commands().push(Command::setTestTone(true, 440.0f, 0.5f));
+    Buffers b(8, 333);
+    run(e, b, 3);
+    REQUIRE(std::abs(b.data[0][100]) > 0.0f);
+    for (int ch = 2; ch < 8; ++ch)
+        for (float x : b.data[static_cast<std::size_t>(ch)])
+            REQUIRE(x == 0.0f);
+    REQUIRE(e.snapshot().samplesProcessed == 999);
+}
