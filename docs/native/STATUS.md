@@ -450,7 +450,8 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 0. `gh run list` — confirm CI green for tip `9c37f7c` (mac-universal: probe incl. the real YouTube pull; Windows:
    ProvisionTools on Windows + MSVC compile of ProcessHub/readBinary + the library test with backslash paths).
 0b. Victor's passes (pads native / library / YouTube / projects with assets / controller) — see each section.
-0c. **Phase 3** per the DESIGN below — start with 3.1 (C++ Transport + ChopSequencer, headless, tests), then 3.2.
+0c. **Phase 3** per the DESIGN below — 3.1 (C++ ChopSequencer + bridge) is DONE; start with **3.2** (the page
+    binding: playSeq → seqPlay, mute the TS scheduled voices, cursor from the snapshot, the drums/bass re-anchor).
 (The older list follows for reference.)
 1. `gh run list` — confirm CI is green for the 2.5a commits (mac-universal probe asserts the shadow; Windows/MSVC
    compiles SampleRegistry + the gate flag). Then Victor's pad pass above (his latency verdict decides how much
@@ -461,6 +462,31 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
    (Phase 3 start); LEDs/playhead from `activePads`/`lastTriggeredPadPositionSec`.
 4. **Phase 4 is now specced to Victor's brief** (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" + decision
    #7): premium JUCE effects + accurate summing + free routing — read it before the mixer sessions.
+
+## Phase 3 — 3.1 DONE (the chop sequencer on the sample clock, headless + bridge), 2026-08-22 fourth session
+`engine/include/terminator/core/ChopSequencer.h` + `src/core/ChopSequencer.cpp`: the chop step sequencer as a native
+EventSource inside the Engine — the audio callback asks it every block for the hits in [blockStart, blockEnd) and
+fires them at exact sample offsets (no look-ahead, no timers). Semantics = ChopperEngine's playSeq/
+seqSchedulerTick/scheduleSeqStepAudio on samples: stepDur = 60/bpm·4/res re-read per step (BPM applies at the
+next step), **swing applied LIVE** (= the export formula — the documented live-vs-export mismatch resolved as
+Victor decided), a queued pattern adopts at the next step 0, a live edit applies to the steps ahead, note length =
+until the next hit of the same TAIL group (choke group ≥ 0, else the pad itself — a poly pad still ends at its own
+next hit) with the 3 ms fade ending AT that hit (its own swing counted), else the pattern end; pause fades the
+sequencer's notes and keeps the unfired hits (shifted on resume); loop off stops after the last slot. Patterns are
+plain structs (`SeqPattern`: grid bit masks + per-cell velocity, ~400 KB) handed to the engine by pointer; the
+shell keeps a ring of 8. Bridge: `setSequence`/`queueSequence`/`seqPlay`/`seqStop`/`seqPause`/`seqResume`/`setBpm`/
+`seqLoop`; the snapshot carries `seqPlaying/seqPaused/seqLoop/seqStep/seqStepCount/seqPatternIndex/seqStepPhase/
+seqBpm/seqLoopStartSample/seqHitsFired`.
+- **Gates (Catch2 `[seq]`, tolerance 0 samples):** grid onsets exact + loop exact; same-group note ends at the next
+  hit (fade ended AT it), poly pads end at their own re-hit (one voice); swing: odd 16th late by exactly
+  `seqSwingOffsetSec`, even 16ths on the grid; queued switch at step 0 + live edit ahead; BPM change at the next
+  step; loop off stops; **block-size invariant 64 vs 512 (max diff < 1e-6 over 5 s)** — this test caught a real bug
+  (a per-pad "next end" slot overwrote an earlier end when the end and the next hit of a pad fell in one block →
+  hits and ends now share one time-ordered ring); pause/resume phase; **10 minutes at 120 BPM/16ths: 4800 hits,
+  loop starts exactly on multiples of 96000**. ctest **122/122**, RTSan **123/123**, ui gate green; the probe runs
+  a 16-step pattern at 240 BPM through the bridge (`seqAdvances`, `seqStopped`).
+- **Not yet (3.2):** the page still plays its own chop-seq voices (Web Audio); binding = `playSeq` → `seqPlay`,
+  mute the TS scheduled voices, the cursor from the snapshot, the two-clock bridge for drums/bass — see the design.
 
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
 Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).
