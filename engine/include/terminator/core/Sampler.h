@@ -89,9 +89,9 @@ class Sampler
     // --- read-back for the snapshot (audio thread) ---
     std::uint32_t activeVoices() const noexcept { return activeVoices_; }
     std::uint32_t stealCount() const noexcept { return steals_; }
-    std::uint64_t padActiveMask() const noexcept;
+    std::uint64_t padActiveMask() const noexcept TERMINATOR_NONBLOCKING;
     std::int32_t lastTriggeredPad() const noexcept { return lastTriggeredPad_; }
-    double lastTriggeredPadPositionSec() const noexcept; // buffer seconds inside the region
+    double lastTriggeredPadPositionSec() const noexcept TERMINATOR_NONBLOCKING; // buffer seconds inside the region
     const Pad& pad(int i) const noexcept { return pads_[i]; }
 
   private:

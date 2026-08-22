@@ -25,10 +25,10 @@ struct ClickTable
         }
     }
 };
-const ClickTable& clickTable() noexcept
+const ClickTable gClickTable{};
+const ClickTable& clickTable() noexcept TERMINATOR_NONBLOCKING
 {
-    static const ClickTable t;
-    return t;
+    return gClickTable;
 }
 } // namespace
 
@@ -42,7 +42,7 @@ Engine::Engine()
 {
     for (int n = 0; n < 128; ++n)
         noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kMaxPads ? n - 36 : -1); // A01 = C1 (note 36)
-    clickTable(); // warm the table off the RT path
+    (void)clickTable(); // built at static-init time; nothing to warm
 }
 
 void Engine::prepare(const Config& config)
@@ -77,7 +77,7 @@ void Engine::release()
     snapshot_.publish(s);
 }
 
-void Engine::setTestToneFrequency(float hz) noexcept
+void Engine::setTestToneFrequency(float hz) noexcept TERMINATOR_NONBLOCKING
 {
     toneFrequencyHz_ = hz;
     const double sr = config_.sampleRate > 0.0 ? config_.sampleRate : 48000.0;
@@ -86,7 +86,7 @@ void Engine::setTestToneFrequency(float hz) noexcept
     toneSin_ = std::sin(w);
 }
 
-std::int32_t Engine::offsetForHostTime(std::uint64_t hostTimeNs, int numSamples) const noexcept
+std::int32_t Engine::offsetForHostTime(std::uint64_t hostTimeNs, int numSamples) const noexcept TERMINATOR_NONBLOCKING
 {
     // Events are placed relative to the PREVIOUS block's entry time: an event that arrived while block N-1
     // was being rendered lands in block N at the same intra-block position → inter-onset spacing preserved,
@@ -102,7 +102,7 @@ std::int32_t Engine::offsetForHostTime(std::uint64_t hostTimeNs, int numSamples)
     return static_cast<std::int32_t>(off);
 }
 
-void Engine::apply(const Command& c, int numSamples) noexcept
+void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     switch (c.type)
     {
@@ -187,7 +187,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept
     ++commandsApplied_;
 }
 
-void Engine::drainCommands(int numSamples) noexcept
+void Engine::drainCommands(int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     Command c;
     // Bounded: at most one full queue per block, so a flooding producer cannot starve the callback.
@@ -195,7 +195,7 @@ void Engine::drainCommands(int numSamples) noexcept
         apply(c, numSamples);
 }
 
-void Engine::drainMidi(int numSamples) noexcept
+void Engine::drainMidi(int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     MidiEvent e;
     for (auto& q : midiQueues_)
@@ -219,7 +219,7 @@ void Engine::drainMidi(int numSamples) noexcept
     }
 }
 
-void Engine::publish(int numSamples) noexcept
+void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     StateSnapshot s{};
     s.sampleRate = config_.sampleRate;
@@ -257,7 +257,7 @@ void Engine::publish(int numSamples) noexcept
 }
 
 void Engine::process(const float* const* inputs, int numIn, float* const* outputs, int numOut, int numSamples,
-                     std::uint64_t hostTimeNs) noexcept
+                     std::uint64_t hostTimeNs) noexcept TERMINATOR_NONBLOCKING
 {
     if (outputs == nullptr || numOut <= 0 || numSamples <= 0)
         return;

@@ -39,7 +39,7 @@ void Sampler::reset() noexcept
 }
 
 void Sampler::setPadSample(std::uint16_t pad, const SampleBuffer* sample, std::int64_t startFrame,
-                           std::int64_t endFrame) noexcept
+                           std::int64_t endFrame) noexcept TERMINATOR_NONBLOCKING
 {
     if (pad >= kMaxPads)
         return;
@@ -64,7 +64,7 @@ void Sampler::setPadSample(std::uint16_t pad, const SampleBuffer* sample, std::i
     p.endFrame = endFrame;
 }
 
-void Sampler::setPadParams(const PadParams& p) noexcept
+void Sampler::setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING
 {
     if (p.pad >= kMaxPads)
         return;
@@ -77,7 +77,7 @@ void Sampler::setPadParams(const PadParams& p) noexcept
     pads_[p.pad].params = q;
 }
 
-Voice* Sampler::allocateVoice() noexcept
+Voice* Sampler::allocateVoice() noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
         if (!v.active())
@@ -98,7 +98,7 @@ Voice* Sampler::allocateVoice() noexcept
     return best;
 }
 
-void Sampler::beginFadeNow(Voice& v, float seconds) noexcept
+void Sampler::beginFadeNow(Voice& v, float seconds) noexcept TERMINATOR_NONBLOCKING
 {
     if (!v.active() || v.stage == Voice::Stage::fading)
         return;
@@ -109,7 +109,7 @@ void Sampler::beginFadeNow(Voice& v, float seconds) noexcept
     v.fadeOffset = -1;
 }
 
-void Sampler::beginFade(Voice& v, float seconds, std::int32_t offsetInBlock) noexcept
+void Sampler::beginFade(Voice& v, float seconds, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
 {
     if (!v.active() || v.stage == Voice::Stage::fading)
         return;
@@ -120,7 +120,7 @@ void Sampler::beginFade(Voice& v, float seconds, std::int32_t offsetInBlock) noe
 }
 
 void Sampler::chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* keep,
-                           std::int32_t offsetInBlock) noexcept
+                           std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
     {
@@ -133,7 +133,7 @@ void Sampler::chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* k
     }
 }
 
-void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept
+void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
 {
     if (pad >= kMaxPads)
         return;
@@ -208,7 +208,7 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     ++activeVoices_;
 }
 
-void Sampler::beginRelease(Voice& v) noexcept
+void Sampler::beginRelease(Voice& v) noexcept TERMINATOR_NONBLOCKING
 {
     if (v.stage == Voice::Stage::attack || v.stage == Voice::Stage::sustain)
     {
@@ -218,7 +218,7 @@ void Sampler::beginRelease(Voice& v) noexcept
     }
 }
 
-void Sampler::release(std::uint16_t pad, std::int32_t offsetInBlock) noexcept
+void Sampler::release(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
     {
@@ -232,21 +232,22 @@ void Sampler::release(std::uint16_t pad, std::int32_t offsetInBlock) noexcept
     }
 }
 
-void Sampler::stopPad(std::uint16_t pad) noexcept
+void Sampler::stopPad(std::uint16_t pad) noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
         if (v.active() && v.pad == pad)
             beginFade(v, kStopFadeSec);
 }
 
-void Sampler::stopAll() noexcept
+void Sampler::stopAll() noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
         if (v.active())
             beginFade(v, kStopFadeSec);
 }
 
-void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels, int numSamples) noexcept
+void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels,
+                          int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     const int outL = static_cast<int>(v.outputPair) * 2;
     const int outR = outL + 1;
@@ -368,14 +369,14 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
     }
 }
 
-void Sampler::render(float* const* outputs, int numOutputChannels, int numSamples) noexcept
+void Sampler::render(float* const* outputs, int numOutputChannels, int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
         if (v.active())
             renderVoice(v, outputs, numOutputChannels, numSamples);
 }
 
-std::uint64_t Sampler::padActiveMask() const noexcept
+std::uint64_t Sampler::padActiveMask() const noexcept TERMINATOR_NONBLOCKING
 {
     std::uint64_t m = 0;
     for (const auto& v : voices_)
@@ -384,7 +385,7 @@ std::uint64_t Sampler::padActiveMask() const noexcept
     return m;
 }
 
-double Sampler::lastTriggeredPadPositionSec() const noexcept
+double Sampler::lastTriggeredPadPositionSec() const noexcept TERMINATOR_NONBLOCKING
 {
     if (lastTriggeredPad_ < 0)
         return 0.0;
