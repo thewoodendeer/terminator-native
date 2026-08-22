@@ -294,8 +294,17 @@ RenderResult renderOffline(const RenderSpec& spec)
     for (const auto& p : spec.pads)
     {
         engine.commands().push(Command::setPadParams(p.params));
-        if (p.sample != nullptr)
-            engine.commands().push(Command::setPadSample(p.params.pad, p.sample.get(), p.startFrame, p.endFrame));
+        if (p.sample == nullptr)
+            continue;
+        engine.commands().push(Command::setPadSample(p.params.pad, p.sample.get(), p.startFrame, p.endFrame));
+        if (p.loopSample != nullptr)
+            engine.commands().push(Command::setPadLoopBuffer(p.params.pad, p.loopSample.get(), p.loopStart, p.loopEnd));
+        const bool anyPlane = p.stems[0] || p.stems[1] || p.stems[2] || p.stems[3];
+        if (anyPlane && (p.stemMask & 15) != 15)
+        {
+            const SampleBuffer* planes[4] = {p.stems[0].get(), p.stems[1].get(), p.stems[2].get(), p.stems[3].get()};
+            engine.commands().push(Command::setPadStems(p.params.pad, planes, p.stemMask));
+        }
     }
 
     // events sorted by time; pushed per block so the queue never holds more than one block's worth

@@ -35,6 +35,15 @@ struct RenderPadSpec
     std::int64_t endFrame = 0;
     PadParams params{};
     std::shared_ptr<SampleBuffer> sample; // filled by loadRenderSamples (or set directly by tests)
+    // Optional pre-rendered crossfade LOOP (loop::renderCrossfadeLoop on the message side) + its steady bracket:
+    // sent as setPadLoopBuffer after setPadSample. The spec keeps the buffer alive for the render.
+    std::shared_ptr<SampleBuffer> loopSample;
+    std::int64_t loopStart = 0;
+    std::int64_t loopEnd = 0;
+    // Optional stem planes (drums/bass/other/vocals, the sample's length/rate) + the pad's 4-bit mask: sent as
+    // setPadStems after setPadSample. Mask 15 / no planes = nothing sent (the base buffer plays).
+    std::shared_ptr<SampleBuffer> stems[4];
+    std::uint8_t stemMask = 15;
 };
 
 struct RenderEvent

@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
+#include "terminator/core/planners/LoopRender.h"
+#include "terminator/core/planners/StemMask.h"
 #include "terminator/model/Ids.h"
 #include "terminator/model/ProjectModel.h"
 #include "terminator/model/ProjectPlanner.h"
@@ -16,6 +19,103 @@ namespace
 std::int64_t secToFrame(double sec, double rate) noexcept
 {
     return static_cast<std::int64_t>(std::floor(sec * rate + 0.5));
+}
+
+/// Stems{readyRanges} / SourceStem{readyRanges} → ReadyRange list (var array of [start,end] pairs).
+std::vector<stems::ReadyRange> readyRangesOf(const juce::ValueTree& stemSet)
+{
+    std::vector<stems::ReadyRange> out;
+    if (!stemSet.isValid())
+        return out;
+    if (const auto* arr = stemSet.getProperty(ids::readyRanges).getArray())
+        for (const auto& r : *arr)
+            if (const auto* pr = r.getArray(); pr != nullptr && pr->size() >= 2)
+                out.push_back({static_cast<double>((*pr)[0]), static_cast<double>((*pr)[1])});
+    return out;
+}
+
+/// The planes a masked pad reads: every lit plane present + the same length/rate as the base + the span READY →
+/// true (the voice sums them); else false = the ORIGINAL plays (TS bufferForPadChop / bufferForPadSource).
+bool stemsApply(const StemPlanes& planes, std::uint8_t mask, const SampleBuffer& base,
+                const std::vector<stems::ReadyRange>& ready, double startSec, double endSec)
+{
+    if (mask == 0 || mask == stems::kMaskAll)
+        return false;
+    if (!stems::spanReady(ready, startSec, endSec))
+        return false;
+    for (int k = 0; k < stems::kStemCount; ++k)
+    {
+        if ((mask & (1u << k)) == 0)
+            continue;
+        const auto& pl = planes[static_cast<std::size_t>(k)];
+        if (pl == nullptr || pl->numFrames != base.numFrames || pl->sampleRate != base.sampleRate ||
+            pl->numChannels < 1)
+            return false;
+    }
+    return true;
+}
+
+/// The region's audio as the voice will read it (base, or the lit planes summed), reversed when the pad is —
+/// the input to the LOOP render (loopBufferFor renders from the resolved, already-reversed source buffer).
+std::vector<std::vector<float>> regionChannels(const SampleBuffer& base, const StemPlanes* planes, std::uint8_t mask,
+                                               std::int64_t s0, std::int64_t n, bool reverse)
+{
+    const int channels = planes != nullptr ? std::min(2, base.numChannels) : base.numChannels;
+    std::vector<std::vector<float>> out(static_cast<std::size_t>(std::max(1, channels)),
+                                        std::vector<float>(static_cast<std::size_t>(n), 0.0f));
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        auto& d = out[static_cast<std::size_t>(ch)];
+        if (planes == nullptr)
+        {
+            const float* src = base.channel(ch);
+            for (std::int64_t i = 0; i < n; ++i)
+                d[static_cast<std::size_t>(i)] = src[s0 + i];
+        }
+        else
+        {
+            for (int k = 0; k < stems::kStemCount; ++k)
+            {
+                if ((mask & (1u << k)) == 0)
+                    continue;
+                const auto& pl = *(*planes)[static_cast<std::size_t>(k)];
+                const float* src = pl.channel(std::min(ch, pl.numChannels - 1));
+                for (std::int64_t i = 0; i < n; ++i)
+                    d[static_cast<std::size_t>(i)] += src[s0 + i];
+            }
+        }
+        if (reverse)
+            std::reverse(d.begin(), d.end());
+    }
+    return out;
+}
+
+/// loopBufferFor: the rendered crossfade loop of a LOOP pad's region (fades in BUFFER seconds). No fades → no
+/// render (the sampler hard-wraps the raw region, exactly like TS looping the raw region).
+std::shared_ptr<SampleBuffer> renderPadLoop(const SampleBuffer& base, const StemPlanes* planes, std::uint8_t mask,
+                                            std::int64_t s0, std::int64_t n, double fadeInSec, double fadeOutSec,
+                                            bool reverse, std::int64_t& loopStart, std::int64_t& loopEnd)
+{
+    const double rate = base.sampleRate;
+    const double durSec = static_cast<double>(n) / rate;
+    const double fi = std::max(0.0, std::min(durSec, fadeInSec));
+    const double fo = std::max(0.0, std::min(durSec, fadeOutSec));
+    if (fi <= 0.0 && fo <= 0.0)
+        return nullptr;
+    const auto chans = regionChannels(base, planes, mask, s0, std::max<std::int64_t>(2, n), reverse);
+    std::vector<const float*> ptrs;
+    for (const auto& c : chans)
+        ptrs.push_back(c.data());
+    const auto r = loop::renderCrossfadeLoop(ptrs, 0, static_cast<std::int64_t>(chans[0].size()),
+                                             static_cast<std::int64_t>(std::floor(fi * rate + 0.5)),
+                                             static_cast<std::int64_t>(std::floor(fo * rate + 0.5)));
+    auto out = std::make_shared<SampleBuffer>();
+    out->allocate(static_cast<int>(r.frames.size()), static_cast<std::int64_t>(r.frames[0].size()), rate);
+    for (std::size_t c = 0; c < r.frames.size(); ++c)
+        std::copy(r.frames[c].begin(), r.frames[c].end(), out->channel(static_cast<int>(c)));
+    loopStart = r.loopStart;
+    loopEnd = r.loopStart + r.period;
+    return out;
 }
 } // namespace
 
@@ -50,6 +150,12 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
     const auto pads = project.getChildWithName(ids::Pads);
     const auto chops = project.getChildWithName(ids::Chops);
     const auto padSources = project.getChildWithName(ids::PadSources);
+    const auto sourceNorm = project.getChildWithName(ids::SourceNorm);
+    const auto masterN = project.getChildWithName(ids::Master);
+    const auto mainStemSet = project.getChildWithName(ids::Stems);
+    const auto sourceStemSets = project.getChildWithName(ids::SourceStems);
+    const double masterRelease = masterN.isValid() ? static_cast<double>(masterN.getProperty(ids::release, 0.0)) : 0.0;
+    const auto mainReady = readyRangesOf(mainStemSet);
 
     // one RenderSpec pad per occupied project pad, keyed by the SAME pad index the events use
     std::map<int, std::size_t> padSlot; // pad index → spec.pads position
@@ -58,17 +164,27 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         const int idx = static_cast<int>(padN.getProperty(ids::index));
         std::shared_ptr<SampleBuffer> buffer;
         double regStartSec = 0.0, regEndSec = 0.0;
+        const StemPlanes* planes = nullptr; // the stems of what this pad plays (main track / its own source)
+        std::vector<stems::ReadyRange> ready;
+        float sourceNormGain = 1.0f; // per-source NORM rides the voice (normGainFor); main chops stay at 1
 
         const auto srcN = findChildWithProperty(padSources, ids::pad, idx);
         if (srcN.isValid())
         {
+            const auto videoId = srcN.getProperty(ids::videoId).toString();
             buffer = [&]
             {
-                auto it = bank.bySourceVideoId.find(srcN.getProperty(ids::videoId).toString());
+                auto it = bank.bySourceVideoId.find(videoId);
                 return it != bank.bySourceVideoId.end() ? it->second : nullptr;
             }();
             regStartSec = static_cast<double>(srcN.getProperty(ids::start, 0.0));
             regEndSec = static_cast<double>(srcN.getProperty(ids::end, 0.0));
+            sourceNormGain = static_cast<float>(static_cast<double>(mapGet(sourceNorm, "src:" + videoId, 1.0)));
+            if (auto it = bank.stemsBySourceVideoId.find(videoId); it != bank.stemsBySourceVideoId.end())
+            {
+                planes = &it->second;
+                ready = readyRangesOf(findChildWithProperty(sourceStemSets, ids::videoId, videoId));
+            }
         }
         else if (padN.hasProperty(ids::chopId))
         {
@@ -78,6 +194,8 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
                 buffer = bank.mainBuffer;
                 regStartSec = static_cast<double>(chopN.getProperty(ids::start, 0.0));
                 regEndSec = static_cast<double>(chopN.getProperty(ids::end, 0.0));
+                planes = &bank.mainStems;
+                ready = mainReady;
             }
         }
         if (buffer == nullptr)
@@ -90,6 +208,17 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         p.endFrame = std::clamp<std::int64_t>(regEndSec > 0.0 ? secToFrame(regEndSec, rate) : buffer->numFrames,
                                               p.startFrame, buffer->numFrames);
         p.params.pad = static_cast<std::uint16_t>(idx);
+        // STEMS: the pad's mask picks its layers (same region, different audio); ALL / unready = the original
+        const auto mask = stems::normalizeMask(
+            padN.hasProperty(ids::stems) ? static_cast<long long>(static_cast<int>(padN.getProperty(ids::stems))) : 15);
+        const double regionEndSec = regEndSec > 0.0 ? regEndSec : static_cast<double>(buffer->numFrames) / rate;
+        const bool useStems = planes != nullptr && stemsApply(*planes, mask, *buffer, ready, regStartSec, regionEndSec);
+        if (useStems)
+        {
+            for (std::size_t k = 0; k < 4; ++k)
+                p.stems[k] = (*planes)[k];
+            p.stemMask = mask;
+        }
         // pitch = pad PITCH + source PITCH + FINE/100 (pitchFor); reversed baked as a voice flag
         const auto srcKey = planner.padSourceKey(idx);
         double srcPitch = 0.0, srcFine = 0.0;
@@ -118,14 +247,27 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
                 srcAttack = static_cast<double>(fx.getProperty(ids::attack, srcAttack));
             }
         }
-        p.params.pitchSemitones =
-            static_cast<float>(static_cast<double>(padN.getProperty(ids::pitch, 0)) + srcPitch + srcFine / 100.0);
-        p.params.attackSec = static_cast<float>(srcAttack);
-        p.params.gain = 1.0f; // master gain carries chopVolume×norm; per-source NORM = a later pass
-        p.params.mode = padN.getProperty(ids::mode).toString() == "loop" ? PadMode::loop : PadMode::oneShot;
-        p.params.reverse = planner.reversedFor(idx) ? 1 : 0;
+        const double totalSemis = static_cast<double>(padN.getProperty(ids::pitch, 0)) + srcPitch + srcFine / 100.0;
+        p.params.pitchSemitones = static_cast<float>(totalSemis);
+        const bool looping = padN.getProperty(ids::mode).toString() == "loop";
+        const bool reversed = planner.reversedFor(idx);
+        // the pad's own fades (BUFFER seconds inside the region): LOOP renders them into the loop buffer; a
+        // one-shot plays the fade-in as its envelope — it lengthens the source ATTACK (context seconds → ÷ rate)
+        const double playDur = static_cast<double>(p.endFrame - p.startFrame) / rate;
+        const double fadeIn = std::max(0.0, std::min(playDur, static_cast<double>(padN.getProperty(ids::fadeIn, 0.0))));
+        const double fadeOut =
+            std::max(0.0, std::min(playDur, static_cast<double>(padN.getProperty(ids::fadeOut, 0.0))));
+        const double playbackRate = std::pow(2.0, totalSemis / 12.0);
+        p.params.attackSec = static_cast<float>(std::max(srcAttack, looping ? 0.0 : fadeIn / playbackRate));
+        p.params.releaseSec = static_cast<float>(std::clamp(masterRelease, 0.0, 0.5)); // RELEASE fades at the REAL end
+        p.params.gain = sourceNormGain; // master gain carries chopVolume×main NORM for every bus (routeOutput)
+        p.params.mode = looping ? PadMode::loop : PadMode::oneShot;
+        p.params.reverse = reversed ? 1 : 0;
         p.params.chokeGroup = static_cast<std::int16_t>(chokeInt(idx));
         p.params.interpolation = opts.classicInterpolation ? Interpolation::linear : Interpolation::hermite;
+        if (looping && p.endFrame > p.startFrame)
+            p.loopSample = renderPadLoop(*buffer, useStems ? planes : nullptr, mask, p.startFrame,
+                                         p.endFrame - p.startFrame, fadeIn, fadeOut, reversed, p.loopStart, p.loopEnd);
         padSlot[idx] = spec.pads.size();
         spec.pads.push_back(std::move(p));
     }
