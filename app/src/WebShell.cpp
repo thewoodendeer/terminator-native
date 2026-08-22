@@ -1,5 +1,6 @@
 #include "WebShell.h"
 
+#include <algorithm>
 #include <iostream>
 
 #include "WebResources.h"
@@ -530,8 +531,59 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         return registry_.setPadSample(json);
     if (type == "setPadLoop")
         return registry_.setPadLoop(json);
+    // the chop sequencer (Phase 3.1): a whole pattern → SeqPattern (grid bit masks + per-cell velocity), by pointer
+    if (type == "setSequence" || type == "queueSequence")
+    {
+        auto pat = std::make_shared<SeqPattern>();
+        pat->clear();
+        pat->index = static_cast<int>(json.getProperty("index", 0));
+        pat->bars = std::clamp(static_cast<int>(json.getProperty("bars", 2)), 1, 4);
+        pat->resolution = std::clamp(static_cast<int>(json.getProperty("resolution", 16)), 1, 384);
+        pat->stepCount = std::min(kSeqMaxSteps, pat->bars * pat->resolution);
+        pat->loop = static_cast<bool>(json.getProperty("loop", true));
+        pat->swing = std::clamp(static_cast<double>(json.getProperty("swing", 0.0)), 0.0, 1.0);
+        const auto* grid = json.getProperty("grid", juce::var()).getArray();
+        const auto* vel = json.getProperty("velGrid", juce::var()).getArray();
+        if (grid != nullptr)
+            for (int st = 0; st < pat->stepCount && st < grid->size(); ++st)
+            {
+                const auto* row = (*grid)[st].getArray();
+                if (row == nullptr)
+                    continue;
+                const auto* vrow = (vel != nullptr && st < vel->size()) ? (*vel)[st].getArray() : nullptr;
+                for (int k = 0; k < row->size(); ++k)
+                {
+                    const int pad = static_cast<int>((*row)[k]);
+                    if (pad < 0 || pad >= kSeqMaxPads)
+                        continue;
+                    pat->grid[st] |= (1ull << pad);
+                    const double v = (vrow != nullptr && k < vrow->size()) ? static_cast<double>((*vrow)[k]) : 1.0;
+                    pat->velocity[st][pad] = static_cast<float>(std::clamp(v, 0.05, 1.0));
+                }
+            }
+        const Command c =
+            type == "queueSequence" ? Command::seqQueuePattern(pat.get()) : Command::seqSetPattern(pat.get());
+        if (!engine_.commands().push(c))
+            return ok(false, "command queue full");
+        patternRing_.push_back(std::move(pat));
+        while (patternRing_.size() > 8)
+            patternRing_.erase(patternRing_.begin());
+        return ok(true);
+    }
     Command c;
-    if (type == "setMasterGain")
+    if (type == "seqPlay")
+        c = Command::seqPlay(static_cast<std::uint64_t>(static_cast<juce::int64>(json.getProperty("atSample", 0))));
+    else if (type == "seqStop")
+        c = Command::seqStop();
+    else if (type == "seqPause")
+        c = Command::seqPause();
+    else if (type == "seqResume")
+        c = Command::seqResume();
+    else if (type == "setBpm")
+        c = Command::seqSetBpm(static_cast<double>(json.getProperty("bpm", 120.0)));
+    else if (type == "seqLoop")
+        c = Command::seqSetLoop(static_cast<bool>(json.getProperty("on", true)));
+    else if (type == "setMasterGain")
         c = Command::setMasterGain(static_cast<float>(static_cast<double>(json["gain"])));
     else if (type == "setTestTone")
         c = Command::setTestTone(static_cast<bool>(json["enabled"]),
@@ -1030,6 +1082,16 @@ void WebShell::timerCallback()
     obj->setProperty("activePads", juce::var(activePads));
     obj->setProperty("lastTriggeredPad", s.lastTriggeredPad);
     obj->setProperty("lastTriggeredPadPositionSec", s.lastTriggeredPadPositionSec);
+    obj->setProperty("seqPlaying", static_cast<bool>(s.seqPlaying));
+    obj->setProperty("seqPaused", static_cast<bool>(s.seqPaused));
+    obj->setProperty("seqLoop", static_cast<bool>(s.seqLoop));
+    obj->setProperty("seqStep", s.seqStep);
+    obj->setProperty("seqStepCount", s.seqStepCount);
+    obj->setProperty("seqPatternIndex", s.seqPatternIndex);
+    obj->setProperty("seqStepPhase", s.seqStepPhase);
+    obj->setProperty("seqBpm", s.seqBpm);
+    obj->setProperty("seqLoopStartSample", static_cast<juce::int64>(s.seqLoopStartSample));
+    obj->setProperty("seqHitsFired", static_cast<juce::int64>(s.seqHitsFired));
     obj->setProperty("calibrationState", static_cast<int>(s.calibrationState));
     obj->setProperty("calibrationSamples", calibrationResultSamples_);
     obj->setProperty("calibrationMs", calibrationResultMs_);

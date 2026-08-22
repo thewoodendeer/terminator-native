@@ -367,6 +367,24 @@ class NativeEngineShadow {
       r.enginePrepared = !!this.latestSnapshot?.prepared;
       r.lastTriggeredPad = this.latestSnapshot?.lastTriggeredPad ?? null;
       r.padActiveMask = this.latestSnapshot?.padActiveMask ?? null;
+      // the native chop sequencer (Phase 3.1 bridge smoke): a 16-step pattern hitting pad 63 on every step at
+      // 240 BPM (stepDur 62.5 ms) → seqPlaying, the step cursor advances, hits fire; then stop
+      r.seqSet = await this.cmd({ type: 'setSequence', index: 0, bars: 1, resolution: 16, loop: true, swing: 0, grid: Array.from({ length: 16 }, () => [63]), velGrid: Array.from({ length: 16 }, () => [1]) });
+      r.seqBpm = await this.cmd({ type: 'setBpm', bpm: 240 });
+      r.seqPlay = await this.cmd({ type: 'seqPlay' });
+      await new Promise((res) => setTimeout(res, 350));
+      const s1 = this.latestSnapshot;
+      r.seqPlaying = !!s1?.seqPlaying;
+      r.seqStepA = s1?.seqStep ?? -1;
+      r.seqStepCount = s1?.seqStepCount ?? 0;
+      await new Promise((res) => setTimeout(res, 300));
+      const s2 = this.latestSnapshot;
+      r.seqStepB = s2?.seqStep ?? -1;
+      r.seqHits = Number(s2?.seqHitsFired ?? 0);
+      r.seqAdvances = r.seqPlaying && r.seqStepCount === 16 && r.seqHits >= 8 && r.seqStepB !== r.seqStepA;
+      r.seqStop = await this.cmd({ type: 'seqStop' });
+      await new Promise((res) => setTimeout(res, 150));
+      r.seqStopped = !this.latestSnapshot?.seqPlaying;
       r.unbind = await this.cmd({ type: 'setPadSample', pad: 63 });
       const rel = await native.samples({ verb: 'release', key: rec.key });
       r.release = !!rel?.ok;
@@ -401,7 +419,7 @@ class NativeEngineShadow {
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger;
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;

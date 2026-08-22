@@ -63,6 +63,9 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"assetsOk": ?true' "$OUT" || { echo "::error::asset-store self-test failed (see the assets object above)"; exit 1; }
   if grep -Eq '"enginePrepared": ?true' "$OUT"; then
     grep -Eq '"lastTriggeredPad": ?63' "$OUT" || { echo "::error::engine is running but the shadow's trigger never reached the audio thread (lastTriggeredPad != 63)"; exit 1; }
+    grep -Eq '"seqAdvances": ?true' "$OUT" || { echo "::error::the native chop sequencer did not run (setSequence + seqPlay → seqPlaying/step/hits)"; exit 1; }
+    grep -Eq '"seqStopped": ?true' "$OUT" || { echo "::error::seqStop did not stop the native chop sequencer"; exit 1; }
+    echo "native chop sequencer OK (bridge: setSequence → seqPlay → steps + hits → seqStop)"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

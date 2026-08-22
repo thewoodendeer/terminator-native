@@ -78,6 +78,9 @@ class WebShell final : public juce::Component, private juce::Timer
     std::unique_ptr<Browser> browser_;
     std::unique_ptr<PrefsWindow> prefsWindow_; // Preferences = a second window hosting the React preferences page
     std::unique_ptr<juce::FileChooser> chooser_;
+    // chop-seq patterns handed to the engine by pointer: a ring keeps the last few alive (the audio thread may still
+    // read a replaced pattern for a block or two; 8 back is far beyond that)
+    std::vector<std::shared_ptr<SeqPattern>> patternRing_;
     std::uint32_t padSampleIds_[kMaxPads] = {};
     juce::String padSampleNames_[kMaxPads];
     juce::File padSampleFiles_[kMaxPads];
