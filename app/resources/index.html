@@ -7,86 +7,211 @@
 <style>
   :root { color-scheme: dark; }
   html, body { margin: 0; height: 100%; background: #050505; color: #d7d7d7;
-    font: 14px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  body { display: grid; place-items: center; }
-  main { width: min(720px, 92vw); }
-  h1 { margin: 0 0 2px; font-size: 28px; letter-spacing: .12em; color: #ff3b1f; font-weight: 800; }
+    font: 13px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  main { max-width: 1180px; margin: 0 auto; padding: 18px 20px 40px; }
+  h1 { margin: 0 0 2px; font-size: 26px; letter-spacing: .12em; color: #ff3b1f; font-weight: 800; }
   h1 small { color: #777; font-size: 12px; letter-spacing: .3em; margin-left: 10px; }
-  .sub { color: #888; margin-bottom: 22px; }
+  h2 { font-size: 12px; letter-spacing: .2em; color: #888; margin: 22px 0 8px; border-bottom: 1px solid #1b1b1b; padding-bottom: 4px; }
+  .sub { color: #888; margin-bottom: 14px; }
   .grid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; border: 1px solid #1e1e1e;
-    padding: 14px 16px; border-radius: 6px; background: #0b0b0b; }
-  .k { color: #6c6c6c; }
-  .v { color: #e8e8e8; white-space: pre-wrap; word-break: break-all; }
+    padding: 12px 14px; border-radius: 6px; background: #0b0b0b; }
+  .k { color: #6c6c6c; } .v { color: #e8e8e8; white-space: pre-wrap; word-break: break-word; }
   .ok { color: #5fd35f; } .bad { color: #ff6b6b; } .dim { color: #555; }
-  .row { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  button { background: #161616; color: #eee; border: 1px solid #2a2a2a; border-radius: 4px; padding: 7px 12px;
-    font: inherit; cursor: pointer; }
-  button:hover { border-color: #ff3b1f; }
-  button:active { background: #ff3b1f; color: #000; }
-  meter { width: 180px; height: 12px; }
+  .row { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { background: #161616; color: #eee; border: 1px solid #2a2a2a; border-radius: 4px; padding: 6px 11px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #ff3b1f; } button:active, button.on { background: #ff3b1f; color: #000; }
+  select, input[type=number] { background: #111; color: #eee; border: 1px solid #2a2a2a; border-radius: 4px; padding: 5px 7px; font: inherit; max-width: 280px; }
+  label { color: #999; } label b { color: #ccc; font-weight: 600; margin-right: 6px; }
+  meter { width: 120px; height: 10px; vertical-align: middle; }
+  .meters { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .meters span { display: inline-flex; align-items: center; gap: 6px; color: #777; }
+  .chan { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chan label { border: 1px solid #222; border-radius: 4px; padding: 3px 8px; background: #0e0e0e; cursor: pointer; }
+  .chan label.on { border-color: #5fd35f; color: #ddd; }
+  .pads { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; max-width: 760px; }
+  .pad { aspect-ratio: 1; border: 1px solid #2a2a2a; border-radius: 6px; background: #111; position: relative; cursor: pointer;
+    user-select: none; -webkit-user-select: none; display: flex; flex-direction: column; justify-content: flex-end; padding: 6px; }
+  .pad:hover { border-color: #555; } .pad.lit { background: #7a1000; border-color: #aa2010; }
+  .pad.has { background: #161616; } .pad .n { position: absolute; right: 7px; top: 5px; color: #666; font-size: 11px; }
+  .pad .name { font-size: 11px; color: #bbb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pad .key { position: absolute; left: 7px; top: 5px; color: #444; font-size: 10px; }
+  .pad .menu { position: absolute; left: 6px; bottom: 5px; font-size: 11px; color: #555; }
   .foot { margin-top: 18px; color: #444; font-size: 12px; }
+  .inline { display: inline-block; margin-right: 14px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>TERMINATOR<small>3.0 · NATIVE SHELL · PHASE 0</small></h1>
-  <div class="sub">JUCE WebView → libterminator. Static page, live engine snapshot, bridge v0.</div>
-  <div class="grid" id="grid">
+  <h1>TERMINATOR<small>3.0 · NATIVE SHELL · PHASE 1</small></h1>
+  <div class="sub">JUCE WebView → libterminator. Devices · channels · latency · pads · MIDI — the engine is the thing being tested, this page is scaffolding until the React UI lands (Phase 2).</div>
+
+  <div class="grid">
     <div class="k">bridge</div><div class="v" id="bridge">…</div>
     <div class="k">engine</div><div class="v" id="engine">…</div>
     <div class="k">device</div><div class="v" id="device">…</div>
     <div class="k">snapshot</div><div class="v" id="snap">waiting…</div>
+    <div class="k">outputs</div><div class="v meters" id="outMeters"></div>
+    <div class="k">inputs</div><div class="v meters" id="inMeters"><span class="dim">none enabled</span></div>
     <div class="k">peak L/R</div><div class="v"><meter id="mL" min="0" max="1" value="0"></meter> <meter id="mR" min="0" max="1" value="0"></meter> <span id="peakTxt" class="dim"></span></div>
+    <div class="k">MIDI</div><div class="v" id="midiTxt">…</div>
+  </div>
+
+  <h2>AUDIO — Preferences (Ableton-style)</h2>
+  <div class="row">
+    <label><b>Driver Type</b><select id="selType"></select></label>
+    <label><b>Input Device</b><select id="selIn"></select></label>
+    <label><b>Output Device</b><select id="selOut"></select></label>
+    <label><b>Sample Rate</b><select id="selRate"></select></label>
+    <label><b>Buffer Size</b><select id="selBuf"></select></label>
+    <button id="apply">Apply</button>
+    <button id="defaultDev">Default output</button>
+  </div>
+  <div class="row"><b style="color:#ccc">Input Config</b> <div class="chan" id="inChans"></div></div>
+  <div class="row"><b style="color:#ccc">Output Config</b> <div class="chan" id="outChans"></div> <button id="enableAll">Enable all</button></div>
+  <div class="row">
+    <span class="inline"><b style="color:#ccc">Latency</b> <span id="latency" class="dim">—</span></span>
+    <label><b>Measure round trip</b> out <input id="calOut" type="number" min="0" value="0" style="width:60px"> → in <input id="calIn" type="number" min="0" value="0" style="width:60px"></label>
+    <button id="calibrate">Measure</button> <span id="calResult" class="dim">cable an output to an input, then Measure</span>
   </div>
   <div class="row">
     <button id="tone">test tone ON</button>
-    <button id="play">▶ play</button>
-    <button id="stop">■ stop</button>
-    <button id="panic">PANIC</button>
-    <label>master <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5"></label>
+    <label><b>tone out pair</b><select id="tonePair"></select></label>
+    <button id="play">▶ play</button> <button id="stop">■ stop</button> <button id="panic">PANIC</button>
+    <label><b>master</b><input id="gain" type="range" min="0" max="1" step="0.01" value="0.5"></label>
   </div>
-  <div class="foot">Commands go JS → C++ (native function) → lock-free queue → audio thread. Snapshots come back at 20 Hz. Nothing here touches audio directly.</div>
+
+  <h2>PADS — hello pads (click · keys · MIDI note 36+ = pad 1+)</h2>
+  <div class="row">
+    <label><b>selected pad</b><span id="selPad" style="color:#eee">1</span></label>
+    <button id="loadPad">Load sample…</button> <button id="clearPad">Clear</button>
+    <label><b>pitch</b><input id="pPitch" type="number" min="-24" max="24" step="1" value="0" style="width:64px"></label>
+    <label><b>fine</b><input id="pFine" type="number" min="-50" max="50" step="1" value="0" style="width:64px"></label>
+    <label><b>attack s</b><input id="pAtk" type="number" min="0" max="0.5" step="0.001" value="0.003" style="width:72px"></label>
+    <label><b>release s</b><input id="pRel" type="number" min="0" max="0.5" step="0.001" value="0" style="width:72px"></label>
+    <label><b>mode</b><select id="pMode"><option>oneshot</option><option>gate</option><option>loop</option></select></label>
+    <label><b>out pair</b><select id="pOut"></select></label>
+    <label><b>choke</b><input id="pChoke" type="number" min="-2" max="99" step="1" value="-1" style="width:64px" title="-1 own pad · -2 poly · 0+ mute group"></label>
+    <label><b>rev</b><input id="pRev" type="checkbox"></label>
+    <label><b>interp</b><select id="pInterp"><option>hermite</option><option>linear</option></select></label>
+    <button id="padApply">Apply to pad</button>
+  </div>
+  <div class="pads" id="pads"></div>
+  <div class="foot" id="padInfo"></div>
+
+  <div class="foot">Commands go JS → C++ (native function) → lock-free queue → audio thread. Snapshots come back at 20 Hz. Keys: z x c v b n m , · a s d f g h j k (pads 1–16). Nothing here touches audio directly.</div>
 </main>
 <script type="module">
-  // Official JUCE bridge package (@juce-framework/webview), served from the embedded JUCE 9 tree.
   import * as Juce from "./juce/index.js";
   const $ = (id) => document.getElementById(id);
-  const fmt = (o) => JSON.stringify(o);
   const hasBridge = !!(window.__JUCE__ && window.__JUCE__.backend);
   $("bridge").textContent = hasBridge ? "window.__JUCE__ present · @juce-framework/webview loaded" : "no __JUCE__ (opened outside the app?)";
   $("bridge").className = "v " + (hasBridge ? "ok" : "bad");
+  if (!hasBridge) throw new Error("no bridge");
 
-  if (hasBridge) {
-    const info = Juce.getNativeFunction("terminatorInfo");
-    const command = Juce.getNativeFunction("terminatorCommand");
-    info().then((i) => {
-      $("engine").textContent = `${i.app} ${i.version} · JUCE ${i.juce} · ${i.os} · ${i.arch} · ${i.cpu} · protocol v${i.bridgeProtocol}`;
-      const d = i.device || {};
-      $("device").textContent = d.open
-        ? `${d.type} · ${d.name} · ${d.sampleRate} Hz · ${d.bufferSize} smp · in ${d.inputs} / out ${d.outputs} · latency in ${d.inputLatencySamples} / out ${d.outputLatencySamples} smp`
-        : `NO DEVICE${d.error ? " — " + d.error : ""}`;
-      $("device").className = "v " + (d.open ? "ok" : "bad");
-    });
-    let toneOn = false;
-    const send = (c) => command(c).then((r) => { if (!r.ok) console.warn("command refused", c, r.error); });
-    $("tone").onclick = () => { toneOn = !toneOn; $("tone").textContent = toneOn ? "test tone OFF" : "test tone ON";
-      send({ type: "setTestTone", enabled: toneOn, frequencyHz: 440, amplitude: 0.25 }); };
-    $("play").onclick = () => send({ type: "transportPlay" });
-    $("stop").onclick = () => send({ type: "transportStop" });
-    $("panic").onclick = () => { toneOn = false; $("tone").textContent = "test tone ON"; send({ type: "panic" }); };
-    $("gain").oninput = (e) => send({ type: "setMasterGain", gain: parseFloat(e.target.value) });
-    send({ type: "setMasterGain", gain: 0.5 });
+  const info = Juce.getNativeFunction("terminatorInfo");
+  const command = Juce.getNativeFunction("terminatorCommand");
+  const audio = Juce.getNativeFunction("terminatorAudio");
+  const midi = Juce.getNativeFunction("terminatorMidi");
+  const pads = Juce.getNativeFunction("terminatorPads");
+  const send = (c) => command(c).then((r) => { if (!r.ok) console.warn("command refused", c, r.error); return r; });
 
-    window.__JUCE__.backend.addEventListener("terminator.snapshot", (s) => {
-      const secs = s.sampleRate ? (s.playheadSamples / s.sampleRate).toFixed(2) : "0.00";
-      $("snap").textContent = `${s.prepared ? "prepared" : "NOT prepared"} · ${s.sampleRate} Hz · block ${s.blockSize} · outs ${s.outputs} · `
-        + `${s.playing ? "PLAYING" : "stopped"} @ ${secs}s · blocks ${s.blocksProcessed} · gain ${s.masterGain.toFixed(2)} · `
-        + `tone ${s.testToneEnabled ? s.testToneFrequencyHz + " Hz" : "off"} · cmds ${s.commandsApplied}/${s.commandsDropped} dropped · `
-        + `cpu ${(s.cpuLoad * 100).toFixed(1)}% · xruns ${s.xruns}`;
-      $("mL").value = s.peakL; $("mR").value = s.peakR;
-      $("peakTxt").textContent = `${s.peakL.toFixed(3)} / ${s.peakR.toFixed(3)}`;
-    });
+  // ---------- device ----------
+  let dev = null;
+  const fillSel = (sel, items, current) => { sel.innerHTML = ""; for (const it of items) { const o = document.createElement("option"); o.value = it; o.textContent = it; if (String(it) === String(current)) o.selected = true; sel.appendChild(o); } };
+  const chanBoxes = (host, names, active, prefix) => {
+    host.innerHTML = "";
+    names.forEach((nm, i) => { const l = document.createElement("label"); l.className = active.includes(i) ? "on" : ""; l.dataset.idx = i;
+      l.textContent = `${i + 1} ${nm}`; l.title = prefix + " " + (i + 1); l.onclick = () => l.classList.toggle("on"); host.appendChild(l); });
+  };
+  const activeFrom = (host) => [...host.querySelectorAll("label.on")].map((l) => +l.dataset.idx);
+  const showDevice = (d) => {
+    dev = d;
+    $("device").textContent = d.open
+      ? `${d.type} · in: ${d.inputDevice || "—"} · out: ${d.outputDevice || "—"} · ${d.sampleRate} Hz · ${d.bufferSize} smp · active in ${d.inputs} / out ${d.outputs} (device has ${d.inputChannelNames.length} in / ${d.outputChannelNames.length} out)`
+      : `NO DEVICE${d.error ? " — " + d.error : ""}`;
+    $("device").className = "v " + (d.open ? "ok" : "bad");
+    $("latency").textContent = d.open ? `reported in ${d.inputLatencySamples} smp (${d.inputLatencyMs.toFixed(2)} ms) · out ${d.outputLatencySamples} smp (${d.outputLatencyMs.toFixed(2)} ms) · buffer ${(d.bufferSize * 1000 / d.sampleRate).toFixed(2)} ms` + (d.calibrationSamples >= 0 ? ` · MEASURED round trip ${d.calibrationSamples} smp = ${d.calibrationMs.toFixed(2)} ms (driver error compensation ${(d.calibrationSamples - d.calibrationReportedSamples)} smp)` : "") : "—";
+    chanBoxes($("inChans"), d.inputChannelNames, d.activeInputChannels, "input");
+    chanBoxes($("outChans"), d.outputChannelNames, d.activeOutputChannels, "output");
+    fillSel($("selRate"), d.availableSampleRates, d.sampleRate);
+    fillSel($("selBuf"), d.availableBufferSizes, d.bufferSize);
+    const pairs = []; for (let i = 0; i < Math.max(1, Math.ceil(d.outputChannelNames.length / 2)); i++) pairs.push(i);
+    const pairName = (i) => `${2 * i + 1}/${2 * i + 2}`;
+    for (const sel of [$("tonePair"), $("pOut")]) { const cur = sel.value; sel.innerHTML = ""; for (const p of pairs) { const o = document.createElement("option"); o.value = p; o.textContent = pairName(p); sel.appendChild(o); } if (cur) sel.value = cur; }
+    $("outMeters").innerHTML = d.outputChannelNames.filter((_, i) => d.activeOutputChannels.includes(i)).map((nm, i) => `<span>${d.activeOutputChannels[i] + 1}<meter id="om${i}" min="0" max="1" value="0"></meter></span>`).join("");
+    $("inMeters").innerHTML = d.inputs ? d.inputChannelNames.filter((_, i) => d.activeInputChannels.includes(i)).map((nm, i) => `<span>${d.activeInputChannels[i] + 1}<meter id="im${i}" min="0" max="1" value="0"></meter></span>`).join("") : `<span class="dim">none enabled</span>`;
+  };
+  const refreshAudio = (req = { verb: "list" }) => audio(req).then((r) => {
+    if (!r.ok && r.error) { $("device").textContent = "ERROR — " + r.error; $("device").className = "v bad"; }
+    fillSel($("selType"), r.deviceTypes, r.listType);
+    fillSel($("selIn"), ["", ...r.inputDevices], r.device.inputDevice);
+    fillSel($("selOut"), ["", ...r.outputDevices], r.device.outputDevice);
+    showDevice(r.device);
+    return r;
+  });
+  $("selType").onchange = () => refreshAudio({ verb: "list", forType: $("selType").value });
+  $("apply").onclick = () => refreshAudio({ verb: "apply", deviceType: $("selType").value, inputDevice: $("selIn").value, outputDevice: $("selOut").value,
+    sampleRate: +$("selRate").value || 0, bufferSize: +$("selBuf").value || 0, inputChannels: activeFrom($("inChans")), outputChannels: activeFrom($("outChans")) });
+  $("enableAll").onclick = () => refreshAudio({ verb: "enableAll" });
+  $("defaultDev").onclick = () => refreshAudio({ verb: "default" });
+  $("calibrate").onclick = () => { $("calResult").textContent = "measuring… (1 s)"; audio({ verb: "calibrate", outputChannel: +$("calOut").value, inputChannel: +$("calIn").value }).then((r) => { if (!r.ok) $("calResult").textContent = "✗ " + r.error; }); };
+  window.__JUCE__.backend.addEventListener("terminator.devicesChanged", () => refreshAudio());
+
+  // ---------- transport / tone ----------
+  let toneOn = false;
+  $("tone").onclick = () => { toneOn = !toneOn; $("tone").textContent = toneOn ? "test tone OFF" : "test tone ON"; send({ type: "setTestTone", enabled: toneOn, frequencyHz: 440, amplitude: 0.25, outputPair: +$("tonePair").value }); };
+  $("tonePair").onchange = () => { if (toneOn) send({ type: "setTestTone", enabled: true, frequencyHz: 440, amplitude: 0.25, outputPair: +$("tonePair").value }); };
+  $("play").onclick = () => send({ type: "transportPlay" });
+  $("stop").onclick = () => send({ type: "transportStop" });
+  $("panic").onclick = () => { toneOn = false; $("tone").textContent = "test tone ON"; send({ type: "panic" }); };
+  $("gain").oninput = (e) => send({ type: "setMasterGain", gain: parseFloat(e.target.value) });
+  send({ type: "setMasterGain", gain: 0.5 });
+
+  // ---------- pads ----------
+  const KEYS = "zxcvbnm,asdfghjk";
+  let selected = 0, padState = [];
+  const padEls = [];
+  for (let i = 0; i < 64; i++) {
+    const el = document.createElement("div"); el.className = "pad"; el.dataset.i = i;
+    el.innerHTML = `<span class="key">${i < 16 ? KEYS[i] : ""}</span><span class="n">${i + 1}</span><span class="menu">□</span><span class="name"></span>`;
+    el.onpointerdown = (e) => { e.preventDefault(); el.setPointerCapture(e.pointerId); selectPad(i); send({ type: "triggerPad", pad: i, velocity: 1 }); };
+    el.onpointerup = () => send({ type: "releasePad", pad: i });
+    el.querySelector(".menu").onpointerdown = (e) => { e.stopPropagation(); selectPad(i); pads({ verb: "choose", pad: i }).then(afterLoad); };
+    $("pads").appendChild(el); padEls.push(el);
   }
+  const held = new Set();
+  window.addEventListener("keydown", (e) => { if (e.repeat || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return; const k = KEYS.indexOf(e.key.toLowerCase()); if (k >= 0) { held.add(k); selectPad(k); send({ type: "triggerPad", pad: k, velocity: 1 }); } });
+  window.addEventListener("keyup", (e) => { const k = KEYS.indexOf(e.key.toLowerCase()); if (k >= 0 && held.delete(k)) send({ type: "releasePad", pad: k }); });
+  const selectPad = (i) => { selected = i; $("selPad").textContent = i + 1; const p = padState[i]; if (p) { $("pPitch").value = p.pitch; $("pFine").value = p.fine; $("pAtk").value = p.attack; $("pRel").value = p.release; $("pMode").value = p.mode; $("pOut").value = p.outputPair; $("pChoke").value = p.chokeGroup; $("pRev").checked = p.reverse; $("padInfo").textContent = p.hasSample ? `pad ${i + 1}: ${p.name} · ${p.frames} frames @ ${p.sampleRate} Hz · ${p.channels} ch · ${p.file}` : `pad ${i + 1}: empty`; } };
+  const refreshPads = () => pads({ verb: "list" }).then((r) => { padState = r.pads; r.pads.forEach((p, i) => { padEls[i].classList.toggle("has", p.hasSample); padEls[i].querySelector(".name").textContent = p.hasSample ? p.name : ""; }); $("padInfo").textContent += ` · ${r.samplesLive} samples live (${(r.bytesLive / 1048576).toFixed(1)} MB)`; selectPad(selected); });
+  const afterLoad = (r) => { if (!r.ok && r.error !== "cancelled") console.warn(r.error); refreshPads(); };
+  $("loadPad").onclick = () => pads({ verb: "choose", pad: selected }).then(afterLoad);
+  $("clearPad").onclick = () => pads({ verb: "clear", pad: selected }).then(refreshPads);
+  $("padApply").onclick = () => send({ type: "setPadParams", pad: selected, pitch: +$("pPitch").value, fine: +$("pFine").value, attack: +$("pAtk").value, release: +$("pRel").value,
+    mode: $("pMode").value, outputPair: +$("pOut").value, chokeGroup: +$("pChoke").value, reverse: $("pRev").checked, interpolation: $("pInterp").value }).then(refreshPads);
+
+  // ---------- MIDI ----------
+  const showMidi = (m) => { $("midiTxt").textContent = (m.inputs.length ? m.inputs.map((p) => `${p.enabled ? "●" : "○"} ${p.name}`).join(" · ") : "no MIDI inputs") + ` · ${m.messages} msgs · lag median ${m.medianLagMs.toFixed(2)} ms` + (m.last ? ` · last: ${m.last}` : ""); };
+  midi({ verb: "list" }).then(showMidi);
+  window.__JUCE__.backend.addEventListener("terminator.midiChanged", showMidi);
+
+  // ---------- boot ----------
+  info().then((i) => { $("engine").textContent = `${i.app} ${i.version} · JUCE ${i.juce} · ${i.os} · ${i.arch} · ${i.cpu} · protocol v${i.bridgeProtocol} · ${i.maxPads} pads / ${i.maxVoices} voices · settings ${i.settingsFile}`; });
+  refreshAudio().then(refreshPads);
+
+  window.__JUCE__.backend.addEventListener("terminator.snapshot", (s) => {
+    const secs = s.sampleRate ? (s.playheadSamples / s.sampleRate).toFixed(2) : "0.00";
+    $("snap").textContent = `${s.prepared ? "prepared" : "NOT prepared"} · ${s.sampleRate} Hz · block ${s.blockSize} · in ${s.inputs} / out ${s.outputs} · ${s.playing ? "PLAYING" : "stopped"} @ ${secs}s · blocks ${s.blocksProcessed} · voices ${s.activeVoices}${s.voiceStealing ? " (stole " + s.voiceStealing + ")" : ""} · gain ${s.masterGain.toFixed(2)} · tone ${s.testToneEnabled ? s.testToneFrequencyHz + " Hz" : "off"} · cmds ${s.commandsApplied}/${s.commandsDropped} dropped · cpu ${(s.cpuLoad * 100).toFixed(1)}% · xruns ${s.xruns}`;
+    $("mL").value = s.peakL; $("mR").value = s.peakR; $("peakTxt").textContent = `${s.peakL.toFixed(3)} / ${s.peakR.toFixed(3)}`;
+    s.outputPeaks.forEach((v, i) => { const m = $("om" + i); if (m) m.value = v; });
+    s.inputPeaks.forEach((v, i) => { const m = $("im" + i); if (m) m.value = v; });
+    for (let i = 0; i < 64; i++) padEls[i].classList.toggle("lit", i < 53 ? !!(Number(s.padActiveMask) & (2 ** i)) : false);
+    if (s.calibrationState === 2 && s.calibrationSamples >= 0) { $("calResult").textContent = `✓ round trip ${s.calibrationSamples} samples = ${s.calibrationMs.toFixed(2)} ms`; if (!dev || dev.calibrationSamples !== s.calibrationSamples) refreshAudio(); }
+    else if (s.calibrationSamples === -3) $("calResult").textContent = "✗ nothing heard on that input (check the cable / input channel)";
+    else if (s.calibrationSamples === -2) $("calResult").textContent = "✗ channel out of range";
+    if (s.midiMessages) $("midiTxt").dataset.live = `${s.midiMessages} msgs · lag ${s.midiLagMs.toFixed(2)} ms · ${s.midiLast}`;
+  });
+  setInterval(() => { if ($("midiTxt").dataset.live) midi({ verb: "list" }).then(showMidi); }, 1000);
 </script>
 </body>
 </html>
