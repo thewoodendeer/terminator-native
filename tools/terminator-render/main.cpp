@@ -58,9 +58,14 @@ int main(int argc, char* argv[])
 
     terminator::RenderSpec spec;
     juce::String error;
-    if (!terminator::parseRenderSpecFromText(projectFile.loadFileAsString(), spec, error))
+    if (!terminator::parseRenderSpecFromFile(projectFile, spec, error))
     {
         std::fprintf(stderr, "project error: %s\n", error.toRawUTF8());
+        return 3;
+    }
+    if (!terminator::loadRenderSamples(spec, error))
+    {
+        std::fprintf(stderr, "sample error: %s\n", error.toRawUTF8());
         return 3;
     }
 
@@ -81,10 +86,11 @@ int main(int argc, char* argv[])
     }
 
     if (args.containsOption("--print-spec"))
-        std::printf("spec: rate=%g block=%d channels=%d seconds=%g gain=%g tone=%s %gHz amp=%g\n", spec.sampleRate,
-                    spec.blockSize, spec.numChannels, spec.lengthSeconds, static_cast<double>(spec.masterGain),
-                    spec.testToneEnabled ? "on" : "off", static_cast<double>(spec.testToneFrequencyHz),
-                    static_cast<double>(spec.testToneAmplitude));
+        std::printf("spec: rate=%g block=%d channels=%d seconds=%g gain=%g tone=%s %gHz amp=%g pads=%d events=%d\n",
+                    spec.sampleRate, spec.blockSize, spec.numChannels, spec.lengthSeconds,
+                    static_cast<double>(spec.masterGain), spec.testToneEnabled ? "on" : "off",
+                    static_cast<double>(spec.testToneFrequencyHz), static_cast<double>(spec.testToneAmplitude),
+                    static_cast<int>(spec.pads.size()), static_cast<int>(spec.events.size()));
 
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
     const auto result = terminator::renderOffline(spec);
@@ -97,9 +103,10 @@ int main(int argc, char* argv[])
     }
 
     const double secs = static_cast<double>(result.buffer.getNumSamples()) / result.sampleRate;
-    std::printf("rendered %s · %d ch · %d samples (%.3f s) @ %g Hz · %llu blocks · %.1f ms (%.0fx realtime)\n",
+    std::printf("rendered %s · %d ch · %d samples (%.3f s) @ %g Hz · %llu blocks · %u voice steals · %.1f ms (%.0fx "
+                "realtime)\n",
                 outFile.getFullPathName().toRawUTF8(), result.buffer.getNumChannels(), result.buffer.getNumSamples(),
-                secs, result.sampleRate, static_cast<unsigned long long>(result.blocksProcessed), t1 - t0,
-                (t1 - t0) > 0.0 ? secs * 1000.0 / (t1 - t0) : 0.0);
+                secs, result.sampleRate, static_cast<unsigned long long>(result.blocksProcessed), result.voiceSteals,
+                t1 - t0, (t1 - t0) > 0.0 ? secs * 1000.0 / (t1 - t0) : 0.0);
     return 0;
 }
