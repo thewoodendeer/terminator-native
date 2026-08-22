@@ -54,10 +54,11 @@ jobs:
           cd build/mac-release-universal/app/Terminator_artefacts/Release
           ditto -c -k --keepParent Terminator.app Terminator-mac-universal-unsigned.zip
       - uses: actions/upload-artifact@v4
+        continue-on-error: true   # the account's artifact storage quota can be full — never fail the gate on it
         with:
           name: Terminator-mac-universal-unsigned
           path: build/mac-release-universal/app/Terminator_artefacts/Release/Terminator-mac-universal-unsigned.zip
-          retention-days: 14
+          retention-days: 3
 
   mac-intel:
     name: macOS Intel (x86_64 runner)
@@ -164,7 +165,8 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -DestinationPath "build/Terminator-win-x64-unsigned.zip"
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: Terminator-win-x64-unsigned
           path: build/Terminator-win-x64-unsigned.zip
-          retention-days: 14
+          retention-days: 3

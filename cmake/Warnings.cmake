@@ -7,6 +7,7 @@ if(MSVC)
         /W4 /permissive- /Zc:__cplusplus /utf-8
         /wd4100  # unreferenced formal parameter (JUCE virtuals)
         /wd4458  # declaration hides class member (JUCE headers)
+        /wd4324  # structure padded due to alignas() — intentional on the lock-free types
         $<$<BOOL:${TERMINATOR_WARNINGS_AS_ERRORS}>:/WX>)
 else()
     set(TERMINATOR_WARNING_FLAGS
