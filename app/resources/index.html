@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminator 3.0 — native shell</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #050505; color: #d7d7d7;
+    font: 14px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  body { display: grid; place-items: center; }
+  main { width: min(720px, 92vw); }
+  h1 { margin: 0 0 2px; font-size: 28px; letter-spacing: .12em; color: #ff3b1f; font-weight: 800; }
+  h1 small { color: #777; font-size: 12px; letter-spacing: .3em; margin-left: 10px; }
+  .sub { color: #888; margin-bottom: 22px; }
+  .grid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; border: 1px solid #1e1e1e;
+    padding: 14px 16px; border-radius: 6px; background: #0b0b0b; }
+  .k { color: #6c6c6c; }
+  .v { color: #e8e8e8; white-space: pre-wrap; word-break: break-all; }
+  .ok { color: #5fd35f; } .bad { color: #ff6b6b; } .dim { color: #555; }
+  .row { margin-top: 16px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { background: #161616; color: #eee; border: 1px solid #2a2a2a; border-radius: 4px; padding: 7px 12px;
+    font: inherit; cursor: pointer; }
+  button:hover { border-color: #ff3b1f; }
+  button:active { background: #ff3b1f; color: #000; }
+  meter { width: 180px; height: 12px; }
+  .foot { margin-top: 18px; color: #444; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TERMINATOR<small>3.0 · NATIVE SHELL · PHASE 0</small></h1>
+  <div class="sub">JUCE WebView → libterminator. Static page, live engine snapshot, bridge v0.</div>
+  <div class="grid" id="grid">
+    <div class="k">bridge</div><div class="v" id="bridge">…</div>
+    <div class="k">engine</div><div class="v" id="engine">…</div>
+    <div class="k">device</div><div class="v" id="device">…</div>
+    <div class="k">snapshot</div><div class="v" id="snap">waiting…</div>
+    <div class="k">peak L/R</div><div class="v"><meter id="mL" min="0" max="1" value="0"></meter> <meter id="mR" min="0" max="1" value="0"></meter> <span id="peakTxt" class="dim"></span></div>
+  </div>
+  <div class="row">
+    <button id="tone">test tone ON</button>
+    <button id="play">▶ play</button>
+    <button id="stop">■ stop</button>
+    <button id="panic">PANIC</button>
+    <label>master <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5"></label>
+  </div>
+  <div class="foot">Commands go JS → C++ (native function) → lock-free queue → audio thread. Snapshots come back at 20 Hz. Nothing here touches audio directly.</div>
+</main>
+<script type="module">
+  // Official JUCE bridge package (@juce-framework/webview), served from the embedded JUCE 9 tree.
+  import * as Juce from "./juce/index.js";
+  const $ = (id) => document.getElementById(id);
+  const fmt = (o) => JSON.stringify(o);
+  const hasBridge = !!(window.__JUCE__ && window.__JUCE__.backend);
+  $("bridge").textContent = hasBridge ? "window.__JUCE__ present · @juce-framework/webview loaded" : "no __JUCE__ (opened outside the app?)";
+  $("bridge").className = "v " + (hasBridge ? "ok" : "bad");
+
+  if (hasBridge) {
+    const info = Juce.getNativeFunction("terminatorInfo");
+    const command = Juce.getNativeFunction("terminatorCommand");
+    info().then((i) => {
+      $("engine").textContent = `${i.app} ${i.version} · JUCE ${i.juce} · ${i.os} · ${i.arch} · ${i.cpu} · protocol v${i.bridgeProtocol}`;
+      const d = i.device || {};
+      $("device").textContent = d.open
+        ? `${d.type} · ${d.name} · ${d.sampleRate} Hz · ${d.bufferSize} smp · in ${d.inputs} / out ${d.outputs} · latency in ${d.inputLatencySamples} / out ${d.outputLatencySamples} smp`
+        : `NO DEVICE${d.error ? " — " + d.error : ""}`;
+      $("device").className = "v " + (d.open ? "ok" : "bad");
+    });
+    let toneOn = false;
+    const send = (c) => command(c).then((r) => { if (!r.ok) console.warn("command refused", c, r.error); });
+    $("tone").onclick = () => { toneOn = !toneOn; $("tone").textContent = toneOn ? "test tone OFF" : "test tone ON";
+      send({ type: "setTestTone", enabled: toneOn, frequencyHz: 440, amplitude: 0.25 }); };
+    $("play").onclick = () => send({ type: "transportPlay" });
+    $("stop").onclick = () => send({ type: "transportStop" });
+    $("panic").onclick = () => { toneOn = false; $("tone").textContent = "test tone ON"; send({ type: "panic" }); };
+    $("gain").oninput = (e) => send({ type: "setMasterGain", gain: parseFloat(e.target.value) });
+    send({ type: "setMasterGain", gain: 0.5 });
+
+    window.__JUCE__.backend.addEventListener("terminator.snapshot", (s) => {
+      const secs = s.sampleRate ? (s.playheadSamples / s.sampleRate).toFixed(2) : "0.00";
+      $("snap").textContent = `${s.prepared ? "prepared" : "NOT prepared"} · ${s.sampleRate} Hz · block ${s.blockSize} · outs ${s.outputs} · `
+        + `${s.playing ? "PLAYING" : "stopped"} @ ${secs}s · blocks ${s.blocksProcessed} · gain ${s.masterGain.toFixed(2)} · `
+        + `tone ${s.testToneEnabled ? s.testToneFrequencyHz + " Hz" : "off"} · cmds ${s.commandsApplied}/${s.commandsDropped} dropped · `
+        + `cpu ${(s.cpuLoad * 100).toFixed(1)}% · xruns ${s.xruns}`;
+      $("mL").value = s.peakL; $("mR").value = s.peakR;
+      $("peakTxt").textContent = `${s.peakL.toFixed(3)} / ${s.peakR.toFixed(3)}`;
+    });
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+# Terminator — the JUCE shell. A native window hosting a WebView (WKWebView / WebView2) that renders the UI,
+# with the engine + AudioIO behind it. Phase 0: a static status page + bridge v0 (engine info, live snapshot).
+juce_add_gui_app(Terminator
+    PRODUCT_NAME "Terminator"
+    COMPANY_NAME "Killavic Cheat Codes"
+    BUNDLE_ID "app.killaviccheatcodes.terminator"
+    VERSION "${PROJECT_VERSION}"
+    NEEDS_WEB_BROWSER TRUE
+    NEEDS_WEBVIEW2 TRUE
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Terminator records samples from your audio interface."
+    HARDENED_RUNTIME_ENABLED TRUE
+    HARDENED_RUNTIME_OPTIONS "com.apple.security.cs.allow-unsigned-executable-memory;com.apple.security.device.audio-input")
+
+# Web resources served to the WebView through the resource provider: our static page + JUCE's official
+# @juce-framework/webview JS (ESM) taken straight from the fetched JUCE tree — never hand-rolled plumbing.
+set(TERMINATOR_JUCE_WEBVIEW_JS "${JUCE_SOURCE_DIR}/modules/juce_gui_extra/native/typescript/webview-interop/dist/index.js")
+if(NOT EXISTS "${TERMINATOR_JUCE_WEBVIEW_JS}")
+    message(FATAL_ERROR "JUCE webview-interop dist not found at ${TERMINATOR_JUCE_WEBVIEW_JS}")
+endif()
+juce_add_binary_data(TerminatorWebResources
+    HEADER_NAME "WebResources.h"
+    NAMESPACE WebResources
+    SOURCES
+        resources/index.html
+        "${TERMINATOR_JUCE_WEBVIEW_JS}")
+
+target_sources(Terminator PRIVATE
+    src/Main.cpp
+    src/MainWindow.h
+    src/MainWindow.cpp
+    src/WebShell.h
+    src/WebShell.cpp)
+
+target_compile_definitions(Terminator PRIVATE
+    JUCE_WEB_BROWSER=1
+    JUCE_USE_CURL=0
+    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:Terminator,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:Terminator,JUCE_VERSION>"
+    JUCE_REPORT_APP_USAGE=0
+    $<$<PLATFORM_ID:Windows>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>)
+
+target_link_libraries(Terminator PRIVATE
+    terminator::engine
+    TerminatorWebResources
+    juce::juce_gui_extra
+    juce::juce_gui_basics
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags)
+terminator_set_warnings(Terminator)
