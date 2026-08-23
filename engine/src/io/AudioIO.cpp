@@ -62,6 +62,11 @@ juce::String AudioIO::openDefault(int numInputs, int numOutputs)
 
 juce::String AudioIO::apply(const DeviceSetup& setup)
 {
+    // setAudioDeviceSetup() only RE-configures a manager that already has a device: on a never-initialised one it
+    // opens nothing and still returns no error, so a saved setup applied at startup left the app permanently silent
+    // (and the caller's fallback never fired, because there was no error to see). Bring a default device up first.
+    if (deviceManager_.getCurrentAudioDevice() == nullptr)
+        deviceManager_.initialiseWithDefaultDevices(0, 2);
     if (setup.deviceType.isNotEmpty() && setup.deviceType != deviceManager_.getCurrentAudioDeviceType())
         deviceManager_.setCurrentAudioDeviceType(setup.deviceType, true);
 
@@ -84,7 +89,10 @@ juce::String AudioIO::apply(const DeviceSetup& setup)
         s.useDefaultOutputChannels = false;
         s.outputChannels = maskFrom(setup.outputChannels);
     }
-    const auto err = deviceManager_.setAudioDeviceSetup(s, true);
+    auto err = deviceManager_.setAudioDeviceSetup(s, true);
+    // …and never report success while silent: a setup that leaves no open device is a failure the caller must see.
+    if (err.isEmpty() && deviceManager_.getCurrentAudioDevice() == nullptr)
+        err = "the audio device did not open";
     lastError_ = err;
     if (err.isEmpty())
         ensureCallback();
