@@ -1411,6 +1411,54 @@ sample for sample to 1e-6; the limiter is in the bounce by default and can be ta
 - Drums / bass / the CLICK do not have their sources routed into strips in the offline path yet (the chop pads do);
   they still take the Phase-3 direct path in a bounce.
 
+## Phase 4 — 4.5c DONE (THE DRUM MACHINE IS IN THE BOUNCE), 2026-08-23 twelfth session
+
+**The gap this closes was bigger than "not routed to strips": a project render was CHOPS ONLY.** `renderProject`
+built pad specs and flattened the chop sequence to events, and that was the whole export — a bounce of a real beat
+had no drums in it at all. Anyone reaching for the native exporter would have got a broken file.
+
+**How:** the engine's OWN `DrumSequencer` renders it. Not a translation to `RenderEvent`s — the same object that
+plays, so the bounce carries the same swing, the same per-step VELOCITY / SHIFT / PAN / REPEAT graphs and the same
+mute-group choke order by construction. `RenderSpec` gains `RenderDrumsSpec` (pattern + graphs by `shared_ptr`, the
+lanes, swing / master / ppq) and `tempoBpm`; `renderOffline` binds lane L to pad `kDrumPadBase + L` exactly as the
+live shadow does (chokeGroup = `1000 + muteGroup`, the 4 ms `DRUM_CHOKE_S` fade, hermite), then `drumSetLane` ×N,
+`drumSetGraphs`, `drumSetPattern`, `drumSetParams`, `drumPlay`.
+
+**`buildDrumsSpec(project, bank, namer)`** parses the page's `DrumPreset` blob: tracks → lanes in the preset's own
+order (which is how the page hands slots out), the current sequence's per-lane step rows → the pattern's lane bits,
+and the four graph rows → the shared `DrumGraphs`. Details that matter:
+- **An old preset with no `gridRes` was written at its VIEW resolution** and the page upscales it to INTERNAL_SPB on
+  load — so this does too. Without it a 1/16-stored pattern would play six times too fast. Gated.
+- **Mute / solo are resolved here**, the way the UI resolves them before the engine ever sees them (any solo
+  anywhere silences the un-soloed).
+- **A lane whose audio is missing still holds its slot** (silent) so the graphs and mute groups keep their lane
+  indices — otherwise every lane below a missing sample would shift and play the wrong part.
+- The renderer never resolves the drum CATALOG (sampleIndex + genre → a bundled/R2 file is the shell's job):
+  `SampleBank::drumLanes` is handed in by the caller, exactly like pad sources.
+- With `useMixer`, each lane takes its strip from the same `StripNamer` — kick 2, snare 3, … — so drum trackouts
+  fall out of the same render.
+
+**`ProjectRenderOptions::renderDrums`** defaults to **false**, so every existing project render is byte-unchanged
+(gated explicitly).
+
+**Tests — `tests/engine/test_export_drums.cpp` (8 cases):** blob → pattern bits / graphs / lanes / master / ppq; the
+old-preset upscale; the solo and mute laws; a missing lane keeps its slot; **the drums are in the bounce at the
+sequenced times** (kick on the 1, snare a second later at 120 BPM, silence between); without `renderDrums` the render
+is silent; each lane sums into its own strip and comes out as a trackout, with the master equal to the trackouts
+summed to 1e-6; the lanes land on the page's strip numbering.
+
+**Gates (4.5c):** mac-debug 0 warnings + ctest **264/264** (256 + 8) · RTSan 265/265 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 264/264 · probe OK on universal · clang-format clean.
+
+**Still owed by 4.5:**
+- **BASS is still not in the offline render** — same shape of gap as the drums were: the engine has `BassSequencer` +
+  `BassSynth`, the project has a `bass` blob, nothing joins them offline. That is the next unit.
+- **Nothing in the SHELL or the page calls any of this yet** (no export verb), so the app's export buttons are still
+  the page's Web Audio path. Do this AFTER bass — moving the button to a chops+drums-only renderer would be a
+  regression against what the page already produces.
+- No dither (TPDF, fixed seeds, WAV == FLAC bit-identity); `writeWav` truncates.
+- The legacy chopper chain for the single-chop bake.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
