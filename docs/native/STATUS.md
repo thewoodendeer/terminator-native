@@ -1256,6 +1256,61 @@ native peaks). The SnapshotPublisher copies ~2 KB more per block (the GR table) 
 pre meter does not); the LOUDNESS popup's LUFS / TP / LRA / correlation are the engine's (RESET works); an SC COMP
 panel's GR meter ducks with the kick.
 
+## Phase 4 — 4.4 DONE (PDC: THE TWO-TIER PLAN IS NATIVE, IN WHOLE SAMPLES), 2026-08-23 twelfth session
+
+The page's plan (`MixerEngine.pdcPlan` / `pdcChainDelaySec` / `pdcMasterShiftSec`) ported onto the chain latencies the
+engine already reports — no new measurement, no guessing: `chainLatencySamples(strip)` was plumbed in 4.2 and the
+devices report exact numbers (the 4x shapers 55, COMP 288 @48k, VINYL ~9 ms, the master limiter 264/288).
+
+**Engine — `core/fx/FxDsp.h/.cpp` `IntDelay`:** an exact-size integer ring (maxDelay + block + 1 doubles), in place,
+delay clamped to maxDelay. Delay 0 is a TRUE pass-through — the ring still records so a later plan reads real history,
+but the samples come back bit for bit. No interpolation anywhere: PDC is whole samples, and it is instant (a glided
+delay would pitch-bend).
+**Engine — `core/Mixer`:** `rebuildPdc()` computes the two tiers — tier 1 `maxChan` over every live CHANNEL, tier 2
+`maxBus` over every live SEND/BUS (the master is in neither: its own chain latency IS the mix's latency) — and gives
+each strip `pdc = max(0, tier − own)`. Recomputed on `addFx` / `removeFx` / `clearFx` / `setFxBypass` / `setStripKind`
+and after `prepare()` restores the saved chains. The delay sits in `processStrip` AFTER the inserts and BEFORE the
+width/fader, so the meters and the sends see the aligned signal. Tier 2's other half: a CHANNEL's direct leg to the
+master is summed into `masterDirectL_/R_` instead of the master's input and delayed ONCE by `maxBus` at the top of
+`processStrip(master)` — linear, so identical to the page's per-strip `toMaster` DelayNodes and 63 delay lines cheaper.
+`setPdc(on)`, `pdcOn()`, `pdcDelay(strip)`, `pdcToMaster()`, `pdcMaxChan()`; `kMaxPdcSamples` 4096.
+**Bit-exactness is preserved where it matters:** with PDC off, or with no latency device anywhere in the mix, nothing
+is delayed AND nothing is diverted (the direct leg is only taken when `pdcMaxBus_ > 0`), so the summation order is
+unchanged and the mix is bit-identical — gated.
+**Command / snapshot / shell:** `mixerSetPdc {on}` (`Command::mixerSetPdc`); snapshot `mixerPdcOn`, `mixerPdcMaxChan`,
+`mixerPdcToMaster`, `stripPdc[64]`; the shell publishes `mixer.pdc` / `pdcMaxChan` / `pdcToMaster` / `pdcPlan
+{"<strip>": samples}` (live strips with a real delay only).
+**Page:** `MixerNativeSink.pdc?(on)` — `MixerEngine.setPdc` reports through it, and `nativeMixerShadow.attach()` sends
+the saved setting. ONLY the switch crosses the bridge: the engine owns every chain's latency, so it builds the plan
+itself and publishes it back. The existing PDC button (MixerSection.tsx, next to CONSOLE) and the Help entry needed no
+change — they already drive `MixerEngine.setPdc`.
+**Tests — `tests/engine/test_pdc.cpp` (7 cases):** gated on TIMING, not on a description. A COMP at RATIO 1 / MAKEUP 0
+is an exact 288-sample look-ahead delay at 48 k, so: an empty mix has a flat plan and every `stripPdc` 0; the plan
+follows the latencies, the bypass, a second send catching up to the longest bus, the switch and `clearFx`; **tier 1** —
+a COMP on channel 1 and a clean channel 2 put ONE impulse on sample 288 (with PDC off: two impulses, at 0 and 288, and
+they sum to exactly what the aligned one carried — the alignment moved signal in time and nowhere else); **tier 2** —
+channel 1 dry to the master and channel 2 through a bus carrying the COMP land on ONE sample too, with the same
+conservation check; a latency-free mix is bit-identical with PDC on and off; `IntDelay` is a bit-exact pass-through at
+0, an exact 100-sample shift across block boundaries, and clamps a silly delay to `maxDelay` without reading out of
+range. The two-rig method matters: comparing PDC-on against PDC-off in the SAME rig fails, because the COMP's detector
+keeps settling between triggers — drive two identically-commanded rigs instead.
+**Probe:** part 8 gains `mixerPdcPlan` / `mixerPdcOff` / `mixerPdcOn` / `mixerPdcCleared` (a COMP on 'sample' → the
+plan appears and 'kick' catches up to exactly `pdcMaxChan` while 'sample' stays at 0 → the switch flattens it → back
+on → removing the device empties it), all folded into `mixerPageOk`.
+**Gates (4.4):** mac-debug 0 warnings + ctest **240/240** (233 + 7) · RTSan 241/241 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 240/240 · ui gate (tsc baseline 5) · probe OK on debug AND universal (`mixerPageOk` incl. the
+four PDC checks, 9.2 s) · clang-format clean.
+**Can improve:** the per-strip lines are 4096 samples each (2 × 33 KB × 64 strips ≈ 4.2 MB of heap in the Mixer,
+allocated in `prepare`) — sized for the worst case rather than for the plan; a strip's ring is only WRITTEN while its
+own delay is non-zero, so switching PDC on with a big plan reads up to `maxBus` samples of stale silence once (the same
+transient the latency device itself causes). Neither is audible in normal use; both are a one-liner if they ever are.
+**Honest boundary after 4.4:** live monitoring is compensated. The OFFLINE renderer (4.5) does not run through this
+Mixer yet, so exports are still on the page's path — that is exactly what 4.5 is.
+**Victor's pass (4.4):** put a COMP or a SAT on one channel and play it against another — they should sit together
+now, not smear; put a COMP on a send/bus and the dry channel beside it should stop phasing when the return comes back.
+The PDC button should still switch it, and with it off you should hear the old early/late behaviour return. It only
+costs latency while such a device is in the mix.
+
 ## BUGS FROM VICTOR'S FIRST NATIVE TEST DRIVE (2026-08-23, eleventh session)
 
 He ran the universal build and found two. Both root-caused with the systematic-debugging loop; evidence below.
@@ -1402,7 +1457,24 @@ starts failing, bisect against HEAD before reading more code. Also: `kill %1` ki
 stale Terminator holds the single-instance lock and the next launch exits 0 in 0.07 s having written nothing. Use
 `pkill -f Terminator_artefacts`.
 
-### Next session (in order) — updated at the end of the eleventh session
+### Next session (in order) — updated at the end of the TWELFTH session
+0. Push (Victor: 4.4) → `gh run list` → the 4 jobs (Windows especially — every new TEST_CASE/SECTION name in
+   test_pdc.cpp is ASCII, and `sizeof(Engine)` is untouched: the Mixer is behind a `unique_ptr` and PDC's rings are
+   heap vectors inside it).
+1. **Phase 4.5 — the export pipeline**: the offline renderer through the SAME Mixer (so exports get the inserts, the
+   console stage, the limiter and the 4.4 alignment), stems per strip post-send, the master's limiter look-ahead
+   head-trim (264/288 — the one PDC piece 4.4 deliberately left to exports), the legacy chopper chain for the
+   single-chop bake, TPDF dither bit-identity. Gate: master impulse == stem impulse sample.
+2. The B4 premium devices (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF") AFTER the parity floor is complete
+   — each needs its page UI (FX_REGISTRY entry + panel) as well as the device.
+3. Decide the flagged page quirks (STATUS "4.2b DONE — page quirks"): fix the Electron DELAY merger downmix / PHASER
+   quantum feedback / FLANGER cycle clamp to match the native (recommended), and whether COMP keeps Blink's start-up dip.
+4. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
+5. The popup's spectrum on the bridge (see "4.3 DONE — honest boundary").
+6. BUG E's remaining one-liner: `juce::Process::makeForegroundProcess()` in `WebShell::closePreferences()` before
+   `toFront(true)` — he deprioritised it; do it, let him confirm, do not spend a session on it.
+
+### Next session (in order) — updated at the end of the eleventh session (superseded — kept for the record)
 -1. **BUG B above (the device-change resync)** — it silently eats his FX chains; do it before 4.4.
 0. Push (Victor) → `gh run list` → the 4 jobs (Windows: the stack fix + the ASCII names; the universal probe asserts
    `mixerPageOk` incl. the heavy round trip, CONSOLE on/off, the limiter).
