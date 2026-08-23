@@ -123,6 +123,10 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   SOURCE channel NAME → the key strip's INDEX (−1 = NONE) on `fxAdd` and `fxParam` (the shell refuses a string on a
   numeric param); `native/nativeEngineShadow.ts` — probe part 8 adds the heavy round trip (`mixerFxHeavyAdded/Removed`:
   an SC COMP keyed from 'kick', a DELAY, a REVERB; `mixerFxCmdErrors` 0).
+- **CONSOLE + the master limiter are native (4.2c, 2026-08-23):** `src/mixer/MixerEngine.ts` — `MixerNativeSink.console?`
+  (reported by `applyConsole`); `native/nativeMixerShadow.ts` — `fnv1a()` (the worklet's seed), every strip activation
+  carries `seed: fnv1a(name)`, `mixerSetConsole` on attach + on change, `mixerSetLimiter on` at attach; `native/
+  nativeEngineShadow.ts` — probe part 8 toggles CONSOLE (`mixerConsoleOn/Off`) and asserts the limiter is in.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

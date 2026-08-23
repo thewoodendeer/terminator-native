@@ -1169,13 +1169,54 @@ blends clean — no comb), SC COMP (kick on SOURCE ducks the 808 / pad; the sour
 ducking), REVERB (ROOM / DECAY / PRE-DLY; a DECAY move crossfades with no click, ~half a second later). What you
 HEAR is the native device in every case; bypass is clean; the master's chain too.
 
+## Phase 4 — 4.2c (part 1) DONE (THE CONSOLE STAGE + THE MASTER'S SAFETY LIMITER ARE NATIVE), 2026-08-23 eleventh session (second half)
+**Engine — `core/fx/ConsoleStage.h/.cpp`:** the page's `console-stage` worklet ported 1:1 in double: per channel
+HPF (RBJ, Q 1/√2) → low shelf → high shelf → presence peak → 1-pole LPF → the bounded 2nd+3rd-order polynomial
+saturator (x − a3·x³ + a2·x², held flat past x0 = 1/√(3·a3), no foldback) → a 5 Hz DC blocker (always in); the
+FLAVOURS table (SSL / NEVE / API, channel + bus numbers); AMOUNT 0..1 scales the drive and the EQ deviations and glides
+1/1024 per frame (~23 ms); role CHANNEL = six tolerances in [−1, 1] from `mulberry32(seed)` (the page's `toleranceFor`:
+FNV-1a of the strip NAME — `ConsoleStage::fnv1a` reproduces it byte-for-byte: fnv1a('kick') = 0xc61c131f and the six
+draws match the JS to 1e-11), role BUS = zeros. **Mixer:** a `ConsoleStage` per strip (channel role; strip 0 = bus) run
+between the pre meter / the sidechain key copy and the inserts when `consoleOn_`; `setConsole(on, flavour, amount)`
+(switching ON resets every stage AT the setting — the page builds fresh stages); `setStripSeed` (a new `seed` on
+`mixerSetStrip` — the shell takes the page's FNV-1a; 0 = leave); the snapshot `mixerConsoleOn`. **The master's safety
+limiter** (`Mixer::setMasterLimiter`, `mixerSetLimiter`): the page's DynamicsCompressor −1 dBFS / knee 0 / 20:1 / 1 ms
+/ 50 ms on `BlinkCompressorKernel` after the master's fader × mute (the page: `faderGain → limiter → output`); its
+look-ahead int(0.006·sr) = `masterLatencySamples()` (264 at 44.1 k, 288 at 48 k); OFF by default in the core (every
+older mixer test keeps its bit-exact master), the page shadow turns it ON at attach (the page's master always has it);
+the snapshot `mixerLimiterOn`. Blink's perceptual makeup lifts the whole mix +0.57 dB ((1/saturate(1))^0.6 at −1 dB /
+20:1) and it is NOT a brickwall (a +6 dBFS 1 kHz sine comes out at ~+0.2 dBFS: the static curve leaves 0.3 dB of the
+overshoot, the 2.5 ms detector release rides between the peaks) — exactly what the page's node does; gated as such.
+**Shell + page:** `mixerSetStrip {…, seed}` · `mixerSetConsole {on, flavour, amount}` · `mixerSetLimiter {on}`; the
+snapshot `mixer.console` / `mixer.limiter`. `MixerNativeSink.console?(settings)` reported by `applyConsole`;
+`nativeMixerShadow`: `fnv1a()`, every activation carries `seed: fnv1a(name)` (the CLICK strip 'click'), CONSOLE mirrored
+at attach + on change, the limiter ON at attach; probe part 8 toggles CONSOLE on/off against the snapshot and asserts
+the limiter is in.
+**Tests — `tests/engine/test_console.cpp` (7 cases):** the seed + tolerances vs the JS; level-matched within 0.1 dB at
+−18 dBFS / 1 kHz on every strip + the bus, every flavour; THD at −6 dBFS 0.3–2 % at AMOUNT 100, < 0.7× at 50, cleaner
+when quieter, SSL odd-heavy / NEVE even-heavy; every strip within ±0.6 dB of flat 60 Hz–12 kHz and every pair ≥ 0.03 dB
+apart, same name = same curve; the sub-sonic HPF (10 Hz < −12 dB, 40 Hz > −2.5), the NEVE bus softening 16 kHz (−0.5..
+−4 dB), AMOUNT 0 transparent, +12 dBFS bounded, no DC; the AMOUNT glide; through the Mixer (off = dry within 1e-5 THD,
+on = the channel stage's THD straight out, channel + bus via the master, the command path + the snapshot flag); the
+master limiter (off bit-exact, on: an impulse lands 264 late, −20 dBFS passes at +0.57 ± 0.15 dB, +6 dBFS held to
+0.9..1.1, the command + snapshot). `test_rt_safety` adds CONSOLE on + the limiter on to the callback loop.
+**Gates (4.2c part 1):** mac-debug 0 warnings + ctest **226/226** (219 + 7) · RTSan 227/227 · universal (0 warnings)
+lipo `x86_64 arm64` + ctest 226/226 · ui gate (tsc baseline 5) · probe OK on debug AND universal (`mixerPageOk` incl.
+`mixerConsoleOn/Off` + `mixerLimiterOn`, 9.1–9.2 s).
+**Honest boundary after 4.2c part 1:** the desk stage + the master limiter are native. NOT in: the page's gain-match
+trim (`matchGain`, live-only — 4.3 with the meters), the legacy chopper internal chain (§2.2 — the MOBILE HardwareView
+path and the single-chop bake; the native desktop app runs the mixer, so it is not in the signal path here — only the
+exports that bake it will need it in 4.5), the B4 premium devices (next), PDC (4.4 — the master's limiter latency is
+now a number the plan reads). The native master is the page's: strips → [console] → inserts → width/fader/mute/pan →
+sends → master → [bus console] → inserts → fader → limiter → out.
+**Victor's pass (4.2c):** CONSOLE on / flavour / amount on the desktop mixer — what you HEAR is the native desk stage
+(every strip its own tilt, the master's bus glue); the master limiter is native (a hot mix is held at ~0 dBFS).
+
 ### Next session (in order) — updated at the end of the eleventh session
 0. Push (Victor) → `gh run list` → the 4 jobs (Windows: the stack fix + the ASCII names; the universal probe asserts
-   `mixerPageOk` incl. the heavy round trip; the smoke cap is 150 s).
-1. **Phase 4.2c** — the CONSOLE stage per strip (`ConsoleStage` / `console-stage` worklet: FNV-1a seed by strip NAME →
-   mulberry32 → six tolerances; a `mixerSetStrip` seed field or a `mixerSetConsole {strip, seed, flavour, amount}`
-   verb; the FLAVOURS table in dossier-mixer-fx.md §1.6; gate = the `scripts/console.test.mts` numbers), the legacy
-   chopper master chain (§2.2 — the mobile path), then the B4 premium devices (TERMINATOR-NATIVE-PLAN.md B4).
+   `mixerPageOk` incl. the heavy round trip, CONSOLE on/off, the limiter).
+1. **Phase 4.2c part 2** — the B4 premium devices (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF"). The CONSOLE
+   stage + the master limiter landed (4.2c part 1); the legacy chopper chain is an export-time concern (4.5).
 2. 4.3 meters on the bridge (`levels(name)` is ready; add the SC COMP / COMP GR), 4.4 PDC + offline parity (the chain
    latencies are plumbed and exact: 55 / 288 / 295), 4.5 exports.
 3. Decide the flagged page quirks (STATUS "4.2b DONE — page quirks"): fix the Electron DELAY merger downmix / PHASER
