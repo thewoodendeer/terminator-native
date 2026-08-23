@@ -566,6 +566,18 @@ page cursors (chop + drums) read the ENGINE's position at the ear through Native
 playhead shows.** The YouTube pull on the runner hit YouTube's "sign in to confirm you're not a bot" (a warning, not a
 failure — the runner's IP; locally the pull succeeds).
 
+## CI for the 3.3 tip `1b2d16f` (run 32610426116): Intel ✅ · RTSan ✅ · Windows/MSVC ✅ · universal ❌ — the probe's
+`seqPageCursorTracks` again, and the numbers named the real cause. The TS cursor read **7 on the runner and 7 locally**
+(the engine-clock fix works); what differed was **`nat` — the snapshot's `seqStep` — which lagged 2 steps on the runner**.
+`seqStep` is the position at the moment the 20 Hz snapshot was EMITTED; on a starved runner the page's newest snapshot is
+> 100 ms old (2 steps at 240 BPM), and it is the RENDERED position while the cursor is the HEARD one. The assertion was
+comparing a live cursor against a stale field with a hard ±1. **Fixed by deriving the tolerance instead of guessing it**:
+the shadow now measures how old the newest snapshot's position is (`stats.snapshotAgeMs`, from the snapshot's own
+`emitHostNs` through NativeClock) and `cursorToleranceSteps(stepDur) = ceil((age + outputLatency) / stepDur) + 1`; both
+self-tests use it and REPORT `{age1, age2, tol1, tol2}` so a future failure is diagnosable rather than re-guessed.
+Measured locally: age 4–42 ms → tol 2 (chop) / 4–7 (drums, 1/96 steps at 240 BPM = 10.4 ms), diffs 0–2. Nothing in the
+engine changed — the sample-exactness guarantees live in the 137 Catch2 cases; this is a test-harness correction.
+
 ## Phase 3 — 3.3 DONE (THE DRUM MACHINE IS NATIVE), 2026-08-23 sixth session
 **What changed (engine):** `core/DrumSequencer.h/.cpp` — the drum step sequencer as a native EventSource on the same
 sample clock as the chop sequencer (semantics = `drums/DrumEngine.ts` scheduleAhead/scheduleStep/emitVoice, dossier
@@ -638,8 +650,8 @@ it fires (two bookings on one pad overwrote each other). Bridge: `setDrumPattern
   unloaded sample = still Web Audio, the system default device). Known: lanes bypass the mixer strips/FX (Phase 4).
 
 ### Next session (in order) — updated at the end of the sixth session
-0. `gh run list` — CI for the 3.3 push (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk` — the cursor
-   checks no longer depend on the runner's ctx clock).
+0. `gh run list` — CI for the cursor-tolerance commit (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk`,
+   now with a derived tolerance and the measured `snapshotAgeMs` printed in its output).
 1. **3.4 bass synth native** (the Model D-style worklet → C++; PPQ 96 tick map, slides, bends — the last satellite on
    the two-clock nudge besides the metronome/MIDI clock). 2. 3.5 MIDI clock in/out from the transport. 3. 3.6 arp,
    metronome (through the mixer), count-in on the sample grid. 4. 3.7 live-record landing on the native clock.

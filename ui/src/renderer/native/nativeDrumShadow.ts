@@ -40,6 +40,10 @@ export interface DrumShadowHost {
   ctx: AudioContext;
   latestSnapshot(): AnyRecord | null;
   leadSec(): number;
+  /** How old the newest snapshot's position is right now (ms) + the derived tolerance for comparing a live cursor
+   *  against a snapshot step field (see NativeEngineShadow.cursorToleranceSteps). */
+  snapshotAgeMs(): number;
+  cursorToleranceSteps(stepDurSec: number): number;
   note(stat: 'commands' | 'lanesBound' | 'hits', value: number): void;
   error(msg: string): void;
 }
@@ -308,14 +312,18 @@ export class NativeDrumShadow {
       const sp1 = this.host.latestSnapshot();
       r.nativePlaying = !!sp1?.drumPlaying;
       r.stepCount = sp1?.drumStepCount ?? 0;
-      const cur1 = this.drums.getStep(), nat1 = Number(sp1?.drumStep);
+      // the live playhead vs the snapshot's step, with the DERIVED tolerance (the snapshot's position is
+      // snapshotAgeMs old and is the RENDERED one; the playhead is what is HEARD) — a 1/96 step at 240 BPM is 10.4 ms,
+      // so a starved runner's late snapshot is several steps
+      const stepDur = 60 / Math.max(1, this.drums.currentBpm()) * 4 / spb;
+      const cur1 = this.drums.getStep(), nat1 = Number(sp1?.drumStep), age1 = this.host.snapshotAgeMs(), tol1 = this.host.cursorToleranceSteps(stepDur);
       await new Promise((res) => setTimeout(res, 300));
       const sp2 = this.host.latestSnapshot();
-      const cur2 = this.drums.getStep(), nat2 = Number(sp2?.drumStep);
-      // the snapshot is ≤ 50 ms old and the playhead is "now at the ear": at 240 BPM a step is 10.4 ms → allow 8 steps
-      const close = (a: number, b: number) => { const dd = Math.abs(a - b); return Math.min(dd, spb - dd) <= 8; };
+      const cur2 = this.drums.getStep(), nat2 = Number(sp2?.drumStep), age2 = this.host.snapshotAgeMs(), tol2 = this.host.cursorToleranceSteps(stepDur);
+      const close = (a: number, b: number, tol: number) => { const dd = Math.abs(a - b); return Math.min(dd, spb - dd) <= tol; };
       r.drumPageCursor = { cur1, nat1, cur2, nat2 };
-      r.cursorTracks = close(cur1, nat1) && close(cur2, nat2);
+      r.drumPageCursorAgeMs = { age1, age2, tol1, tol2 };
+      r.cursorTracks = close(cur1, nat1, tol1) && close(cur2, nat2, tol2);
       r.hits = Number(sp2?.drumHitsFired ?? 0) - hits0;
       this.drums.stop();
       for (let t = 0; t < 40 && this.host.latestSnapshot()?.drumPlaying; t++) await new Promise((res) => setTimeout(res, 50));

@@ -110,6 +110,11 @@ export interface NativeShadowStats {
   seqNudges: number;
   clockReady: boolean;
   clockRttMs: number;
+  /** How old the newest snapshot's POSITION is right now (ms): the 20 Hz emit interval + the message thread's
+   *  scheduling + the WebView delivery. Everything read out of a snapshot (`seqStep`, `drumStep`, `activePads`) is
+   *  this far in the past — the live cursors do NOT use it (they read the engine clock), but any test that compares
+   *  a live cursor to a snapshot field has to allow for it. Starved runners have measured > 100 ms. */
+  snapshotAgeMs: number;
   driftMs: number; // the last measured native-vs-ctx drift (ms, + = native later) — what the nudge corrects
   /** Phase 3.3 — the native drum machine */
   drumCommands: number;
@@ -144,7 +149,8 @@ class NativeEngineShadow {
   private playAckAt = Infinity;  // performance.now() when the seqPlay command was accepted
   private playStartSample = NaN; // the engine sample the run started at (its first loop start)
   private nudgeApplied = 0;      // seconds of satellite nudge applied this run
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, lastError: null };
+  private snapEmitPerfMs = NaN;  // performance.now() the newest snapshot's position was stamped at (its emit)
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, lastError: null };
   private drumShadow: NativeDrumShadow | null = null;
 
   constructor(private engine: ChopperEngine, private drums: DrumEngine | null = null) {}
@@ -178,6 +184,8 @@ class NativeEngineShadow {
         ctx: this.engine.ctx,
         latestSnapshot: () => this.latestSnapshot,
         leadSec: () => this.playLeadSec(),
+        snapshotAgeMs: () => this.snapshotAgeMs(),
+        cursorToleranceSteps: (stepDurSec) => this.cursorToleranceSteps(stepDurSec),
         note: (stat, v) => { if (stat === 'commands') this.stats.drumCommands += v; else if (stat === 'lanesBound') this.stats.drumLanesBound += v; else this.stats.drumHits += v; },
         error: (msg) => { this.stats.lastError = msg; },
       });
@@ -425,6 +433,18 @@ class NativeEngineShadow {
       if (qp) this.queueSeq(() => this.sendPattern(q, qp, s.seqSwing, 'queueSequence'));
     }
   }
+  /** How old the newest snapshot's position is, right now (ms; 0 when the clock is not calibrated). */
+  snapshotAgeMs(): number {
+    const age = performance.now() - this.snapEmitPerfMs;
+    return Number.isFinite(age) && age > 0 ? age : 0;
+  }
+  /** The tolerance (in steps) for comparing a LIVE cursor against a snapshot's step field: the snapshot's position is
+   *  `snapshotAgeMs` old (the cursor has moved on since), and the cursor is the HEARD position while the snapshot's is
+   *  the RENDERED one (the cursor sits one output latency behind). Either way ±1 step of rounding. */
+  cursorToleranceSteps(stepDurSec: number): number {
+    const stepMs = Math.max(1e-6, stepDurSec * 1000);
+    return Math.ceil((this.snapshotAgeMs() + this.clock.outputLatencyMs) / stepMs) + 1;
+  }
   /** The chop cursor: seconds since the audible loop start, at the ear, on the engine's clock (null = not known). */
   private seqElapsedSec(): number | null {
     const s = this.latestSnapshot;
@@ -440,6 +460,8 @@ class NativeEngineShadow {
       this.clock.onSnapshot({ clockHostNs: s.clockHostNs, clockSample: Number(s.clockSample), sampleRate: Number(s.sampleRate), emitHostNs: Number(s.emitHostNs) }, recv);
     }
     this.stats.clockReady = this.clock.ready;
+    if (s && this.clock.ready && Number(s.emitHostNs) > 0) this.snapEmitPerfMs = this.clock.hostNsToPerfMs(Number(s.emitHostNs));
+    this.stats.snapshotAgeMs = this.snapshotAgeMs();
     this.drumShadow?.onSnapshot(s);
     if (!s || this.detached || !this.engine.seqSink || typeof s.seqPlaying !== 'boolean') return;
     const idx = Number(s.seqPatternIndex);
@@ -645,13 +667,18 @@ class NativeEngineShadow {
         r.seqPagePatternIndex = sp1?.seqPatternIndex ?? -9;
         r.seqPagePlayingIdx = this.engine.getPlayingSeqIdx();
         r.seqPageStepCount = sp1?.seqStepCount ?? 0;
-        const cur1 = this.engine.getSeqCursorStep(), nat1 = Number(sp1?.seqStep);
+        // the live cursor vs the snapshot's step: the snapshot's position is snapshotAgeMs old and is the RENDERED
+        // one (the cursor is what is HEARD) — the tolerance is derived, not guessed (a starved CI runner delivers
+        // snapshots > 100 ms late = 2 steps at 240 BPM; a real device lands on 0)
+        const stepDur = 60 / 240 * 4 / 16; // the probe's pattern: 240 BPM, 16 steps/bar
+        const cur1 = this.engine.getSeqCursorStep(), nat1 = Number(sp1?.seqStep), age1 = this.snapshotAgeMs(), tol1 = this.cursorToleranceSteps(stepDur);
         await new Promise((res) => setTimeout(res, 300));
         const sp2 = this.latestSnapshot;
-        const cur2 = this.engine.getSeqCursorStep(), nat2 = Number(sp2?.seqStep);
-        const close = (a: number, b: number) => { const d = Math.abs(a - b); return Math.min(d, 16 - d) <= 1; };
+        const cur2 = this.engine.getSeqCursorStep(), nat2 = Number(sp2?.seqStep), age2 = this.snapshotAgeMs(), tol2 = this.cursorToleranceSteps(stepDur);
+        const close = (a: number, b: number, tol: number) => { const d = Math.abs(a - b); return Math.min(d, 16 - d) <= tol; };
         r.seqPageCursor = { cur1, nat1, cur2, nat2 };
-        r.seqPageCursorTracks = close(cur1, nat1) && close(cur2, nat2);
+        r.seqPageCursorAgeMs = { age1, age2, tol1, tol2 };
+        r.seqPageCursorTracks = close(cur1, nat1, tol1) && close(cur2, nat2, tol2);
         r.seqPageHits = Number(sp2?.seqHitsFired ?? 0) - hits0; // ≥ 3 over 800 ms
         r.seqPageDriftMs = this.stats.driftMs; r.seqPageNudges = this.stats.seqNudges;
         this.engine.stopSeq();

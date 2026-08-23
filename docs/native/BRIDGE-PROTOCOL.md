@@ -214,7 +214,10 @@ page's `playStartTime`), `drumActiveMask` bit L = lane L (pad 64+L) sounds; `act
 **The page's cursors** (chop + drums) read the ENGINE's position at the ear: `(clock.sampleHeardAtPerfMs(now) −
 seqLoopStartSample / drumLoopStartSample) / sampleRate` through NativeClock (`ChopperEngine.nativeCursorHook`,
 `DrumSink.elapsedSec`) — not the AudioContext clock (a headless / virtual device runs it fast: CI run 32608087978 read the
-ctx cursor 2 steps ahead of the native step).
+ctx cursor 2 steps ahead of the native step). **Anything read out of a snapshot (`seqStep`, `drumStep`, `activePads`)
+is as old as the emit + the message thread's scheduling + the WebView delivery** — the shadow measures it
+(`stats.snapshotAgeMs`, from `emitHostNs`); a starved CI runner has shown > 100 ms. Never compare a live cursor to a
+snapshot field without allowing for that age (the probe derives its tolerance from it).
 ### `terminator.devicesChanged` (Device object) — hot-plug / device error · `terminator.midiChanged` (MIDI reply) · `terminator.settingsChanged` (the `app` settings object, after a `set`)
 ### `terminator.midiNote` {note, velocity, on, channel} — every note on/off a device sent (2.5e)
 The engine already played it on the direct MidiHub → engine path (driver thread → lock-free queue → audio thread,
