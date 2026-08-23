@@ -1279,7 +1279,7 @@ export function HardwareView() {
   const armDrumRec = () => {
     drumEngine.stopStepRec(); // STEP / LIVE are mutually exclusive — arming LIVE clears STEP
     const onDownbeat = () => {
-      const startAt = engine.ctx.currentTime + 0.02;
+      const startAt = engine.takeCountInDownbeat() ?? engine.ctx.currentTime + 0.02; // the "1" where the clicks said
       if (!drumEngine.getState().playing) void drumEngine.start(startAt);
       engine.startMetronomeForDrums(startAt);
       setLiveRecArmed(true);

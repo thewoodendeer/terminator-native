@@ -527,12 +527,14 @@ export function DrumSection({ engine, onTransportPlay, onTransportStop, clip, on
     if (state.playing) return;     // already playing → pads record from here on
 
     const onDownbeat = () => {
+      // the count-in's downbeat (3.6): the "1" is where the clicks said; else the old now + 20 ms
       const startAt = chopperEngine
-        ? chopperEngine.ctx.currentTime + 0.02
+        ? (chopperEngine.peekCountInDownbeat() ?? chopperEngine.ctx.currentTime + 0.02)
         : undefined;
       if (onTransportPlay) {
-        onTransportPlay();         // unified transport (starts chop seq + drums)
+        onTransportPlay();         // unified transport (starts chop seq + drums; playSeq takes the downbeat itself)
       } else {
+        chopperEngine?.takeCountInDownbeat();
         void engine.start(startAt);
       }
       if (chopperEngine && startAt !== undefined) {

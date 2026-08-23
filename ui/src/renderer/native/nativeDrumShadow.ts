@@ -40,6 +40,9 @@ export interface DrumShadowHost {
   ctx: AudioContext;
   latestSnapshot(): AnyRecord | null;
   leadSec(): number;
+  /** A transport anchor (ctx seconds) → the engine sample PLAY should use (3.6: a count-in's downbeat lands on the
+   *  exact sample the engine counted to; else the clock mapping). Optional — the mapping when absent. */
+  anchorSample?(ctxSec: number): number;
   /** How old the newest snapshot's position is right now (ms) + the derived tolerance for comparing a live cursor
    *  against a snapshot step field (see NativeEngineShadow.cursorToleranceSteps). */
   snapshotAgeMs(): number;
@@ -237,7 +240,7 @@ export class NativeDrumShadow {
     this.playAnchorCtx = anchorCtx;
     this.queue(async () => {
       // the pattern / graphs / params are already queued ahead of us on this chain (sync runs on every emit)
-      const atSample = this.host.clock.ready ? Math.round(this.host.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.host.ctx))) : 0;
+      const atSample = this.host.anchorSample ? this.host.anchorSample(anchorCtx) : (this.host.clock.ready ? Math.round(this.host.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.host.ctx))) : 0);
       await this.host.cmd({ type: 'drumPlay', atSample: atSample > 0 ? atSample : 0, stepOffset: Math.max(0, Math.floor(stepOffset)) });
     });
   }

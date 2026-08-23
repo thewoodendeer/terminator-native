@@ -80,6 +80,11 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     # → native bassPlaying, notes fire, the synth sounds (meter), getPlayheadBeats() tracks the native tick, stop lands
     grep -Eq '"bassPageOk": ?true' "$OUT" || { echo "::error::the bass did not drive the native bass sequencer/synth (bassPageOk false — see the bass object: nativePlaying / loopTicks / notesFired / level / cursor / stopped)"; exit 1; }
     echo "bass → native bass sequencer + synth OK: $(grep -Eo '"bassPageCursor": ?\{[^}]*\}' "$OUT") $(grep -Eo '"bassPageCursorAgeMs": ?\{[^}]*\}' "$OUT") level=$(grep -Eo '"level": ?[-0-9.e]+' "$OUT" | head -1)"
+    # Phase 3.6: METRO → the native metronome clicks ON the sequencer's grid, STOP silences it; REC from stopped runs the
+    # count-in in the engine and the transport starts ON its downbeat (the page took the exact anchor → ≤ 3 samples);
+    # the ARP holds/steps/releases natively
+    grep -Eq '"metroPageOk": ?true' "$OUT" || { echo "::error::the metronome / count-in / arp did not run natively (metroPageOk false — see metroEnabled / metroClicks / metroOnGrid / metroStops / countInRan / countInClicks / countInTransportStarted / countInExact / arpOk)"; exit 1; }
+    echo "metronome + count-in + arp native OK: $(grep -Eo '"metroLastClick": ?\{[^}]*\}' "$OUT") countIn offset=$(grep -Eo '"countInOffsetSamples": ?[-0-9.e]+|"countInOffsetSamples": ?null' "$OUT") anchorTaken=$(grep -Eo '"countInAnchorTaken": ?(true|false)' "$OUT") arpHits=$(grep -Eo '"arpHits": ?[0-9]+' "$OUT" | head -1)"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

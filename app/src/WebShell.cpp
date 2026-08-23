@@ -58,10 +58,11 @@ namespace
 {
 constexpr int kSnapshotHz = 20;
 constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
-constexpr int kProbeDelayTicksReact = 280; // 14 s — the React UI: fonts + first render + engines constructing, then
-                                           // the async checks (start at kProbeAsyncLeadTicks = 10 s before the read)
-constexpr int kProbeAsyncLeadTicks = 200;  // the shim round-trip checks start 10 s before the final read (the shadow's
-                                           // self-test alone runs ~5 s since 3.2/3.3 drive the native sequencers)
+constexpr int kProbeDelayTicksReact = 380; // 19 s — the React UI: fonts + first render + engines constructing, then
+                                           // the async checks (start at kProbeAsyncLeadTicks = 15 s before the read)
+constexpr int kProbeAsyncLeadTicks = 300;  // the shim round-trip checks start 15 s before the final read (the shadow's
+                                           // self-test alone runs ~9 s since 3.2–3.6 drive the native sequencers, the
+                                           // count-in and the arp)
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -1040,6 +1041,35 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         c = Command::midiClockEnable(static_cast<bool>(json.getProperty("on", false)));
     else if (type == "setMidiRouting")
         c = Command::setMidiRouting(static_cast<bool>(json.getProperty("pads", true)));
+    // the metronome + count-in + arp (Phase 3.6, core/Metronome.h + core/Arp.h)
+    else if (type == "setMetronome")
+    {
+        const auto snd = json.getProperty("sound", "click").toString();
+        const std::uint8_t sound = snd == "hihat"     ? 1
+                                   : snd == "rimshot" ? 2
+                                   : snd == "kick"    ? 3
+                                   : snd == "clap"    ? 4
+                                                      : 0;
+        c = Command::setMetronome(static_cast<bool>(json.getProperty("enabled", false)), sound);
+    }
+    else if (type == "countIn")
+        c = Command::countIn(std::clamp(static_cast<int>(json.getProperty("beats", 4)), 1, 16), atSampleOf(json));
+    else if (type == "cancelCountIn")
+        c = Command::cancelCountIn();
+    else if (type == "setArp")
+        c = Command::setArp(static_cast<bool>(json.getProperty("enabled", false)),
+                            std::clamp(static_cast<int>(json.getProperty("rate", 4)), 1, 64),
+                            json.getProperty("direction", "up").toString() == "down",
+                            static_cast<bool>(json.getProperty("random", false)),
+                            std::clamp(static_cast<int>(json.getProperty("padCount", 0)), 0, kChopPads));
+    else if (type == "arpHold")
+        c = Command::arpHold(
+            static_cast<std::uint16_t>(std::clamp(static_cast<int>(json.getProperty("pad", 0)), 0, kChopPads - 1)),
+            static_cast<float>(std::clamp(static_cast<double>(json.getProperty("velocity", 1.0)), 0.0, 1.0)),
+            atSampleOf(json));
+    else if (type == "arpRelease")
+        c = Command::arpRelease(
+            static_cast<std::int16_t>(std::clamp(static_cast<int>(json.getProperty("pad", -1)), -1, kChopPads - 1)));
     else if (type == "seqPlay")
         c = Command::seqPlay(static_cast<std::uint64_t>(static_cast<juce::int64>(json.getProperty("atSample", 0))));
     else if (type == "seqStop")
@@ -1714,6 +1744,21 @@ void WebShell::timerCallback()
     obj->setProperty("midiClockInBpm", midi_.clockInBpm());
     obj->setProperty("midiClockInPort", midi_.clockInOwnerPort());
     obj->setProperty("midiClockInStarted", midi_.clockInStarted());
+    // the metronome + count-in + arp (3.6)
+    obj->setProperty("metronomeEnabled", static_cast<bool>(s.metronomeEnabled));
+    obj->setProperty("metronomeSound", static_cast<int>(s.metronomeSound));
+    obj->setProperty("metronomeBeat", s.metronomeBeat);
+    obj->setProperty("metronomeClicks", static_cast<juce::int64>(s.metronomeClicks));
+    obj->setProperty("metronomeLastClickSample", static_cast<juce::int64>(s.metronomeLastClickSample));
+    obj->setProperty("metronomeLastClickAccent", static_cast<bool>(s.metronomeLastClickAccent));
+    obj->setProperty("countInBeat", s.countInBeat);
+    obj->setProperty("countInPending", static_cast<bool>(s.countInPending));
+    obj->setProperty("countInDownbeatSample", static_cast<juce::int64>(s.countInDownbeatSample));
+    obj->setProperty("arpEnabled", static_cast<bool>(s.arpEnabled));
+    obj->setProperty("arpHoldPad", s.arpHoldPad);
+    obj->setProperty("arpStep", s.arpStep);
+    obj->setProperty("arpLastPad", s.arpLastPad);
+    obj->setProperty("arpHits", static_cast<juce::int64>(s.arpHits));
     browser_->emitEventIfBrowserIsVisible("terminator.snapshot", juce::var(obj));
 }
 

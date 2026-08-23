@@ -33,6 +33,9 @@ export interface BassShadowHost {
   ctx: AudioContext;
   latestSnapshot(): AnyRecord | null;
   leadSec(): number;
+  /** A transport anchor (ctx seconds) → the engine sample PLAY should use (3.6: a count-in's downbeat = the exact
+   *  sample the engine counted to; else the clock mapping). Optional — the mapping when absent. */
+  anchorSample?(ctxSec: number): number;
   snapshotAgeMs(): number;
   cursorToleranceSteps(stepDurSec: number): number;
   note(stat: 'commands' | 'events', value: number): void;
@@ -172,7 +175,7 @@ export class NativeBassShadow {
     this.playAnchorCtx = anchorCtx;
     this.queue(async () => {
       // the pattern + lane flag are already queued ahead of us on this chain (BassEngine.start sends pattern() first)
-      const atSample = this.host.clock.ready ? Math.round(this.host.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.host.ctx))) : 0;
+      const atSample = this.host.anchorSample ? this.host.anchorSample(anchorCtx) : (this.host.clock.ready ? Math.round(this.host.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.host.ctx))) : 0);
       await this.host.cmd({ type: 'bassPlay', atSample: atSample > 0 ? atSample : 0, offsetTicks: Math.max(0, Math.floor(offsetTicks)) });
     });
   }

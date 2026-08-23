@@ -24,9 +24,12 @@
  *     (`nativeCursorHook`) — not the AudioContext clock.
  *   • Phase 3.4 — the BASS runs natively (`nativeBassShadow.ts`: the BassEngine's sink — every worklet message + the
  *     transport + the pattern's tick map go to the C++ BassSynth/BassSequencer on the same clock).
- * Not mirrored yet (honest list, also in STATUS.md): metronome + count-in (still Web Audio on the page's
- * AudioContext — Phase 3.6; kept phase-locked by the nudge, the ear-alignment is as good as the clock
- * mapping ≈ 1 ms + the two devices' latency reports), mixer strips / master FX (Phase 4), time-STRETCH (plays
+ *   • Phase 3.6 — the METRONOME, the COUNT-IN and the ARP run natively: `ChopperEngine.metroSink` (METRO + sound →
+ *     setMetronome; the beats ride the engine's sequencer grid; a count-in → `countIn {beats, atSample}` at the page's
+ *     anchor — the visual countdown + the downbeat callback stay on the page, and the downbeat's ctx time becomes the
+ *     transport's exact anchor) and `ChopperEngine.arpSink` (hold / release → arpHold / arpRelease; the ARP settings +
+ *     the pad count diffed from the state → setArp).
+ * Not mirrored yet (honest list, also in STATUS.md): mixer strips / master FX (Phase 4), time-STRETCH (plays
  * dry natively), live re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered
  * LOOP. Native MIDI hits the C++ engine directly (MidiHub, the page's note map) and is mirrored to the page (2.5e/3.5:
  * every message → midiHub.injectNative → ChopperView's one router; `midiSink` tells the engine when the page owns the
@@ -133,6 +136,9 @@ export interface NativeShadowStats {
   /** Phase 3.4 — the native bass */
   bassCommands: number;
   bassEvents: number;
+  /** Phase 3.6 — the native metronome / count-in / arp */
+  metroCommands: number;
+  arpCommands: number;
   lastError: string | null;
 }
 
@@ -166,9 +172,14 @@ class NativeEngineShadow {
   private playStartSample = NaN; // the engine sample the run started at (its first loop start)
   private nudgeApplied = 0;      // seconds of satellite nudge applied this run
   private snapEmitPerfMs = NaN;  // performance.now() the newest snapshot's position was stamped at (its emit)
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, lastError: null };
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, metroCommands: 0, arpCommands: 0, lastError: null };
   private drumShadow: NativeDrumShadow | null = null;
   private bassShadow: NativeBassShadow | null = null;
+  // ── Phase 3.6: the metronome / count-in / arp ──
+  private lastMetro: { enabled: boolean; sound: string } | null = null;
+  private lastArp: { enabled: boolean; rate: number; direction: string; random: boolean; padCount: number } | null = null;
+  private lastCountInDownbeatCtx = NaN; // the downbeat ctx time of the last count-in we booked (the probe checks PLAY took it)
+  private lastCountInDownbeatSample = 0; // … and the ENGINE sample it lands on (atSample + beats·beat, the engine's own math)
 
   constructor(private engine: ChopperEngine, private drums: DrumEngine | null = null, private bass: BassEngine | null = null) {}
 
@@ -201,6 +212,7 @@ class NativeEngineShadow {
         ctx: this.engine.ctx,
         latestSnapshot: () => this.latestSnapshot,
         leadSec: () => this.playLeadSec(),
+        anchorSample: (ctx) => this.anchorSampleFor(ctx),
         snapshotAgeMs: () => this.snapshotAgeMs(),
         cursorToleranceSteps: (stepDurSec) => this.cursorToleranceSteps(stepDurSec),
         note: (stat, v) => { if (stat === 'commands') this.stats.drumCommands += v; else if (stat === 'lanesBound') this.stats.drumLanesBound += v; else this.stats.drumHits += v; },
@@ -216,6 +228,7 @@ class NativeEngineShadow {
         ctx: this.engine.ctx,
         latestSnapshot: () => this.latestSnapshot,
         leadSec: () => this.playLeadSec(),
+        anchorSample: (ctx) => this.anchorSampleFor(ctx),
         snapshotAgeMs: () => this.snapshotAgeMs(),
         cursorToleranceSteps: (stepDurSec) => this.cursorToleranceSteps(stepDurSec),
         note: (stat, v) => { if (stat === 'commands') this.stats.bassCommands += v; else this.stats.bassEvents += v; },
@@ -263,6 +276,31 @@ class NativeEngineShadow {
         }
       },
     };
+    // the metronome + count-in + arp (3.6): METRO / sound / count-in / hold / release → the engine; the settings are
+    // diffed from the state in sync()
+    this.engine.metroSink = {
+      set: (enabled, sound) => { this.stats.metroCommands++; this.lastMetro = { enabled, sound }; void this.cmd({ type: 'setMetronome', enabled, sound }); },
+      countIn: (beats, startAtCtx, downbeatCtx) => {
+        this.stats.metroCommands++;
+        this.lastCountInDownbeatCtx = downbeatCtx;
+        const bpm = this.engine.getMasterBpm();
+        const atSample = this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(startAtCtx, ctxPair(this.engine.ctx))) : 0;
+        // the downbeat's ENGINE sample, by the engine's own math (atSample + beats × 60/bpm × sr): PLAY on the downbeat
+        // sends exactly this sample (anchorSampleFor) — mapping the downbeat's ctx time a second time through WebKit's
+        // render-quantum-coarse `currentTime` pair put the transport ~1 ms off the count-in's last click (probe: −45 samples)
+        this.lastCountInDownbeatSample = atSample > 0 && this.clock.sampleRate > 0 ? Math.round(atSample + beats * (60 / bpm) * this.clock.sampleRate) : 0;
+        // after the BPM the clicks are counted at (the seq chain serialises setBpm ahead of it)
+        this.queueSeq(async () => {
+          if (bpm !== this.lastBpmSent) { this.lastBpmSent = bpm; await this.cmd({ type: 'setBpm', bpm }); }
+          await this.cmd({ type: 'countIn', beats, atSample: atSample > 0 ? atSample : 0 });
+        });
+      },
+      cancelCountIn: () => { this.stats.metroCommands++; void this.cmd({ type: 'cancelCountIn' }); },
+    };
+    this.engine.arpSink = {
+      hold: (pad, velocity) => { this.stats.arpCommands++; void this.cmd({ type: 'arpHold', pad, velocity: Math.max(0, Math.min(1, velocity)) }); },
+      release: (pad) => { this.stats.arpCommands++; void this.cmd({ type: 'arpRelease', pad }); },
+    };
     this.stats.attached = true;
   }
 
@@ -277,6 +315,8 @@ class NativeEngineShadow {
     this.unsubMidi?.(); this.unsubMidi = null;
     this.unsubMidiPorts?.(); this.unsubMidiPorts = null;
     this.engine.midiSink = null;
+    if (this.engine.metroSink) { this.engine.metroSink = null; void this.cmd({ type: 'setMetronome', enabled: false, sound: 'click' }); void this.cmd({ type: 'cancelCountIn' }); }
+    if (this.engine.arpSink) { this.engine.arpSink = null; void this.cmd({ type: 'setArp', enabled: false, rate: 4, direction: 'up', random: false, padCount: 0 }); }
     this.engine.voiceSink = null;
     this.engine.mutePadVoices = false;
     if (this.clockTimer) { clearInterval(this.clockTimer); this.clockTimer = null; }
@@ -410,6 +450,25 @@ class NativeEngineShadow {
     if (vol !== this.masterGainSent) { this.masterGainSent = vol; void this.cmd({ type: 'setMasterGain', gain: vol }); }
     for (let i = 0; i < MAX_PADS; i++) this.syncPad(i, s); // describe() is a cheap null for pads past the grid
     this.syncTransport(s);
+    this.syncMetroArp(s);
+  }
+  /** State → the engine's METRO flag + click sound and the ARP settings (+ the pad bank size it walks). */
+  private syncMetroArp(s: ChopperState): void {
+    if (this.engine.metroSink) {
+      const m = { enabled: !!s.metronome.enabled, sound: String(s.metronome.sound || 'click') };
+      if (!this.lastMetro || this.lastMetro.enabled !== m.enabled || this.lastMetro.sound !== m.sound) {
+        this.lastMetro = m; this.stats.metroCommands++;
+        void this.cmd({ type: 'setMetronome', enabled: m.enabled, sound: m.sound });
+      }
+    }
+    if (this.engine.arpSink) {
+      const a = { enabled: !!s.arpEnabled, rate: Math.max(1, Math.round(Number(s.arpRate) || 4)), direction: s.arpDirection === 'down' ? 'down' : 'up', random: !!s.arpRandom, padCount: Math.max(0, Math.min(MAX_PADS, s.pads.length)) };
+      const l = this.lastArp;
+      if (!l || l.enabled !== a.enabled || l.rate !== a.rate || l.direction !== a.direction || l.random !== a.random || l.padCount !== a.padCount) {
+        this.lastArp = a; this.stats.arpCommands++;
+        void this.cmd({ type: 'setArp', ...a });
+      }
+    }
   }
 
   // ── Phase 3.2: the native transport ──
@@ -469,10 +528,16 @@ class NativeEngineShadow {
       await this.sendPattern(idx, p, swing, 'setSequence');
       // the anchor the satellites start at, as an engine sample heard at the same instant (0 = next block when the
       // clock is not calibrated yet — the first ~100 ms after attach; the drift nudge then pulls the drums in)
-      const atSample = this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.engine.ctx))) : 0;
+      const atSample = this.anchorSampleFor(anchorCtx);
       await this.cmd({ type: 'seqPlay', atSample: atSample > 0 ? atSample : 0 });
       this.playAckAt = performance.now();
     });
+  }
+  /** A transport anchor (ctx seconds) as an ENGINE sample: the count-in's downbeat sample when PLAY took the downbeat
+   *  (the satellites — drums, bass — start at that very sample too), else the clock mapping (0 = not calibrated). */
+  anchorSampleFor(anchorCtx: number): number {
+    if (this.lastCountInDownbeatSample > 0 && Number.isFinite(this.lastCountInDownbeatCtx) && Math.abs(anchorCtx - this.lastCountInDownbeatCtx) < 1e-6) return this.lastCountInDownbeatSample;
+    return this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.engine.ctx))) : 0;
   }
   /** State → the native sequencer: the audible pattern (live edits), a queued switch, BPM, swing. */
   private syncTransport(s: ChopperState): void {
@@ -790,10 +855,81 @@ class NativeEngineShadow {
         r.bass = await this.bassShadow.selfTest();
         r.bassPageOk = r.bass?.bassPageOk === true;
       } else r.bassPageOk = null;
+      // part 6 — Phase 3.6: METRO → the native metronome clicks on the sequencer's grid; the count-in runs in the engine
+      // and the transport starts ON its downbeat; the ARP holds/releases natively
+      if (this.engine.seqSink && this.engine.metroSink && this.latestSnapshot?.prepared) {
+        const st0 = this.engine.getState();
+        const metroWasOn = st0.metronome.enabled, soundWas = st0.metronome.sound, countInWas = st0.countInEnabled, arpWas = st0.arpEnabled;
+        const sr = Number(this.latestSnapshot?.sampleRate) || this.clock.sampleRate || 48000;
+        this.engine.setMetronomeSound('click');
+        if (!metroWasOn) this.engine.toggleMetronome();
+        this.engine.setMetronomeBpm(240);
+        const beatSamples = Math.round(60 / 240 * sr);
+        const clicks0 = Number(this.latestSnapshot?.metronomeClicks ?? 0);
+        this.engine.playSeq();
+        for (let t = 0; t < 40 && !this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+        await new Promise((res) => setTimeout(res, 700));
+        const sm = this.latestSnapshot;
+        r.metroEnabled = !!sm?.metronomeEnabled;
+        r.metroClicks = Number(sm?.metronomeClicks ?? 0) - clicks0;
+        const lastClick = Number(sm?.metronomeLastClickSample ?? 0), loopStart = Number(sm?.seqLoopStartSample ?? 0);
+        r.metroOnGrid = lastClick > 0 && loopStart > 0 && ((lastClick - loopStart) % beatSamples + beatSamples) % beatSamples === 0;
+        r.metroLastClick = { lastClick, loopStart, beatSamples, beat: sm?.metronomeBeat };
+        this.engine.stopSeq();
+        for (let t = 0; t < 40 && this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+        const clicksAtStop = Number(this.latestSnapshot?.metronomeClicks ?? 0);
+        await new Promise((res) => setTimeout(res, 400));
+        r.metroStops = Number(this.latestSnapshot?.metronomeClicks ?? 0) === clicksAtStop;
+        // the count-in: REC from stopped → 4 clicks at 240 (1 s) → the transport starts on the downbeat
+        if (!countInWas) this.engine.setCountInEnabled(true);
+        const clicks1 = Number(this.latestSnapshot?.metronomeClicks ?? 0);
+        this.lastCountInDownbeatCtx = NaN;
+        this.engine.startLiveRecord();
+        let downbeatSample = 0, sawCountIn = false;
+        for (let t = 0; t < 60 && !this.latestSnapshot?.seqPlaying; t++) {
+          await new Promise((res) => setTimeout(res, 50));
+          const s6 = this.latestSnapshot;
+          if (s6?.countInPending) { sawCountIn = true; downbeatSample = Number(s6.countInDownbeatSample ?? 0) || downbeatSample; }
+        }
+        await new Promise((res) => setTimeout(res, 150));
+        const s7 = this.latestSnapshot;
+        r.countInRan = sawCountIn && downbeatSample > 0;
+        r.countInClicks = Number(s7?.metronomeClicks ?? 0) - clicks1; // 4 count-in + ≥ 1 beat
+        r.countInTransportStarted = !!s7?.seqPlaying && this.engine.isSeqPlaying();
+        const anchorTaken = Number.isFinite(this.lastCountInDownbeatCtx) && Math.abs(this.playAnchorCtx - this.lastCountInDownbeatCtx) < 1e-6;
+        r.countInAnchorTaken = anchorTaken;
+        r.countInOffsetSamples = downbeatSample > 0 ? Number(s7?.seqLoopStartSample ?? 0) - downbeatSample : null;
+        r.countInExact = anchorTaken ? Math.abs(Number(r.countInOffsetSamples)) <= 3 : true; // the page took the downbeat → ≤ 3 samples (the clock mapping's rounding)
+        this.engine.stopLiveRecord();
+        this.engine.stopSeq();
+        for (let t = 0; t < 40 && this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+        // the arp: hold pad 62 (the bound pad) with ARP on → the engine steps; release stops it
+        if (!arpWas) this.engine.toggleArp();
+        this.engine.setArpRate(4);
+        await new Promise((res) => setTimeout(res, 100));
+        const hits0 = Number(this.latestSnapshot?.arpHits ?? 0);
+        this.engine.triggerPad(62, 1);
+        for (let t = 0; t < 40 && Number(this.latestSnapshot?.arpHits ?? 0) < hits0 + 2; t++) await new Promise((res) => setTimeout(res, 50));
+        const sa = this.latestSnapshot;
+        r.arpHeld = Number(sa?.arpHoldPad) === 62;
+        r.arpHits = Number(sa?.arpHits ?? 0) - hits0;
+        this.engine.releasePad(62);
+        for (let t = 0; t < 40 && Number(this.latestSnapshot?.arpHoldPad) !== -1; t++) await new Promise((res) => setTimeout(res, 50));
+        const hitsAtRelease = Number(this.latestSnapshot?.arpHits ?? 0);
+        await new Promise((res) => setTimeout(res, 300));
+        r.arpReleased = Number(this.latestSnapshot?.arpHoldPad) === -1 && Number(this.latestSnapshot?.arpHits ?? 0) === hitsAtRelease;
+        r.arpOk = r.arpHeld && r.arpHits >= 2 && r.arpReleased;
+        // restore
+        if (!arpWas) this.engine.toggleArp();
+        if (!countInWas) this.engine.setCountInEnabled(false);
+        if (!metroWasOn) this.engine.toggleMetronome();
+        this.engine.setMetronomeSound(soundWas);
+        r.metroPageOk = r.metroEnabled && r.metroClicks >= 2 && r.metroOnGrid && r.metroStops && r.countInRan && r.countInClicks >= 4 && r.countInTransportStarted && r.countInExact && r.arpOk;
+      } else r.metroPageOk = null;
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true)) : true);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true)) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;

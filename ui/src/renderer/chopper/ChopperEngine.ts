@@ -721,6 +721,19 @@ export class ChopperEngine {
    *  page routes notes elsewhere — bass MIDI IN, DRUM PADS mode, MIDI OFF, pad learn) and keeps the engine's
    *  note → pad table equal to the page's (learned) map. Null (Electron / web) = no-op. */
   midiSink: { routing(notesToPads: boolean): void; noteMap(map: Record<number, number>): void } | null = null;
+  /** NATIVE METRONOME + COUNT-IN (Terminator 3.0, Phase 3.6 — nativeEngineShadow.ts): when set, METRO / the click
+   *  sound go to the C++ Metronome (its beats ride the native sequencer's own grid — a tempo change can never put the
+   *  click off the pattern) and the count-in clicks are booked in the engine at the page's anchor (sample-exact);
+   *  the TS Worker click scheduler does not run and scheduleCountIn books no Web Audio clicks. The visual countdown
+   *  and the downbeat callback stay here. Null (Electron / web) = the Web Audio clicks below, unchanged. */
+  metroSink: { set(enabled: boolean, sound: MetronomeSound): void; countIn(beats: number, startAtCtx: number, downbeatCtx: number): void; cancelCountIn(): void } | null = null;
+  /** NATIVE ARP (3.6): when set, holding a pad with ARP on steps in the C++ engine on the sample clock (no setTimeout
+   *  jitter); a native-owned MIDI hit is already arping there. Null = the timer arp below. */
+  arpSink: { hold(pad: number, velocity: number): void; release(pad: number): void } | null = null;
+  /** A pending count-in's DOWNBEAT as a ctx time (scheduleCountIn sets it; the downbeat's transport start consumes
+   *  it — playSeq / takeCountInDownbeat) so the "1" lands exactly where the clicks said, not at "now + lead" when the
+   *  timer happened to fire. NaN = none. */
+  private countInDownbeatCtx = NaN;
   /** NATIVE (3.3): the cursor's elapsed seconds since the audible loop start, AT THE EAR, from the engine's own clock
    *  (NativeClock + performance.now) — independent of this AudioContext's clock quality. null = use the ctx anchor. */
   nativeCursorHook: (() => number | null) | null = null;
@@ -4183,7 +4196,7 @@ export class ChopperEngine {
     }
     if (this.arpEnabled && this.pads.length > 0) {
       // Arp mode: holding the pad steps through the pad bank at tempo.
-      this.startArp(padIdx, velocity);
+      this.startArp(padIdx, velocity, opts?.nativeOwned);
       return;
     }
     this._doTrigger(padIdx, velocity, eventTimestamp, opts);
@@ -4843,13 +4856,15 @@ export class ChopperEngine {
     return 120;
   }
 
-  private startArp(padIdx: number, velocity: number): void {
+  private startArp(padIdx: number, velocity: number, nativeOwned = false): void {
     this.stopArp();
     if (this.pads.length === 0) return;
     this.arpHoldPad = padIdx;
     this.arpStep = 0;
     this.arpStartCtxTime = this.ctx.currentTime;
     this.emit();
+    // NATIVE (3.6): the C++ Arp steps on the sample clock; a native-owned MIDI hit is already arping there
+    if (this.arpSink) { if (!nativeOwned) this.arpSink.hold(padIdx, velocity); return; }
     this.arpFire(velocity);
   }
 
@@ -4881,8 +4896,10 @@ export class ChopperEngine {
     if (this.arpTimer) clearTimeout(this.arpTimer);
     this.arpTimer = null;
     const wasHeld = this.arpHoldPad !== null;
+    const heldPad = this.arpHoldPad;
     this.arpHoldPad = null;
     this.arpStep = 0;
+    if (wasHeld && heldPad !== null) this.arpSink?.release(heldPad); // NATIVE: the engine's arp stops too
     if (wasHeld) this.emit();
   }
 
@@ -4912,6 +4929,7 @@ export class ChopperEngine {
 
   toggleMetronome(): void {
     this.metronomeEnabled = !this.metronomeEnabled;
+    this.metroSink?.set(this.metronomeEnabled, this.metronomeSound); // NATIVE: the engine clicks on its own grid
     if (this.metronomeEnabled) {
       // The METRO button only toggles the flag — the clicks are gated on the
       // transport. If the sequencer is already playing, phase-lock the click to
@@ -4937,6 +4955,7 @@ export class ChopperEngine {
    *  transport (playSeq/resumeSeq + a mid-play METRO toggle), never by the METRO
    *  button alone while stopped. */
   private startMetronomeTimer(): void {
+    if (this.metroSink) return; // NATIVE (3.6): no Web Audio click train — the engine clicks on the sequencer grid
     if (this.metronomeTimer) return;
     if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});
     this.metroLook.reset();
@@ -4954,6 +4973,7 @@ export class ChopperEngine {
    *  armDrumRec when drumEngine starts without playSeq().
    *  No-op if metronome is disabled. */
   startMetronomeForDrums(atTime: number): void {
+    if (this.metroSink) return; // NATIVE: the engine follows the drums' grid itself
     if (!this.metronomeEnabled) return;
     this.drumMetronomeActive = true;
     this.metronomeBeat = 0;
@@ -4991,6 +5011,7 @@ export class ChopperEngine {
 
   setMetronomeSound(sound: MetronomeSound): void {
     this.metronomeSound = sound;
+    this.metroSink?.set(this.metronomeEnabled, this.metronomeSound);
     this.emit();
   }
 
@@ -5024,6 +5045,7 @@ export class ChopperEngine {
   }
 
   private scheduleMetronomeClick(time: number, beat: number): void {
+    if (this.metroSink) return; // NATIVE: the clicks are synthesised in the engine (beats on its grid, count-in via the sink)
     if (this.ctx.state === 'closed') return;
     const ctx = this.ctx;
     const accent = beat === 0; // downbeat accent
@@ -5872,6 +5894,10 @@ export class ChopperEngine {
     const beats = Math.max(1, this.countInBeats);
     const beatDur = 60 / this.seqTempo();
     const startAt = this.ctx.currentTime + 0.12; // small lead so the first click isn't clipped
+    const downbeat = startAt + beats * beatDur;
+    // NATIVE (3.6): the clicks are booked in the engine at this anchor (sample-exact); the visual countdown and the
+    // downbeat callback stay here
+    this.metroSink?.countIn(beats, startAt, downbeat);
     for (let i = 0; i < beats; i++) {
       const at = startAt + i * beatDur;
       // Accent the very first beat of the count so the "1" stands out.
@@ -5879,12 +5905,17 @@ export class ChopperEngine {
       const delayMs = Math.max(0, (at - this.ctx.currentTime) * 1000);
       this.countInTimers.push(setTimeout(() => { this.countInBeat = beats - i; this.emit(); }, delayMs));
     }
-    const downbeat = startAt + beats * beatDur;
-    const startDelayMs = Math.max(0, (downbeat - 0.02 - this.ctx.currentTime) * 1000);
+    // The "1" lands EXACTLY where the clicks said: the downbeat's ctx time is handed to the transport start
+    // (playSeq / takeCountInDownbeat) instead of "now + lead when the timer fired" — so the timer runs a little
+    // ahead of the transport's lead (its jitter no longer moves the downbeat; fired too late → the old now + lead).
+    this.countInDownbeatCtx = downbeat;
+    const preroll = Math.max(0.05, (this.seqSink?.leadSec?.() ?? 0.02) + 0.03);
+    const startDelayMs = Math.max(0, (downbeat - preroll - this.ctx.currentTime) * 1000);
     this.countInTimers.push(setTimeout(() => {
       this.countInTimers = [];
       this.countInBeat = -1;
       onDownbeat();
+      this.countInDownbeatCtx = NaN; // consumed (or passed over) by the downbeat's transport start
       this.emit();
     }, startDelayMs));
     this.countInBeat = beats; // show the full count immediately
@@ -5902,12 +5933,25 @@ export class ChopperEngine {
   }
 
   private cancelCountIn(): void {
+    // NATIVE: drop the engine's booked clicks too — only for a real cancel (a count-in that reached its downbeat
+    // already cleared its timers; playSeq → stopSeq → here must not clear the engine's count-in state)
+    if (this.countInTimers.length > 0 || this.countInPending) this.metroSink?.cancelCountIn();
     for (const t of this.countInTimers) clearTimeout(t);
     this.countInTimers = [];
     this.countInBeat = -1;
     this.countInPending = false;
+    this.countInDownbeatCtx = NaN;
     this.earlyHits = [];
   }
+  /** The pending count-in's downbeat (ctx seconds) for a satellite that starts ON the "1" (the drum-only / bass REC
+   *  count-in: `runCountIn` callers) — consumed: the next call returns undefined. `playSeq()` takes it itself. */
+  takeCountInDownbeat(): number | undefined {
+    const d = this.countInDownbeatCtx;
+    this.countInDownbeatCtx = NaN;
+    return Number.isFinite(d) ? d : undefined;
+  }
+  /** The pending count-in's downbeat without consuming it. */
+  peekCountInDownbeat(): number | undefined { return Number.isFinite(this.countInDownbeatCtx) ? this.countInDownbeatCtx : undefined; }
 
   stopLiveRecord(): void {
     this.cancelCountIn(); // abort a pending count-in if it hasn't started yet
@@ -5932,6 +5976,9 @@ export class ChopperEngine {
   }
 
   playSeq(): void {
+    // a count-in's downbeat (3.6): read BEFORE stopSeq() below (its cancelCountIn clears it)
+    const downbeat = this.countInDownbeatCtx;
+    this.countInDownbeatCtx = NaN;
     if (!this.hasSequenceableAudio()) return;
     this.seqRestarting = true;
     try { this.stopSeq(); } finally { this.seqRestarting = false; }
@@ -5949,7 +5996,10 @@ export class ChopperEngine {
     // NATIVE: the sink may ask for more lead — the engine must RENDER the anchor's sample before it is heard (its
     // device's output latency + a block + the bridge); the satellites take the same anchor, so nothing is out of phase
     const lead = Math.max(ChopperEngine.TRANSPORT_LEAD_S, this.seqSink?.leadSec?.() ?? 0);
-    this.seqPlayStart = this.ctx.currentTime + lead;
+    // a count-in's downbeat: the "1" is exactly where the clicks said (when it is still ahead of the lead —
+    // natively the engine's count-in ran to that very sample); else the old now + lead
+    const playNow = this.ctx.currentTime;
+    this.seqPlayStart = Number.isFinite(downbeat) && downbeat >= playNow + lead ? downbeat : playNow + lead;
     this.seqCurrentLoopStart = this.seqPlayStart;
     this.seqScheduledUpTo = this.seqPlayStart;
     this.seqScheduleStep = 0;
