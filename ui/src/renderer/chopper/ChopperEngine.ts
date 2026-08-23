@@ -716,6 +716,9 @@ export class ChopperEngine {
    *  reading the same fields as before (seqCurrentLoopStart / seqStepDuration / playingSeqIdx). Null (Electron /
    *  web) = the Web Audio scheduler below, unchanged. */
   seqSink: { play(anchorCtxTime: number): void; stop(): void; pause(): void; resume(): void; leadSec?(): number } | null = null;
+  /** NATIVE (3.3): the cursor's elapsed seconds since the audible loop start, AT THE EAR, from the engine's own clock
+   *  (NativeClock + performance.now) — independent of this AudioContext's clock quality. null = use the ctx anchor. */
+  nativeCursorHook: (() => number | null) | null = null;
   private nativeSeqCmdAt = 0; // performance.now() of the last play/pause/resume sent — older snapshots are ignored
   /** Satellite phase nudge (drums/bass/MIDI clock): the shadow measures native-vs-ctx drift (setTransportHooks). */
   private seqNudgeHook: ((deltaSec: number) => void) | null = null;
@@ -6378,7 +6381,7 @@ export class ChopperEngine {
       }
       return Math.min(Math.floor(raw), stepCount - 1);
     }
-    const elapsed = this.ctx.currentTime - this.seqCurrentLoopStart;
+    const elapsed = this.nativeElapsed() ?? (this.ctx.currentTime - this.seqCurrentLoopStart);
     if (elapsed < 0) return 0;
     const stepIdx = Math.floor(elapsed / this.seqStepDuration);
     if (pattern.loop) return ((stepIdx % stepCount) + stepCount) % stepCount;
@@ -6398,7 +6401,7 @@ export class ChopperEngine {
     if (stepCount === 0) return -1;
     const elapsed = this.seqPaused
       ? this.seqPausedElapsed
-      : (this.ctx.currentTime - this.seqCurrentLoopStart);
+      : (this.nativeElapsed() ?? (this.ctx.currentTime - this.seqCurrentLoopStart));
     if (elapsed < 0) return 0;
     const raw = elapsed / this.seqStepDuration;
     // LOOP: float modulo. raw legitimately exceeds stepCount during the last
@@ -6413,6 +6416,13 @@ export class ChopperEngine {
   }
 
   // ── NATIVE TRANSPORT (Phase 3.2) ───────────────────────────────────────────
+
+  /** The native cursor position when the shadow can give one (playing, not paused, clock calibrated). */
+  private nativeElapsed(): number | null {
+    if (!this.seqSink || !this.nativeCursorHook) return null;
+    const e = this.nativeCursorHook();
+    return e !== null && Number.isFinite(e) && e >= 0 ? e : null;
+  }
 
   /** The shadow's 20 Hz position push (engine snapshot → ctx time through NativeClock). Re-anchors the audible loop
    *  start, the step duration, the audible pattern and the paused phase — the fields every cursor getter above,

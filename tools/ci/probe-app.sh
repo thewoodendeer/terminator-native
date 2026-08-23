@@ -70,6 +70,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     # fire, the TS cursor tracks the native step through NativeClock, stop lands natively
     grep -Eq '"seqPageOk": ?true' "$OUT" || { echo "::error::the page transport did not drive the native chop sequencer (seqPageOk false — see seqPage* fields: native playing / pattern index / hits / cursor tracking / stopped)"; exit 1; }
     echo "page transport → native chop sequencer OK: $(grep -Eo '"seqPageCursor": ?\{[^}]*\}' "$OUT") drift=$(grep -Eo '"seqPageDriftMs": ?[-0-9.e]+' "$OUT") clock rtt=$(grep -Eo '"clockRttMs": ?[-0-9.e]+' "$OUT" | head -1)"
+    # Phase 3.3: the drum machine drives the NATIVE DrumSequencer — a lane's buffer mirrored + bound, the pattern
+    # pushed, drumEngine.start() → native drumPlaying, hits fire, getStep() tracks the native step, stop lands natively
+    grep -Eq '"drumPageOk": ?true' "$OUT" || { echo "::error::the drum machine did not drive the native drum sequencer (drumPageOk false — see the drums object: laneBound / nativePlaying / stepCount / hits / cursor / stopped)"; exit 1; }
+    echo "drum machine → native drum sequencer OK: $(grep -Eo '"drumPageCursor": ?\{[^}]*\}' "$OUT")"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

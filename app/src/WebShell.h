@@ -81,6 +81,10 @@ class WebShell final : public juce::Component, private juce::Timer
     // chop-seq patterns handed to the engine by pointer: a ring keeps the last few alive (the audio thread may still
     // read a replaced pattern for a block or two; 8 back is far beyond that)
     std::vector<std::shared_ptr<SeqPattern>> patternRing_;
+    // drum patterns (the grid) + the four graphs, same pointer hand-over (Phase 3.3): the arranger books up to a few
+    // dozen swaps ahead, so the pattern ring is deeper; graphs change rarely
+    std::vector<std::shared_ptr<DrumPattern>> drumPatternRing_;
+    std::vector<std::shared_ptr<DrumGraphs>> drumGraphsRing_;
     std::uint32_t padSampleIds_[kMaxPads] = {};
     juce::String padSampleNames_[kMaxPads];
     juce::File padSampleFiles_[kMaxPads];

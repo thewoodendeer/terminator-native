@@ -1,6 +1,7 @@
 #include "WebShell.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 #include "WebResources.h"
@@ -57,10 +58,10 @@ namespace
 {
 constexpr int kSnapshotHz = 20;
 constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
-constexpr int kProbeDelayTicksReact = 220; // 11 s — the React UI: fonts + first render + engines constructing, then
-                                           // the async checks (start at kProbeAsyncLeadTicks = 7 s before the read)
-constexpr int kProbeAsyncLeadTicks = 140;  // the shim round-trip checks start 7 s before the final read (the shadow's
-                                           // self-test alone runs ~4 s since Phase 3.2 drives the native sequencer)
+constexpr int kProbeDelayTicksReact = 280; // 14 s — the React UI: fonts + first render + engines constructing, then
+                                           // the async checks (start at kProbeAsyncLeadTicks = 10 s before the read)
+constexpr int kProbeAsyncLeadTicks = 200;  // the shim round-trip checks start 10 s before the final read (the shadow's
+                                           // self-test alone runs ~5 s since 3.2/3.3 drive the native sequencers)
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -516,7 +517,10 @@ juce::var WebShell::engineInfo() const
     obj->setProperty("arch", "unknown");
 #endif
     obj->setProperty("bridgeProtocol", 1);
-    obj->setProperty("maxPads", kMaxPads);
+    obj->setProperty("maxPads", kMaxPads);       // 128: 0..63 the chopper grid, 64..127 the drum lanes (3.3)
+    obj->setProperty("chopPads", kChopPads);
+    obj->setProperty("drumPadBase", kDrumPadBase);
+    obj->setProperty("drumLanes", kDrumLanes);
     obj->setProperty("maxVoices", kMaxVoices);
     obj->setProperty("device", deviceInfoVar());
     obj->setProperty("settingsFile", settings_.file().getFullPathName());
@@ -579,8 +583,86 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
             patternRing_.erase(patternRing_.begin());
         return ok(true);
     }
+    // the drum sequencer (Phase 3.3): the pattern grid + the four graphs by pointer, like the chop patterns
+    if (type == "setDrumPattern" || type == "scheduleDrumPattern")
+    {
+        auto pat = std::make_shared<DrumPattern>();
+        pat->clear();
+        pat->bars = std::clamp(static_cast<int>(json.getProperty("bars", 2)), 1, 4);
+        pat->stepsPerBar = std::clamp(static_cast<int>(json.getProperty("stepsPerBar", kDrumStepsPerBar)), 1, kDrumStepsPerBar);
+        pat->stepCount = std::min(kDrumMaxSteps, pat->bars * pat->stepsPerBar);
+        if (const auto* lanes = json.getProperty("lanes", juce::var()).getArray())
+            for (const auto& lv : *lanes)
+            {
+                const int lane = static_cast<int>(lv.getProperty("lane", -1));
+                const auto* steps = lv.getProperty("steps", juce::var()).getArray();
+                if (lane < 0 || lane >= kDrumLanes || steps == nullptr)
+                    continue;
+                for (const auto& sv : *steps)
+                {
+                    const int st = static_cast<int>(sv);
+                    if (st >= 0 && st < pat->stepCount)
+                        pat->grid[st] |= (1ull << lane);
+                }
+            }
+        const auto at = static_cast<std::uint64_t>(static_cast<juce::int64>(json.getProperty("atSample", 0)));
+        const Command c = type == "scheduleDrumPattern" ? Command::drumSchedulePattern(pat.get(), at)
+                                                         : Command::drumSetPattern(pat.get());
+        if (!engine_.commands().push(c))
+            return ok(false, "command queue full");
+        drumPatternRing_.push_back(std::move(pat));
+        while (drumPatternRing_.size() > 48)
+            drumPatternRing_.erase(drumPatternRing_.begin());
+        return ok(true);
+    }
+    if (type == "setDrumGraphs")
+    {
+        auto g = std::make_shared<DrumGraphs>();
+        g->clear();
+        if (const auto* lanes = json.getProperty("lanes", juce::var()).getArray())
+            for (const auto& lv : *lanes)
+            {
+                const int lane = static_cast<int>(lv.getProperty("lane", -1));
+                if (lane < 0 || lane >= kDrumLanes)
+                    continue;
+                auto fill = [&](const char* name, auto&& put)
+                {
+                    if (const auto* arr = lv.getProperty(name, juce::var()).getArray())
+                        for (int st = 0; st < arr->size() && st < kDrumMaxSteps; ++st)
+                            put(st, static_cast<double>((*arr)[st]));
+                };
+                fill("velocity", [&](int st, double v) { g->velocity[st][lane] = static_cast<float>(std::clamp(v, 0.0, 1.0)); });
+                fill("shift", [&](int st, double v) { g->shiftMs[st][lane] = static_cast<float>(std::clamp(v, -50.0, 50.0)); });
+                fill("pan", [&](int st, double v) { g->pan[st][lane] = static_cast<float>(std::clamp(v, -1.0, 1.0)); });
+                fill("repeat", [&](int st, double v) {
+                    g->repeat[st][lane] = static_cast<std::uint8_t>(std::clamp(static_cast<int>(std::lround(v)), 0, kDrumRepeatRates - 1));
+                });
+            }
+        if (!engine_.commands().push(Command::drumSetGraphs(g.get())))
+            return ok(false, "command queue full");
+        drumGraphsRing_.push_back(std::move(g));
+        while (drumGraphsRing_.size() > 4)
+            drumGraphsRing_.erase(drumGraphsRing_.begin());
+        return ok(true);
+    }
     Command c;
-    if (type == "seqPlay")
+    if (type == "clearDrumPatterns")
+        c = Command::drumClearScheduled();
+    else if (type == "setDrumLane")
+        c = Command::drumSetLane(static_cast<std::uint16_t>(static_cast<int>(json.getProperty("lane", 0))),
+                                 static_cast<float>(static_cast<double>(json.getProperty("volume", 1.0))),
+                                 static_cast<bool>(json.getProperty("audible", true)),
+                                 static_cast<std::int16_t>(static_cast<int>(json.getProperty("group", 0))));
+    else if (type == "setDrumParams")
+        c = Command::drumSetParams(static_cast<double>(json.getProperty("swing", 0.0)),
+                                   static_cast<float>(static_cast<double>(json.getProperty("masterVolume", 1.0))),
+                                   static_cast<std::uint16_t>(static_cast<int>(json.getProperty("ppq", 960))));
+    else if (type == "drumPlay")
+        c = Command::drumPlay(static_cast<std::uint64_t>(static_cast<juce::int64>(json.getProperty("atSample", 0))),
+                              static_cast<std::int32_t>(static_cast<int>(json.getProperty("stepOffset", 0))));
+    else if (type == "drumStop")
+        c = Command::drumStop();
+    else if (type == "seqPlay")
         c = Command::seqPlay(static_cast<std::uint64_t>(static_cast<juce::int64>(json.getProperty("atSample", 0))));
     else if (type == "seqStop")
         c = Command::seqStop();
@@ -615,6 +697,11 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         const auto vel = static_cast<float>(static_cast<double>(json.getProperty("velocity", 1.0)));
         c = at > 0 ? Command::triggerPadAtSample(pad, vel, static_cast<std::uint64_t>(at))
                    : Command::triggerPad(pad, vel);
+        if (json.hasProperty("pan")) // a drum lane's PAN for this hit (overrides the pad's PadParams::pan)
+        {
+            c.payload.trigger.hasPan = 1;
+            c.payload.trigger.pan = static_cast<float>(static_cast<double>(json["pan"]));
+        }
     }
     else if (type == "releasePad")
     {
@@ -645,6 +732,8 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         p.chokeGroup = static_cast<std::int16_t>(static_cast<int>(json.getProperty("chokeGroup", -1)));
         p.interpolation = json.getProperty("interpolation", "hermite").toString() == "linear" ? Interpolation::linear
                                                                                               : Interpolation::hermite;
+        p.pan = static_cast<float>(static_cast<double>(json.getProperty("pan", 0.0)));
+        p.chokeFadeSec = static_cast<float>(static_cast<double>(json.getProperty("chokeFade", 0.003)));
         c = Command::setPadParams(p);
     }
     else
@@ -1120,11 +1209,15 @@ void WebShell::timerCallback()
     obj->setProperty("voiceStealing", static_cast<int>(s.voiceStealing));
     obj->setProperty("padActiveMask",
                      static_cast<juce::int64>(s.padActiveMask)); // (JS loses bits ≥ 53 — use activePads)
-    juce::Array<juce::var> activePads;
-    for (int i = 0; i < kMaxPads; ++i)
+    juce::Array<juce::var> activePads; // 0..63 the chopper grid, 64..127 the drum lanes (pad = 64 + lane)
+    for (int i = 0; i < kChopPads; ++i)
         if ((s.padActiveMask >> i) & 1u)
             activePads.add(i);
+    for (int l = 0; l < kDrumLanes; ++l)
+        if ((s.drumActiveMask >> l) & 1u)
+            activePads.add(kDrumPadBase + l);
     obj->setProperty("activePads", juce::var(activePads));
+    obj->setProperty("drumActiveMask", static_cast<juce::int64>(s.drumActiveMask));
     obj->setProperty("lastTriggeredPad", s.lastTriggeredPad);
     obj->setProperty("lastTriggeredPadPositionSec", s.lastTriggeredPadPositionSec);
     obj->setProperty("seqPlaying", static_cast<bool>(s.seqPlaying));
@@ -1138,6 +1231,13 @@ void WebShell::timerCallback()
     obj->setProperty("seqLoopStartSample", static_cast<juce::int64>(s.seqLoopStartSample));
     obj->setProperty("seqHitsFired", static_cast<juce::int64>(s.seqHitsFired));
     obj->setProperty("seqHitsSkipped", static_cast<juce::int64>(s.seqHitsSkipped));
+    obj->setProperty("drumPlaying", static_cast<bool>(s.drumPlaying));
+    obj->setProperty("drumStep", s.drumStep);
+    obj->setProperty("drumStepCount", s.drumStepCount);
+    obj->setProperty("drumStepPhase", s.drumStepPhase);
+    obj->setProperty("drumLoopStartSample", static_cast<juce::int64>(s.drumLoopStartSample));
+    obj->setProperty("drumHitsFired", static_cast<juce::int64>(s.drumHitsFired));
+    obj->setProperty("drumHitsSkipped", static_cast<juce::int64>(s.drumHitsSkipped));
     obj->setProperty("calibrationState", static_cast<int>(s.calibrationState));
     obj->setProperty("calibrationSamples", calibrationResultSamples_);
     obj->setProperty("calibrationMs", calibrationResultMs_);

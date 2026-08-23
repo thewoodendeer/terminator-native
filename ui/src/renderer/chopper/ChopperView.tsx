@@ -1824,7 +1824,7 @@ export function ChopperView() {
     return () => { engine.dispose(); };
   }, [engine]);
   // Terminator 3.0: the pads sound through the native C++ engine (no-op in Electron / the browser)
-  useEffect(() => attachNativeEngineShadow(engine), [engine]);
+  useEffect(() => attachNativeEngineShadow(engine, drumEngine), [engine, drumEngine]);
 
   // Keep keyboard focus on the document so pad keys always work after clicking UI elements
   useEffect(() => {

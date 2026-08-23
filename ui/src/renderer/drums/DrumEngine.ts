@@ -62,6 +62,25 @@ interface LaneVoice {
   ended: boolean;
 }
 
+/** Phase 3.3 — THE NATIVE DRUM SEQUENCER (Terminator 3.0, native/nativeDrumShadow.ts).
+ *  When a sink is set this engine books NO Web Audio voices: PLAY/STOP, every hit
+ *  (sequenced or hand-played), arranged pattern swaps and the lanes' state go to the
+ *  C++ DrumSequencer + Sampler (lane L = pad 64+L, on the chop sequencer's clock) and
+ *  the playhead reads the native position. The TS keeps owning the state, the UI,
+ *  recording, the graphs and undo — unchanged. */
+export interface DrumSink {
+  play(anchorCtxTime: number, stepOffset: number): void;
+  stop(): void;
+  /** One hit (a hand-played lane / the header preview) — `whenCtx` undefined = now. */
+  hit(track: TrackKey, volume: number, whenCtx: number | undefined, pan: number): void;
+  schedulePattern(pattern: Record<TrackKey, boolean[]>, atCtxTime: number): void;
+  clearScheduledPatterns(): void;
+  /** Seconds since the audible loop start, at the ear, from the engine's own clock (null = unknown). */
+  elapsedSec(): number | null;
+  /** The lead a standalone PLAY needs so the engine renders the anchor in time (default 20 ms). */
+  leadSec?(): number;
+}
+
 /** The five built-in slots — the ones the sample manifest is keyed by. Kept as a
  *  narrow literal union (unlike TrackKey) so everything that indexes the KITS
  *  manifest or the alias tables stays type-checked. */
@@ -587,6 +606,10 @@ export class DrumEngine {
   private _sequenceDirty = false;
   private _lastSeqFlush = 0;
   private static readonly SEQ_FLUSH_SEC = 0.1;
+
+  /** The native drum sequencer binding (see DrumSink). Null = Web Audio (the Electron/web app). */
+  drumSink: DrumSink | null = null;
+  private bufferReadyListeners = new Set<(track: TrackKey) => void>();
 
   constructor(ctx: AudioContext, output: GainNode, getBpm: () => number, getInputQuantize?: () => number) {
     this.ctx = ctx;
@@ -1204,7 +1227,9 @@ export class DrumEngine {
     const stepDur = this.stepDurSec();
     if (stepDur <= 0) return 0;
     const total = this.state.bars * this.spb();
-    const elapsed = this.ctx.currentTime - this.playStartTime;
+    // NATIVE: the engine's own position at the ear (independent of this context's clock); else the ctx anchor
+    const native = this.drumSink?.elapsedSec();
+    const elapsed = native != null && Number.isFinite(native) ? native : this.ctx.currentTime - this.playStartTime;
     if (elapsed < 0) return 0;
     return ((Math.floor(elapsed / stepDur) % total) + total) % total;
   }
@@ -1573,11 +1598,12 @@ export class DrumEngine {
     this.pendingPatterns = this.pendingPatterns.filter(p => Math.abs(p.at - at) > 1e-4);
     this.pendingPatterns.push({ at, pattern: next });
     this.pendingPatterns.sort((a, b) => a.at - b.at);
+    this.drumSink?.schedulePattern(next, at);
   }
 
   /** Drop the whole arranged-playback timeline (call before re-scheduling, and
    *  on stop). With it empty the scheduler falls back to this.state.pattern. */
-  clearScheduledPatterns(): void { this.pendingPatterns = []; }
+  clearScheduledPatterns(): void { this.pendingPatterns = []; this.drumSink?.clearScheduledPatterns(); }
 
   /** The pattern active at ctx time `when`: the last scheduled swap at/<= when,
    *  or the live state pattern when nothing is scheduled (standalone play). */
@@ -1669,6 +1695,7 @@ export class DrumEngine {
    *  satellites so the drums stay phase-locked WITHOUT a restart — already-booked hits keep their times, the next
    *  bookings land on the corrected grid. No-op when stopped. */
   nudge(deltaSec: number): void {
+    if (this.drumSink) return; // NATIVE: the drums run on the engine's own clock — nothing to nudge
     if (!this.state.playing || !Number.isFinite(deltaSec) || deltaSec === 0) return;
     this.nextStepTime += deltaSec;
     this.playStartTime += deltaSec;
@@ -1701,7 +1728,7 @@ export class DrumEngine {
     const stepDur = this.stepDurSec();
     // Standalone start (the DRUMS section's own ▶): 20 ms lead, like the
     // unified PLAY — scheduleAhead() runs synchronously right below.
-    this.nextStepTime = atTime ?? (this.ctx.currentTime + 0.02);
+    this.nextStepTime = atTime ?? (this.ctx.currentTime + (this.drumSink?.leadSec?.() ?? 0.02));
     this.nextStepIdx = stepOffset;
     this.playStartTime = this.nextStepTime - stepOffset * stepDur;
     this.state = { ...this.state, playing: true, step: ((stepOffset % total) + total) % total };
@@ -1714,6 +1741,9 @@ export class DrumEngine {
       this.earlyHits = [];
       for (const h of late) this.recordLiveHitAt(h.trackIndex, Math.max(h.at, this.playStartTime));
     }
+    // NATIVE: the C++ DrumSequencer runs from this anchor (the shadow maps it to an engine sample) — no TS voices;
+    // the 25 ms tick below still flushes live-recorded hits to the UI
+    this.drumSink?.play(this.nextStepTime, stepOffset);
     this.scheduleAhead();
     // Tick at ~25 ms to keep the scheduling window full; cheaper than rAF.
     this.look.reset(); this.timer = startClock(() => { this.look.beat(); this.scheduleAhead(); }, 25);
@@ -1725,6 +1755,7 @@ export class DrumEngine {
    *  real STOP (no flag) disarms both, as before. */
   stop(opts?: { keepRec?: boolean }): void {
     if (this.timer) { this.timer.stop(); this.timer = null; }
+    this.drumSink?.stop(); // NATIVE: stop scheduling + fade every lane voice (4 ms) in the engine
     this.flushSequence(); // commit any live-recorded hits not yet flushed to the UI
     this.pendingPatterns = []; // drop any arranged-playback timeline (Phase 3A.5)
     // Cut every in-flight voice the way a retrigger does (4 ms linear — the
@@ -1783,18 +1814,20 @@ export class DrumEngine {
     // burst, audit #14). The phase stays true: the jump is whole steps from
     // the same anchor (playStartTime / getStep are untouched), so the loop
     // comes back in step with the chop transport, not ahead or behind it.
-    const now = this.ctx.currentTime;
-    if (stepDur > 0 && now - this.nextStepTime > stepDur) {
-      const missed = Math.floor((now - this.nextStepTime) / stepDur);
-      this.nextStepTime += missed * stepDur;
-      this.nextStepIdx += missed;
-    }
+    if (!this.drumSink) { // NATIVE: the engine schedules every step itself — nothing is booked here
+      const now = this.ctx.currentTime;
+      if (stepDur > 0 && now - this.nextStepTime > stepDur) {
+        const missed = Math.floor((now - this.nextStepTime) / stepDur);
+        this.nextStepTime += missed * stepDur;
+        this.nextStepIdx += missed;
+      }
 
-    while (this.nextStepTime < horizon) {
-      const stepIdx = this.nextStepIdx % totalSteps;
-      this.scheduleStep(stepIdx, this.nextStepTime);
-      this.nextStepTime += stepDur;
-      this.nextStepIdx++;
+      while (this.nextStepTime < horizon) {
+        const stepIdx = this.nextStepIdx % totalSteps;
+        this.scheduleStep(stepIdx, this.nextStepTime);
+        this.nextStepTime += stepDur;
+        this.nextStepIdx++;
+      }
     }
 
     // Flush live-recorded hits to the UI at most ~10 fps (SEQ_FLUSH_SEC) so the
@@ -1986,12 +2019,15 @@ export class DrumEngine {
         this.state = { ...this.state, tracks: this.state.tracks.map(x => x.key === track && x.userPath === t.userPath ? { ...x, userMissing: missing || undefined } : x) };
         this.emit();
       }
+      if (buf) this.fireBufferReady(track);
       return buf;
     }
     const genre = this.genreOf(track);
     const file = (KITS[genre]?.[this.slotOf(track)] ?? [])[sampleIndex];
     if (!file) return null;
-    return this.loadUrl(drumR2Url(file));
+    const out = await this.loadUrl(drumR2Url(file));
+    if (out) this.fireBufferReady(track);
+    return out;
   }
   /** MY DRUMS — LOAD the user's own file onto a lane. The kit sample stays
    *  underneath as the fallback an older build / the web app plays. */
@@ -2048,6 +2084,13 @@ export class DrumEngine {
    *  never dropped for being cold, and the registry is only ever touched from
    *  emitVoice, so two cold hits resolving out of order cannot cross wires. */
   private playHit(track: TrackKey, sampleIndex: number, volume: number, when: number, pan = 0, chokeAt?: number): Promise<void> {
+    if (this.drumSink) {
+      // NATIVE: the hit plays on the C++ lane (sub-hits never reach here — the TS scheduler is off); keep the decoded
+      // buffer warm so the shadow can mirror the lane
+      if (chokeAt === undefined) this.drumSink.hit(track, volume, when, pan);
+      if (!this.cachedBuffer(track, sampleIndex)) void this.loadSample(track, sampleIndex);
+      return Promise.resolve();
+    }
     const warm = this.cachedBuffer(track, sampleIndex);
     if (warm) { this.emitVoice(track, warm, volume, when, pan, chokeAt); return Promise.resolve(); }
     return this.loadSample(track, sampleIndex).then(buf => {
@@ -2179,6 +2222,40 @@ export class DrumEngine {
     const out: Record<TrackKey, number | undefined> = {};
     for (const t of this.state.tracks) if (t.muteGroup) out[t.key] = t.muteGroup;
     return out;
+  }
+
+  // ── Phase 3.3: the native drum shadow's view of the lanes ─────────────────
+  /** The decoded buffer a lane plays right now, if it is warm (the shadow mirrors it into the C++ Sampler). */
+  cachedBufferFor(track: TrackKey): AudioBuffer | null {
+    const t = this.state.tracks.find(x => x.key === track);
+    return t ? this.cachedBuffer(track, t.sampleIndex) : null;
+  }
+  /** Load (or return) a lane's current buffer; onBufferReady fires when a lane's buffer lands. */
+  ensureLoaded(track: TrackKey): Promise<AudioBuffer | null> {
+    const t = this.state.tracks.find(x => x.key === track);
+    return t ? this.loadSample(track, t.sampleIndex) : Promise.resolve(null);
+  }
+  /** Subscribe to "a lane's buffer is decoded" (loads are async and do not emit state). Returns the unsubscribe. */
+  onBufferReady(fn: (track: TrackKey) => void): () => void {
+    this.bufferReadyListeners.add(fn);
+    return () => { this.bufferReadyListeners.delete(fn); };
+  }
+  private fireBufferReady(track: TrackKey): void {
+    for (const fn of this.bufferReadyListeners) { try { fn(track); } catch { /* a bad listener must never break a load */ } }
+  }
+  /** Tests / the headless probe: put a buffer into a lane's cache as if it had been decoded (no network). */
+  primeBuffer(track: TrackKey, buf: AudioBuffer): void {
+    const t = this.state.tracks.find(x => x.key === track);
+    const url = t ? this.sampleUrlFor(track, t.sampleIndex) : null;
+    if (!url) return;
+    this.buffers.set(url, buf);
+    this.fireBufferReady(track);
+  }
+  /** The native position push (20 Hz): the ctx time the audible pass's step 0 is heard — the grid origin the
+   *  live-record landing reads (the playhead reads the sink's elapsedSec directly). */
+  nativeDrumUpdate(u: { playing: boolean; loopStartCtx: number }): void {
+    if (!this.drumSink || !this.state.playing) return;
+    if (Number.isFinite(u.loopStartCtx)) this.playStartTime = u.loopStartCtx;
   }
 
   // Trigger a single hit immediately (used for preview when user taps a
@@ -2319,7 +2396,8 @@ export class DrumEngine {
     // ours too would double-trigger and self-choke it short. One owner per
     // hit; the not-yet-booked case is covered from the other side (playLive
     // stamps lastLiveHit → the scheduler skips its copy).
-    const booked = !!r?.wasOn && lineT <= this.nextStepTime;
+    // NATIVE: the engine fires the pattern's copy itself (one owner per hit, in RT code) — the hand copy is skipped
+    const booked = !!r?.wasOn && (this.drumSink ? true : lineT <= this.nextStepTime);
     if (!booked) this.playLive(track.key, 0, Math.max(now, intent + s * (lineT - intent)));
   }
 
