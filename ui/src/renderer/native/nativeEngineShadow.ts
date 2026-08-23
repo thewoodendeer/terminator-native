@@ -1129,9 +1129,12 @@ class NativeEngineShadow {
         mx.setConsole({ on: consoleWas });
         mark('p8l'); r.mixerConsoleOff = await wait(() => mixerOf()?.console === consoleWas);
         r.mixerLimiterOn = mixerOf()?.limiter === true; // the shadow put the master's safety limiter in at attach
+        // 4.3: the master's BS.1770 reading + the per-slot GR rows ride the snapshot; the page's meters read them
+        const lo = mixerOf()?.loudness as Record<string, unknown> | undefined;
+        r.mixerLoudnessOk = !!lo && typeof lo.m === 'number' && typeof lo.hops === 'number' && typeof mixerOf()?.fxGr === 'object' && mx.master.updateLoudness().worklet === true;
         r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
       } else r.mixerPageOk = null;
       mark('p8mixer');
       this.engine.removePadBuffer(62);

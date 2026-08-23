@@ -1166,6 +1166,8 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
             std::clamp(static_cast<double>(json.getProperty("seed", 0.0)), 0.0, 4294967295.0));
         c = Command::mixerSetStrip(stripOf(json), kind, seed);
     }
+    else if (type == "loudnessReset")
+        c = Command::loudnessReset();
     else if (type == "mixerSetLimiter")
         c = Command::mixerSetLimiter(static_cast<bool>(json.getProperty("on", true)));
     else if (type == "mixerSetConsole")
@@ -1897,6 +1899,35 @@ void WebShell::timerCallback()
         mx->setProperty("fxRejected", static_cast<int>(s.mixerFxRejected));
         mx->setProperty("console", static_cast<bool>(s.mixerConsoleOn));
         mx->setProperty("limiter", static_cast<bool>(s.mixerLimiterOn));
+        // 4.3 meters: per-slot gain reduction of the live strips' chains, the limiter's GR, the master's loudness
+        auto* gr = new juce::DynamicObject();
+        for (int i = 0; i < kMaxStrips; ++i)
+        {
+            if (!((s.mixerActiveMask >> i) & 1u) || s.stripFxCount[i] == 0)
+                continue;
+            juce::Array<juce::var> g;
+            for (int k = 0; k < static_cast<int>(s.stripFxCount[i]) && k < 8; ++k)
+                g.add(static_cast<double>(s.stripFxGr[i][k]));
+            gr->setProperty(juce::String(i), juce::var(g));
+        }
+        mx->setProperty("fxGr", juce::var(gr));
+        mx->setProperty("limiterGr", static_cast<double>(s.masterLimiterGr));
+        auto* lo = new juce::DynamicObject();
+        lo->setProperty("m", static_cast<double>(s.lufsM));
+        lo->setProperty("s", static_cast<double>(s.lufsS));
+        lo->setProperty("i", static_cast<double>(s.lufsI));
+        lo->setProperty("lra", static_cast<double>(s.lra));
+        lo->setProperty("peakL", static_cast<double>(s.loudPeakL));
+        lo->setProperty("peakR", static_cast<double>(s.loudPeakR));
+        lo->setProperty("tpL", static_cast<double>(s.loudTpL));
+        lo->setProperty("tpR", static_cast<double>(s.loudTpR));
+        lo->setProperty("corr", static_cast<double>(s.loudCorr));
+        lo->setProperty("holdPeak", static_cast<double>(s.loudHoldPeak));
+        lo->setProperty("holdTp", static_cast<double>(s.loudHoldTp));
+        lo->setProperty("maxM", static_cast<double>(s.loudMaxM));
+        lo->setProperty("maxS", static_cast<double>(s.loudMaxS));
+        lo->setProperty("hops", static_cast<int>(s.loudHops));
+        mx->setProperty("loudness", juce::var(lo));
         mx->setProperty("orderValid", static_cast<bool>(s.mixerOrderValid));
         mx->setProperty("mainOut", s.mixerMainOut);
         mx->setProperty("bassStrip", s.bassStrip);

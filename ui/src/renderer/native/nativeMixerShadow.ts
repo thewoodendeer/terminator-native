@@ -21,6 +21,8 @@
  *    (4.2b: every page device is real natively; the SC COMP's SOURCE channel NAME becomes the key strip's INDEX here) →
  *  • CONSOLE (4.2c): `mixerSetConsole` follows MixerEngine.setConsole; every strip activation carries its seed =
  *    FNV-1a(name), the page's own per-strip tolerance seed; `mixerSetLimiter` puts the master's safety limiter in →
+ *  • METERS (4.3): `setMixerNativeMeters` — the strips' peaks, the master's BS.1770 loudness (`mixer.loudness`) and the
+ *    dynamics devices' GR (`mixer.fxGr`) come from the snapshot while attached; `loudnessReset` = the popup's RESET →
  *    `mixerAddFx {strip, fx}` (+ every current param, immediate) / `mixerRemoveFx` / `mixerSetFxBypass` /
  *    `mixerSetFxParam {strip, index, fx, key, value}` / `mixerReorderFx` / `mixerClearFx`; the master's chain is strip 0.
  *    Devices the engine has not ported yet (4.2a ports utility / eq / filter / wide / mseq / pan) take their slot as a
@@ -28,7 +30,7 @@
  *  Honest boundary (4.2a): the console stage / PDC / the master limiter are still the page's Web Audio graph — which is
  *  NOT what is heard natively (the sources are in the engine).
  */
-import { MixerEngine, ChannelName, setMixerNativeSink, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
+import { MixerEngine, ChannelName, setMixerNativeSink, setMixerNativeMeters, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
 import type { FxId } from '../../mixer/fx';
 
 type AnyRecord = Record<string, unknown>;
@@ -91,6 +93,7 @@ export class NativeMixerShadow {
     this.mirrorChain('master');
     this.queue({ type: 'mixerSetConsole', on: this.mixer.console.on, flavour: this.mixer.console.flavour, amount: this.mixer.console.amount });
     this.queue({ type: 'mixerSetLimiter', on: true }); // the page's master always carries its −1 dBFS safety limiter
+    this.installMeters();
     this.activate(CLICK_STRIP, 'channel', 'click');
     this.queue({ type: 'mixerSetFader', strip: CLICK_STRIP, db: 0 });
     this.queue({ type: 'setSourceStrip', source: 'click', strip: CLICK_STRIP });
@@ -100,6 +103,7 @@ export class NativeMixerShadow {
   detach(): void {
     this.detached = true;
     setMixerNativeSink(null);
+    setMixerNativeMeters(null);
     // the sources back to their direct paths, the strips off (the pads are unbound by the engine shadow's detach)
     void this.host.cmd({ type: 'setSourceStrip', source: 'bass', strip: -1 });
     void this.host.cmd({ type: 'setSourceStrip', source: 'click', strip: -1 });
@@ -135,7 +139,47 @@ export class NativeMixerShadow {
 
   onSnapshot(s: AnyRecord): void {
     const mx = s.mixer;
-    if (mx && typeof mx === 'object') this.latestMixer = mx as AnyRecord;
+    if (mx && typeof mx === 'object') {
+      this.latestMixer = mx as AnyRecord;
+      // the SC COMP panels read `gainReductionDb` off the page's device — keep it at the engine's number
+      const gr = (mx as AnyRecord).fxGr as Record<string, number[]> | undefined;
+      if (gr) {
+        for (const [name, strip] of this.mixer.channels) {
+          const idx = this.names.get(name);
+          const row = idx === undefined ? undefined : gr[String(idx)];
+          if (!row) continue;
+          for (let i = 0; i < strip.fx.length && i < row.length; i++) {
+            if (strip.fxIds[i] === 'sccomp') (strip.fx[i] as { gainReductionDb?: number }).gainReductionDb = row[i];
+          }
+        }
+      }
+    }
+  }
+
+  // ── the meters (4.3): the page reads the engine's numbers while attached ──
+  private installMeters(): void {
+    setMixerNativeMeters({
+      levels: (name) => {
+        const row = this.levels(name);
+        return row ? { preL: row[0], preR: row[1], postL: row[2], postR: row[3] } : null;
+      },
+      loudness: () => {
+        const lo = this.latestMixer?.loudness as Record<string, number> | undefined;
+        if (!lo) return null;
+        const v = (k: string) => { const x = Number(lo[k]); return x <= -999 ? -Infinity : x; };
+        return { m: v('m'), s: v('s'), i: v('i'), lra: Number(lo.lra) || 0, peakL: Number(lo.peakL) || 0, peakR: Number(lo.peakR) || 0,
+          tpL: Number(lo.tpL) || 0, tpR: Number(lo.tpR) || 0, holdPeak: Number(lo.holdPeak) || 0, holdTp: Number(lo.holdTp) || 0,
+          maxM: v('maxM'), maxS: v('maxS'), corr: Number.isFinite(Number(lo.corr)) ? Number(lo.corr) : 1, worklet: true };
+      },
+      gainReduction: (name, index) => {
+        const idx = name === 'master' ? 0 : this.names.get(name);
+        if (idx === undefined) return null;
+        const gr = this.latestMixer?.fxGr as Record<string, number[]> | undefined;
+        const row = gr?.[String(idx)];
+        return row && index < row.length ? row[index] : null;
+      },
+      resetLoudness: () => this.queue({ type: 'loudnessReset' }),
+    });
   }
 
   // ── the mirror ──

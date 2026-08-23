@@ -83,6 +83,22 @@ export interface MixerNativeSink {
 let nativeSink: MixerNativeSink | null = null;
 export function setMixerNativeSink(sink: MixerNativeSink | null): void { nativeSink = sink; }
 
+/** Terminator 3.0 — the native engine's METERS (4.3): when the shadow is attached the C++ mixer is what is heard, so
+ *  the strips' peaks, the master's BS.1770 loudness and the dynamics devices' gain reduction come from its snapshot
+ *  (the Web Audio graph's own meters read a signal nobody hears). Null in Electron / the browser. */
+export interface MixerNativeMeters {
+  /** [preL, preR, postL, postR] peaks for a page channel (or 'master'), null = not known natively. */
+  levels(name: ChannelName | 'master'): StripLevels | null;
+  /** The master's loudness reading, null = none yet. */
+  loudness(): Loudness | null;
+  /** A dynamics insert's gain reduction (dB ≤ 0) at `index` on a strip, null = unknown. */
+  gainReduction(name: ChannelName | 'master', index: number): number | null;
+  /** The page's RESET on the loudness popup. */
+  resetLoudness(): void;
+}
+let nativeMeters: MixerNativeMeters | null = null;
+export function setMixerNativeMeters(m: MixerNativeMeters | null): void { nativeMeters = m; }
+
 export const DEFAULT_REGULAR_CHANNELS: ChannelName[] = ['sample', 'kick', 'snare', 'hat', 'openhat', 'perc'];
 /** Mutable: addChannel() appends here so every consumer that iterates the
  *  mixer (render, metering, presets, exports) picks new strips up for free. */
@@ -475,6 +491,9 @@ class ChannelStrip {
 
   // ── metering ───────────────────────────────────────────────────────
   levels(): StripLevels {
+    // The native engine's strip (4.3) when the shadow is attached — that is what is heard.
+    const nv = nativeMeters?.levels(this.name);
+    if (nv) return nv;
     // Worklet live → a cached scalar read (it pushes every ~46 ms over a 93 ms
     // window, the same window the analysers reported). Otherwise the original
     // main-thread pull.
@@ -824,6 +843,11 @@ class MasterStrip {
   }
 
   levels(): StripLevels & { truePeak: number } {
+    const nv = nativeMeters?.levels('master');
+    if (nv) {
+      const lo = nativeMeters?.loudness();
+      return { ...nv, truePeak: lo ? Math.max(lo.tpL, lo.tpR) : Math.max(nv.postL, nv.postR) };
+    }
     return {
       preL: peakOf(this.preAnL, this.scratch),
       preR: peakOf(this.preAnR, this.scratch),
@@ -833,9 +857,10 @@ class MasterStrip {
     };
   }
 
-  /** Master loudness (BS.1770-4 worklet, or the approximation until it loads). */
-  updateLoudness(): Loudness { return this.meter.updateLoudness(); }
-  resetIntegrated(): void { this.meter.resetIntegrated(); }
+  /** Master loudness (the native engine's BS.1770-4 meter when the shadow is attached; else the worklet, or the
+   *  approximation until it loads). */
+  updateLoudness(): Loudness { return nativeMeters?.loudness() ?? this.meter.updateLoudness(); }
+  resetIntegrated(): void { nativeMeters?.resetLoudness(); this.meter.resetIntegrated(); }
   /** Spectrum for the loudness popup — post-fader, post-limiter master. */
   get spectrum(): AnalyserNode { return this.meter.spectrum; }
 
