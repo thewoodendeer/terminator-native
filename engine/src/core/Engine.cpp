@@ -350,6 +350,9 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         if (c.payload.strip.seed != 0)
             mixer_->setStripSeed(c.payload.strip.strip, c.payload.strip.seed);
         break;
+    case CommandType::loudnessReset:
+        mixer_->resetLoudness();
+        break;
     case CommandType::mixerSetLimiter:
         mixer_->setMasterLimiter(c.payload.strip.flag != 0);
         break;
@@ -694,6 +697,27 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.mixerFxRejected = mixer_->fxRejected();
     s.mixerConsoleOn = mixer_->consoleOn() ? 1 : 0;
     s.mixerLimiterOn = mixer_->masterLimiter() ? 1 : 0;
+    for (int i = 0; i < kMaxStrips; ++i)
+        for (int k = 0; k < 8; ++k)
+            s.stripFxGr[i][k] = k < mixer_->fxCount(i) ? mixer_->fxGainReductionDb(i, k) : 0.0f;
+    s.masterLimiterGr = mixer_->masterLimiter() ? mixer_->masterLimiterGrDb() : 0.0f;
+    {
+        const auto& lr = mixer_->loudness();
+        s.lufsM = lr.m;
+        s.lufsS = lr.s;
+        s.lufsI = lr.i;
+        s.lra = lr.lra;
+        s.loudPeakL = lr.peakL;
+        s.loudPeakR = lr.peakR;
+        s.loudTpL = lr.tpL;
+        s.loudTpR = lr.tpR;
+        s.loudCorr = lr.corr;
+        s.loudHoldPeak = lr.holdPeak;
+        s.loudHoldTp = lr.holdTp;
+        s.loudMaxM = lr.maxM;
+        s.loudMaxS = lr.maxS;
+        s.loudHops = lr.hops;
+    }
     snapshot_.publish(s);
 }
 

@@ -92,6 +92,7 @@ enum class CommandType : std::uint32_t
                      // the page's strip NAME; 0 = leave as is)
     mixerSetConsole, // strip.flag = on + strip.kind = flavour (0 SSL · 1 NEVE · 2 API) + strip.value = amount 0..100
     mixerSetLimiter, // strip.flag = on — the master's safety limiter (the page's −1 dBFS / 20:1 DynamicsCompressor)
+    loudnessReset,   // the master's BS.1770 meter: integrated + LRA + the holds restart (the page's RESET)
     mixerSetFader,   // strip.strip + strip.value — dB, −60 (= −∞) .. +6 (τ 8 ms)
     mixerSetPan,     // strip.strip + strip.value — −1..1 (τ 8 ms); the master has no pan
     mixerSetWidth,   // strip.strip + strip.value — M/S width 0 (mono) .. 1 (as is) .. 2
@@ -764,6 +765,7 @@ struct Command
         c.payload.strip.seed = seed;
         return c;
     }
+    static Command loudnessReset() noexcept { return stripCmd(CommandType::loudnessReset, 0); }
     static Command mixerSetLimiter(bool on) noexcept
     {
         Command c = stripCmd(CommandType::mixerSetLimiter, 0);

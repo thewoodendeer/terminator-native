@@ -67,7 +67,7 @@ class CompFx final : public Effect
     float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
     int latencySamples() const noexcept TERMINATOR_NONBLOCKING override { return kernel_.preDelayFrames(); }
     void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
-    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING { return kernel_.meteringGainDb(); }
+    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING override { return kernel_.meteringGainDb(); }
 
   private:
     double sr_ = 48000.0;
@@ -99,7 +99,7 @@ class SidechainFx final : public Effect
     }
     void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
     /// The deepest gain reduction (dB, ≤ 0) in the last block — the panel meter.
-    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING { return minGr_; }
+    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING override { return minGr_; }
 
   private:
     double sr_ = 48000.0;

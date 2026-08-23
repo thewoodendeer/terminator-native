@@ -155,6 +155,8 @@ class Effect
     /// through setSidechainKey (the block's L / R, or nullptr for silence) right before process().
     virtual int sidechainSource() const noexcept TERMINATOR_NONBLOCKING { return -1; }
     virtual void setSidechainKey(const double* /*l*/, const double* /*r*/) noexcept TERMINATOR_NONBLOCKING {}
+    /// A dynamics device's gain reduction (dB ≤ 0, the page's meters) — 0 for everything else.
+    virtual float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING { return 0.0f; }
     /// RT: the wet path, in place.
     virtual void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING = 0;
 

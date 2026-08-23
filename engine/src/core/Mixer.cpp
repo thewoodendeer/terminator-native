@@ -112,6 +112,7 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
     }
     limiter_.prepare(static_cast<float>(sampleRate));
     limiter_.setPreDelayTime(0.006f);
+    loudness_.prepare(sampleRate);
     // the settings survive a re-prepare (a device change): only the smoothed state + meters restart at the targets;
     // the insert chains are DROPPED (the pool re-prepares and frees every device — the page re-sends its chains)
     for (int i = 0; i < kMaxStrips; ++i)
@@ -399,6 +400,12 @@ bool Mixer::removeFx(int strip, int index) noexcept TERMINATOR_NONBLOCKING
     s.fxBypass[s.fxCount] = false;
     rebuildKeyMask();
     return true;
+}
+
+float Mixer::fxGainReductionDb(int strip, int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    const auto& s = strips_[clampIdx(strip)];
+    return (index >= 0 && index < s.fxCount && s.fx[index] != nullptr) ? s.fx[index]->gainReductionDb() : 0.0f;
 }
 
 void Mixer::rebuildKeyMask() noexcept TERMINATOR_NONBLOCKING
@@ -831,6 +838,10 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         limiter_.process(src, dst, 2, n, -1.0f, 0.0f, 20.0f, 0.001f, 0.05f, 0.006f, 0.0f, 1.0f, 0.09f, 0.16f, 0.42f,
                          0.98f);
     }
+
+    // ---- the master's loudness meter (4.3): BS.1770-4 on what leaves the master ----
+    if (isMaster)
+        loudness_.push(oL, oR, n);
 
     // ---- post meter (what leaves the strip) ----
     {

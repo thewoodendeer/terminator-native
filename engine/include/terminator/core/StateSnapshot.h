@@ -139,6 +139,14 @@ struct StateSnapshot
     std::uint32_t mixerFxRejected = 0;          // lifetime mixerAddFx refusals (full / pool empty / not ported / dead)
     std::uint8_t mixerConsoleOn = 0;            // CONSOLE (4.2c): the desk stage is in on every live strip
     std::uint8_t mixerLimiterOn = 0;            // the master's safety limiter (4.2c)
+    // 4.3 meters on the bridge
+    float stripFxGr[kMaxStrips][8] = {}; // per insert slot: a dynamics device's gain reduction (dB ≤ 0), else 0
+    float masterLimiterGr = 0.0f;        // the master limiter's gain reduction (dB ≤ 0)
+    float lufsM = -1000.0f, lufsS = -1000.0f, lufsI = -1000.0f, lra = 0.0f;   // BS.1770-4 on the master (−1000 = −∞)
+    float loudPeakL = 0.0f, loudPeakR = 0.0f, loudTpL = 0.0f, loudTpR = 0.0f; // the last hop's sample / true peaks
+    float loudCorr = 1.0f;                                                    // L/R correlation of the last hop
+    float loudHoldPeak = 0.0f, loudHoldTp = 0.0f, loudMaxM = -1000.0f, loudMaxS = -1000.0f; // since loudnessReset
+    std::uint32_t loudHops = 0;                                                             // integrated blocks counted
 };
 static_assert(std::is_trivially_copyable_v<StateSnapshot>, "StateSnapshot must be trivially copyable");
 

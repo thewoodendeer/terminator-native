@@ -21,6 +21,7 @@
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/StateSnapshot.h"
 #include "terminator/core/fx/ConsoleStage.h"
+#include "terminator/core/LoudnessMeter.h"
 #include "terminator/core/fx/DynamicsFx.h"
 #include "terminator/core/fx/Effect.h"
 
@@ -115,6 +116,11 @@ class Mixer
     bool masterLimiter() const noexcept { return limiterOn_; }
     int masterLatencySamples() const noexcept { return limiterOn_ ? limiter_.preDelayFrames() : 0; }
     float masterLimiterGrDb() const noexcept { return limiter_.meteringGainDb(); }
+    /// The master's BS.1770-4 loudness (4.3) — fed post limiter, always on (cheap).
+    const LoudnessReading& loudness() const noexcept { return loudness_.reading(); }
+    void resetLoudness() noexcept TERMINATOR_NONBLOCKING { loudness_.reset(); }
+    /// A dynamics insert's gain reduction (dB ≤ 0), 0 for any other slot.
+    float fxGainReductionDb(int strip, int index) const noexcept TERMINATOR_NONBLOCKING;
     void setFader(int strip, float db) noexcept TERMINATOR_NONBLOCKING;
     void setPan(int strip, float pan) noexcept TERMINATOR_NONBLOCKING;
     void setWidth(int strip, float width) noexcept TERMINATOR_NONBLOCKING;
@@ -240,6 +246,7 @@ class Mixer
     FxPool* pool_ = nullptr;
     bool limiterOn_ = false;
     BlinkCompressorKernel limiter_;
+    LoudnessMeter loudness_;
     bool consoleOn_ = false;
     ConsoleFlavour consoleFlavour_ = ConsoleFlavour::ssl;
     float consoleAmount_ = 50.0f;
