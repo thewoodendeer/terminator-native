@@ -723,16 +723,86 @@ bassEventsDropped / bassTimelineFired / bassBend`; info `bassPpq / bassMaxBars /
   keyboard (pad 4 = root with LOCK); the roll's playhead + dim sounding keys; the Beat Finisher preview drives the bass
   (the arranger timeline) and stop/seek re-schedules; STOP unbends. Known: dry to outs 1/2 (no mixer strip yet).
 
-### Next session (in order) — updated at the end of the seventh session
-0. `gh run list` — CI for the 3.4 trio (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk` + `bassPageOk`
-   with derived tolerances and the measured `snapshotAgeMs` in its output). **CI for `ca9cd1a` (the cursor-tolerance
-   fix, run 32611489982) went GREEN ON ALL FOUR jobs** (RTSan · universal · Intel · Windows) — the first fully green run
-   since the 3.1 tip; the derived tolerance was the missing piece.
-1. **3.5 MIDI clock in/out from the transport** (sample-exact OUT from the callback, IN follower on driver timestamps,
-   the unified learn store, note-out); bass MIDI notes with driver timestamps → `bassNote{atSample}`.
-2. 3.6 arp, metronome (through the mixer), count-in on the sample grid — the last Web Audio satellites.
-3. 3.7 live-record landing on the native clock. Then Phase 4 (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4
-   BRIEF" first) — routes pads / drum lanes / the bass into their strips.
+## Phase 3 — 3.5 DONE (MIDI CLOCK OUT/IN + THE ONE MIDI ROUTER), 2026-08-23 eighth session
+**What changed (engine):** `core/MidiClock.h/.cpp` (JUCE-free) — `MidiClockOut`: the clock generated INSIDE the
+callback from the transport (no look-ahead timer, no Worker pump): PLAY → Song Position 0 + START + the first tick AT
+the anchor sample, then 24 ticks/quarter with the spacing re-read per tick from the session BPM (a tempo change lands
+at the next tick — continuous, never a double/missing tick), pause → STOP (count + phase kept), resume → SPP (ticks/6)
++ CONTINUE from the kept phase, stop → STOP at its sample (no tick after), a restart = STOP then SPP 0 + START, the
+preference off mid-run = STOP now; events carry their exact engine sample (128 per block max, a 16-slot FIFO for the
+control bytes, ticks accumulate in double — tick n = anchor + n·spt within 1 sample over 10 minutes, block-size
+invariant at 37/64/128/480/512). `MidiClockSourceLock` + `MidiClockFollower` = the Electron `midiClockIn.ts` ported
+1:1 (constants, LSQ estimator, hysteresis, jump/drop-out rules, the one-port lock) on a fixed 48-slot window.
+**Engine:** `Config.outputLatencySamples` (AudioIO fills it from the device); `clockOut_` follows `seqPlay` (the
+anchor) / `drumPlay` (when nothing runs — drums alone clock the gear) / `seqPause` / `seqResume` / `seqStop` /
+`drumStop` (nothing left) / `panic` / a self-stopping non-loop pattern; `seqSetBpm` feeds it; each block's events →
+`MidiOutEvent{hostTimeNs = block entry + (offset + output latency)/sr, sample, bytes}` into `Engine::midiOut()` (a
+1024-slot SPSC queue, audio → the pump). Commands `midiClockEnable{on}`, `setMidiRouting{pads}` (the direct
+notes→pads path on/off: the page owns the notes in bass MIDI IN / DRUM PADS / MIDI OFF / learn); snapshot `midiClock*`
++ `midiNotesToPads` + `midiOutDropped`. **io/MidiHub:** OUTPUTS (list / `enableOutput` / `applyOutputPrefs` — the page's
+`app.midi.outputs` map, missing = ON; hot-plug in `refresh()`), a `Priority::highest` PUMP thread that drains
+`midiOut()` and sends every message at its stamp to every open output (`wait(1)` until ~1.5 ms before, yield-spin the
+rest; a stamp in the past goes out at once → a late block bunches its ticks, the COUNT = song position stays true;
+`sentCount` / `lastSendLatenessMs` / `maxSendLatenessMs`), CLOCK IN on the driver thread (ticks → the lock + follower
+on the driver's `getTimeStamp()`; a settled BPM → `onClockBpm` via callAsync ≤ 1/beat; START/CONTINUE through the lock →
+mirrored; STOP → lock cleared + mirrored; active sensing dropped), and `onNote` → `onMessage(MidiEvent, portName)` for
+EVERY channel message (notes, CCs, bend, aftertouch, program) so the page gets them all; `inject(bytes)` for the probe.
+**Shell:** `terminator.midiMessage {data, hostNs, port, portName}` + `terminator.midiClock {bpm, port}`;
+`applyMidiSettings(app)` at boot + on every settings change (`app.midi.clock` → `midiClockEnable`, `app.midi.outputs` →
+the hub); `terminatorMidi` verbs `enableOutput` (persists into `app.midi.outputs` through the settings service →
+`settingsChanged` → every window) + `inject {data}`; reply `outputs[]` + `clock{…}`; snapshot `midiClock*`, `midiSent`,
+`midiSendLateMs`, `midiClockIn*`.
+**The page binding (ui):** the page now runs ONE MIDI router for Web MIDI and native alike — `midiHub.injectNative()`
+dispatches a mirrored message to ChopperView's `onMessage` with the driver's stamp mapped to performance.now()
+(NativeClock) and `nativeOwned: true`; the pad path passes `{ nativeOwned: true }` so the voice sink does not
+re-trigger the pad the engine already played; transport START/CONTINUE/STOP from a controller, CC learn (both stores),
+pitch bend → the bass, bass MIDI IN (+ the MPC/MPD fold by port name), DRUM PADS mode, tap/kill, pad LEARN all work
+natively now (2.5e only mirrored notes → pads); `ChopperEngine.midiSink` (`routing` / `noteMap`) + `pushMidiRouting()`
+(MIDI OFF / DRUM PADS / learn / bass MIDI IN → `setMidiRouting false`, back on → true) + the learned map → `setNoteMap`
+(pads ≥ 64 unmapped natively — drum lanes); `terminator.midiClock` → `engine.setMetronomeBpm` only while the hardware
+drives AND "follow tempo" is on (the page's policy, unchanged); `NativeMidiPane` lists the native OUTPUTS with toggles
++ the clock OUT/IN status; the Web MIDI device cards are hidden in the native shell. The TS `MidiClockSender`'s start/
+stop/nudge still run on the page (they find no Web MIDI outputs in the WebView → silent; the native clock is the one
+that sounds).
+**Gates:** mac-debug 0 warnings; ctest = the 3.4 suite + 12 `[midiclock]` cases (the Electron midi-clock + midi-clock-in
+gates ported to samples, block invariance, 10 min, pause/resume, the Engine wiring incl. host stamps at the ear, the
+OUT→IN loopback reading 120 then 90 within 0.1) + an RT case (clock enabled, play, tempo change, pause/resume, stop —
+0 allocations); ui gate (tsc baseline 5, library, clock, bass-theory, vite); the probe asserts `midiMirrored` (through
+the new path), `midiNoDoubleTrigger`, `midiTransportOk` (an injected START byte starts the page's transport, STOP stops
+it) and `midiClockOk` (the native clock runs / ticks / stops with it, `midiOutDropped` 0). **Evidence (eighth
+session):** mac-debug 0 warnings + ctest 175/175 (162 + 13), RTSan 176/176, universal lipo `x86_64 arm64` on the app +
+terminator-render + ctest 175, ui gate green, probe OK (`midiClockPosition` 41 at the STOP, `midiOutDropped` 0).
+**CI for the pushed 3.4 tip `5d2f0cb` (run 32613089136) was RED on 3 of 4 jobs** — RTSan green; Intel = the runner
+could not resolve github.com at checkout (infra); **Windows = 12 bass tests "No test cases matched"** — the 3.4 suites
+had `—`/`→` in their `TEST_CASE` names (the MSVC ASCII rule from 3.1 again: catch_discover_tests passes the name on the
+command line and the encoding mangles it) → every `TEST_CASE`/`SECTION` name in tests/engine is ASCII now (bass synth,
+bass sequencer, drum sequencer, midi clock); universal = the probe's part-1 chop-seq check read the SAME stale snapshot
+twice on a starved runner (step 3 at both reads; part 3 with its derived tolerance passed) → it polls now (≤ 3 s) until
+the step moved and ≥ 8 hits fired.
+**Honest boundary after 3.5:** the clock OUT's delivery accuracy = the pump's wake-up (≤ ~1 ms on a loaded machine;
+ticks are stamped ≥ the device's output latency ahead, so they normally wait and go out within tens of µs) — measured
+in the pane as "last send … ms late"; the TS "skip whole ticks after a 1 s stall" rule has no native equivalent (the
+callback never stalls that long; a glitch bunches ≤ a block of ticks). NOT done from the 3.5 line: the **unified
+MIDI-learn store** (both page stores work as before through the one router — the merge + import is Phase 8
+persistence), **MIDI note OUT** per strip/bass/drums (Phase 4 routes strips first; the pump + `midiOut()` are ready for
+it), the free-tier pad lock on the direct path (the native app is not tier-gated yet). Bass MIDI notes reach the bass
+with the driver's stamp through the router's `when` (the handler-lag math) → `bassNote{atSample}` via the bass shadow.
+**Victor's pass (3.5):** Preferences → MIDI: turn ON "MIDI Clock (send)", leave your interface's output on; set a drum
+machine / DAW to external sync → PLAY in Terminator: it starts on the first tick and locks (compare the bar lines for
+5 minutes at 90 BPM — no drift; change the BPM knob → the gear follows at the next tick); STOP stops it; pause/resume
+(space) → the gear CONTINUES from the position. Clock IN: PLAY/STOP on the MPC start/stop Terminator (its START reaches
+the page's router); with "follow tempo" ON the BPM readout follows the MPC within a beat (on one port only — the two-port
+MPC reads the true tempo). Pads from the controller (direct path, sub-ms); bass MIDI IN (notes, pitch wheel); DRUM PADS
+mode from the controller; CC LEARN on a knob; pad LEARN — all through the one router. The MIDI pane shows outputs, the
+running clock's position and the last send's lateness.
+
+### Next session (in order) — updated at the end of the eighth session
+0. `gh run list` — CI for the 3.5 commits (4 jobs; the universal probe now also asserts `midiTransportOk` +
+   `midiClockOk`).
+1. 3.6 arp, metronome (through the mixer), count-in on the sample grid — the last Web Audio satellites.
+2. 3.7 live-record landing on the native clock. Then Phase 4 (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4
+   BRIEF" first) — routes pads / drum lanes / the bass into their strips; MIDI note OUT per strip rides the 3.5 pump.
+3. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
 
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
 Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).

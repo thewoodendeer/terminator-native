@@ -15,7 +15,7 @@ incompatibly; add fields freely (additive changes don't bump).
 | Direction | Mechanism | Threading |
 |---|---|---|
 | JS → C++ | native functions (Promise-returning): `terminatorInfo()`, `terminatorCommand(cmd)`, `terminatorAudio(req)`, `terminatorMidi(req)`, `terminatorPads(req)` | message thread; engine-bound commands → `Engine::commands().push()` (lock-free) → audio thread at the next block |
-| C++ → JS | events `terminator.snapshot` (20 Hz), `terminator.devicesChanged`, `terminator.midiChanged` | audio thread publishes `StateSnapshot` (wait-free) → message thread reads `Engine::snapshot()` → WebView |
+| C++ → JS | events `terminator.snapshot` (20 Hz), `terminator.devicesChanged`, `terminator.midiChanged`, `terminator.midiMessage`, `terminator.midiClock` (3.5) | audio thread publishes `StateSnapshot` (wait-free) → message thread reads `Engine::snapshot()` → WebView |
 
 Resources at `WebBrowserComponent::getResourceProviderRoot()` (`juce://juce.backend/` macOS · `https://juce.backend/`
 Windows): the **built React UI** (`ui/dist`, bundled into the app at build time, or `TERMINATOR_UI_DIR=<dir>`)
@@ -48,6 +48,8 @@ headless smoke mode (see tools/ci/probe-app.sh) — the probe also reports `uiMo
 | `setPadParams` | `pad`, `pitch` ±48 (pad PITCH ±24 + its source's PITCH ±24, summed by the UI), `fine` ±50, `attack` 0..0.5, `release` 0..0.5, `fadeOut` (one-shot/gate: linear to silence over the LAST fadeOut seconds of the region, buffer time; LOOP pads ignore it — their fades are in the render), `gain` 0..4, `outputPair`, `mode` oneshot|gate|loop, `gate` bool (NOTE ON: note-off ends the voice in ANY mode — a gated LOOP loops while held; `mode: gate` implies it), `reverse`, `chokeGroup` (−1 own pad · −2 poly · ≥0 group), `interpolation` hermite|linear, `pan` −1..1 (the Web Audio StereoPanner law — mono equal-power cos/sin, stereo side-mix; exactly 0 = no panner, unity on both; default 0), `chokeFade` seconds (the fade a hit of THIS pad applies when it cuts — retrigger / mute group — and stopPad's fade: pads 0.003, drum lanes 0.004; default 0.003) | RT pad params |
 | `setPadSample` | `pad`, `key` (a `terminatorSamples` key; "" / missing = clear), `startSec`, `endSec` (≤ 0 = to the end) — seconds of THAT buffer | binds the pad to a region of an uploaded/loaded buffer (`SampleRegistry` → `Command::setPadSample`); clearing also drops the pad's loop render |
 | `setSequence` / `queueSequence` | `index`, `bars` 1..4, `resolution` (stored steps/bar), `grid` [[pads]…] per stored step (null/[] = empty), `velGrid` [[0.05..1]…] aligned, `loop`, `swing` 0..1 | the chop sequencer on the sample clock (Phase 3.1, `core/ChopSequencer.h`): the shell builds a `SeqPattern` (grid bit masks + per-cell velocity) and hands it by pointer (a ring keeps the last 8 alive). `setSequence` = live replace (steps not fired yet read it); `queueSequence` = switch at the next step 0; `queueSequence {cancel: true}` = drop a pending switch (the UI re-selected the playing pattern; no-op when stopped). **One owner per hit** (Phase 3.2): a pattern hit whose pad was LIVE-triggered within 120 ms of it (before or after — `Engine::liveHitSample_`, stamped by `triggerPad`/MIDI) is skipped at fire time (`seqHitsSkipped` counts them) — the TS `lastLivePadHit` rule, in RT code |
+| `midiClockEnable` {`on`} | — | **MIDI clock OUT (Phase 3.5, `core/MidiClock.h`)** — Preferences "MIDI Clock (send)"; the shell sends it from `app.midi.clock` at boot + on every settings change. On: the clock rides the transport — `seqPlay` (or `drumPlay` when nothing else runs) → Song Position 0 + START + the first tick AT the anchor sample, then 24 ticks per quarter note with the spacing re-read per tick from `setBpm` (a tempo change lands at the next tick, continuous), `seqPause` → STOP, `seqResume` → Song Position (ticks/6) + CONTINUE, `seqStop` / `drumStop` (nothing left playing) / `panic` / a self-stopping non-loop pattern → STOP; a restart = STOP, SPP 0, START. Off while running = STOP now. Every byte is generated INSIDE the callback at its exact sample, stamped with the host time that sample is HEARD (block entry + offset + the device's output latency) and sent by the MidiHub pump thread at that time to every output left on (`app.midi.outputs`, missing = on). Gates: `engine.midi clock*` (the Electron midi-clock / midi-clock-in gates ported to samples + block invariance + 10 min + pause/resume + the Engine wiring + the OUT→IN loopback) |
+| `setMidiRouting` {`pads`} | — | **Phase 3.5:** `pads: true` (default) = MIDI notes play pads on the engine's direct driver→engine path (note → `setNoteMap` table); `false` = the page owns the notes (bass MIDI IN, DRUM PADS mode, MIDI OFF, pad learn) — the engine only MIRRORS them (`terminator.midiMessage`) and the page routes. The page's `ChopperEngine.midiSink` pushes it (+ the learned note map via `setNoteMap`, pads ≥ 64 → unmapped: those are drum lanes natively) |
 | `seqPlay` {`atSample`? 0 = next block} · `seqStop` · `seqPause` · `seqResume` · `setBpm` {`bpm` 20..300, applies at the next step} · `seqLoop` {`on`} | — | transport of the native chop sequencer; swing is applied LIVE (= export); a hit ends (3 ms fade ending AT it) at the next same-mute-group hit (choke group ≥ 0) or its own next hit (own-pad / poly), else the pattern end; pause fades the sequencer's notes and keeps the unfired hits; loop off stops after the last slot |
 | `setDrumPattern` / `scheduleDrumPattern` | `bars` 1..4, `stepsPerBar` (96 — INTERNAL_SPB; ≤ 96), `lanes` [{`lane` 0..63, `steps` [internal step indices lit]}], `scheduleDrumPattern` + `atSample` (an ENGINE sample) | **the drum sequencer (Phase 3.3, `core/DrumSequencer.h`)** — the grid by pointer (a ring of 48 keeps them alive). `setDrumPattern` = the live pattern (a step not scheduled yet reads it — the engine schedules ≤ 110 ms ahead because SHIFT may be negative); `scheduleDrumPattern` = an arranged-playback SWAP: a step whose straight grid time + half a step ≥ `atSample` plays it (the TS `patternFor` half-step tolerance); `clearDrumPatterns` drops the swap list. The pattern ALWAYS loops. Lane L plays pad 64+L (bind it with `setPadSample`/`setPadParams` like any pad: attack 0 / 3 ms per the head rule, `chokeFade` 0.004, `chokeGroup` 1000+g for mute group g) |
 | `setDrumGraphs` | `lanes` [{`lane`, `velocity` [0..1 × ≤ 384], `shift` [ms ±50], `pan` [−1..1], `repeat` [0..12 = REPEAT_RATES index]}] | the four step graphs (engine-level, shared by every pattern, indexed by internal step) by pointer (ring of 4). Per hit: level = lane volume × VELOCITY × drum master; SHIFT snapped to the PPQ pulse (`round(shift/pulse)·pulse`, JS rounding); PAN per hit; REPEAT = a roll every `beats × 60/bpm` from the swung+shifted hit until the step's STRAIGHT slot end, each sub-hit fading (the lane's 4 ms) INTO the next — sub-hits cut nothing and are cut by nothing but their own end |
@@ -90,11 +92,21 @@ Reply: `{ ok, error?, deviceTypes[], currentType, listType, inputDevices[], outp
 (`calibrationSamples` −1 = not measured · −2 channel out of range · −3 nothing heard.)
 
 ## `terminatorMidi(req)`
-`verb`: `list` (default) · `enable` {`id`, `enabled`} · `enableAll` · `refresh`. Reply `{ ok, error?, inputs:[{id,
-name, enabled, open}], messages, lastLagMs, medianLagMs, last }`. Enabled set persisted in settings `midi.inputs`.
-Engine side: every message is stamped with the shared host clock minus the driver→handler lag and pushed into
-the port's lock-free queue; the audio thread maps note-on/off through the note map. Clock/active-sense are not
-forwarded (Phase 3).
+`verb`: `list` (default) · `enable` {`id`, `enabled`} · `enableAll` · `refresh` · `enableOutput` {`id`, `enabled`}
+(3.5: persists into the page's `app.midi.outputs` map + broadcasts `settingsChanged`) · `inject` {`note`, `velocity`,
+`on`, `channel`} or {`data`: [bytes]} (tests / the probe: as if it arrived on port 0 — notes, CCs, START/STOP/clock
+ticks). Reply `{ ok, error?, inputs:[{id, name, enabled, open}], outputs:[{id, name, enabled, open}] (3.5; enabled =
+not turned off — missing from the map = on), messages, lastLagMs, medianLagMs, last, clock:{enabled, running, ticks,
+sent, lateMs, maxLateMs, inBpm, inPort, inStarted} }`. Enabled inputs persisted in settings `midi.inputs`.
+Engine side: every channel message is stamped with the shared host clock minus the driver→handler lag and pushed
+into the port's lock-free queue; the audio thread maps note-on/off through the note map when `setMidiRouting` allows
+(default on). **3.5:** clock ticks (0xF8) stay on the driver thread — `MidiClockSourceLock` (the port that sent
+START/CONTINUE owns the clock until its STOP; the same press on another port within 500 ms is ignored; other ports'
+ticks are dropped) + `MidiClockFollower` (the Electron estimator 1:1 on the DRIVER's timestamps) → `terminator.midiClock`
+reports; START/CONTINUE (when the lock accepts) / STOP and every other message are mirrored as `terminator.midiMessage`.
+Active sensing is dropped. MIDI OUT: a high-priority pump thread drains `Engine::midiOut()` and sends each message at
+its host-time stamp (sleeps to ~1.5 ms before, spins the rest; a stamp in the past goes out at once) to every open
+output.
 
 ## `terminatorPads(req)`
 `verb`: `list` (default) → `{ ok, pads:[{pad, hasSample, name, file, frames, sampleRate, channels, pitch, fine,
@@ -208,8 +220,14 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
   "bassPlaying": false, "bassArrangerDriven": false, "bassTick": -1, "bassLoopTicks": 768, "bassLoopStartSample": 0,
   "bassVoices": 0, "bassLevel": 0, "bassNotesFired": 0, "bassEventsDropped": 0, "bassTimelineFired": 0, "bassBend": 0, "bassNotes": [],
   "lastTriggeredPadPositionSec": 0, "calibrationState": 0, "calibrationSamples": -1, "calibrationMs": -1,
-  "midiMessages": 0, "midiLagMs": 0, "midiLast": "" }
+  "midiMessages": 0, "midiLagMs": 0, "midiLast": "",
+  "midiClockEnabled": false, "midiClockRunning": false, "midiClockTicks": 0, "midiClockPosition": 0, "midiOutDropped": 0,
+  "midiNotesToPads": true, "midiSent": 0, "midiSendLateMs": 0, "midiClockInBpm": 0, "midiClockInPort": -1, "midiClockInStarted": false }
 ```
+`midiClock*` (3.5): the clock OUT — `midiClockPosition` = ticks since START (÷ 6 = the song position in 16ths),
+`midiClockTicks` lifetime, `midiOutDropped` = out-queue refusals (0), `midiSent` / `midiSendLateMs` = the pump's sends
+and how late its last one was against the stamp; `midiClockIn*` = the follower's last settled BPM, the owning port, and
+whether the hardware's START is in charge.
 `clockHostNs`/`clockSample`/`clockBlockSize` = the last processed block's host-time ↔ engine-sample anchor (callback
 entry); `emitHostNs` = the host time this snapshot was emitted (a one-way upper bound for the page's host ↔
 performance.now offset: receive ≥ emit). With the `clock` verb's round trip these let the page map engine samples ↔
@@ -232,12 +250,19 @@ is as old as the emit + the message thread's scheduling + the WebView delivery**
 (`stats.snapshotAgeMs`, from `emitHostNs`); a starved CI runner has shown > 100 ms. Never compare a live cursor to a
 snapshot field without allowing for that age (the probe derives its tolerance from it).
 ### `terminator.devicesChanged` (Device object) — hot-plug / device error · `terminator.midiChanged` (MIDI reply) · `terminator.settingsChanged` (the `app` settings object, after a `set`)
-### `terminator.midiNote` {note, velocity, on, channel} — every note on/off a device sent (2.5e)
-The engine already played it on the direct MidiHub → engine path (driver thread → lock-free queue → audio thread,
-note − 36 = pad); this event mirrors it to the page on the message thread so the UI runs the same hit through its
-engine marked `nativeOwned` (LEDs, playhead, chokes, step/live record — no second native trigger). The page has no
-Web MIDI inside the WebView. `terminatorMidi {verb:"inject", note, velocity, on, channel}` feeds a note as if it
-arrived on port 0 (engine queue + this event) — the probe's MIDI check.
+### `terminator.midiMessage` {data:[bytes], hostNs, port, portName} — every message a device sent (2.5e → 3.5)
+Notes, CCs, pitch bend, aftertouch, program change, and START/CONTINUE/STOP when the clock lock accepted them (clock
+ticks + active sensing are never mirrored). The engine already got it on the direct MidiHub → engine path (driver
+thread → lock-free queue → audio thread — a note plays its pad when `setMidiRouting` allows); this event mirrors it to
+the page on the message thread, where the shadow injects it into the page's `midiHub` (`injectNative`: `timeStamp` =
+`hostNs` mapped to performance.now() through NativeClock, `target.id/name` = the port, `nativeOwned: true`) so
+ChopperView's ONE router runs unchanged — transport from the hardware, CC learn, bass MIDI IN (with the MPC/MPD pad
+fold by port name), DRUM PADS, pad learn, pads (marked `nativeOwned` → no second native trigger). The page has no Web
+MIDI inside the WebView. `terminatorMidi {verb:"inject", …}` feeds a message as if it arrived on port 0 — the probe's
+MIDI checks (a note, then START/STOP driving the transport + the clock OUT).
+### `terminator.midiClock` {bpm, port} — the clock-IN follower settled on a new tempo (3.5)
+≤ once per beat, only the owning port's ticks; the page applies Preferences "MIDI Clock (follow tempo)" (and only
+while the hardware's START is in charge) → `engine.setMetronomeBpm(bpm)`.
 
 ## Project v0 (terminator-render input)
 ```json

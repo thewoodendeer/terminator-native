@@ -76,6 +76,15 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `attachNativeEngineShadow(engine, drumEngine, bassEngine)` in both views. Gate: `scripts/test-bass-theory.mts` (the
   Electron `scripts/bass-theory.test.mts`) runs inside `npm run gate`. (3.2/3.3 likewise touched `ChopperEngine.ts`
   `seqSink`/`nativeCursorHook` and `drums/DrumEngine.ts` `drumSink` — see STATUS.md for those lists.)
+- **MIDI through the engine (3.5, 2026-08-23):** `src/renderer/chopper/midiHub.ts` — `injectNative()` (a message the C++
+  MidiHub mirrored, dispatched to the same handlers as a Web MIDI event: `timeStamp` in performance ms, `target.id/name`,
+  `nativeOwned: true`) + `setNativeInputs()` (the status pill's list) + `nativeCount`; `src/renderer/chopper/ChopperEngine.ts`
+  — the `midiSink` field (`routing(notesToPads)` / `noteMap(map)`); `src/renderer/chopper/ChopperView.tsx` — the pad path
+  passes `{ nativeOwned: true }` for a native-mirrored note, a `terminator.midiClock` subscription applying "follow tempo",
+  `pushMidiRouting()` (MIDI OFF / DRUM PADS / pad learn / bass MIDI IN → `setMidiRouting false`) + the note-map effect;
+  `src/renderer/native/NativeMidiPane.tsx` shows the native outputs (toggles → `enableOutput`) + the clock OUT/IN status;
+  `PreferencesWindow.tsx` hides the Web MIDI device cards in the native shell. `nativeEngineShadow.ts`: the
+  `terminator.midiMessage` → `midiHub.injectNative` bridge, the `midiSink`, the probe part (START/STOP + clock OUT).
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 
