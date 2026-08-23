@@ -1348,9 +1348,29 @@ TEST_CASE("Engine: a device change (re-prepare) keeps the transport position and
 }
 ```
 
-**Gates for all three fixes:** mac-debug 0 warnings + ctest **232/232** · RTSan 233/233 · universal (0 warnings)
-232/232 · ui gate (tsc baseline 5) · app probe green on debug AND universal (`enginePrepared`, `mixerPageOk`,
+### BUG D — "changed the sample rate 44.1k -> 48k and audio stopped" — **FIXED** (`48492f8`)
+Measured: `at 44100: fx=2 playhead=51200 seqPlaying=1` → `at 48000: fx=0 playhead=0 seqPlaying=0`. The BUG-B fix kept
+state only when the rate was unchanged, so a rate change still took the old destroy-everything path — and it threw
+away the sequencer patterns and the bass patch as well as the chains. All three are POINTERS TO SHELL-OWNED DATA
+that `reset()` nulls (`ChopSequencer::pat_/queued_`, `DrumSequencer::pat_`, `BassSequencer::pat_`,
+`BassSynth::patch_`), and the page never re-sends them, so PLAY afterwards produced nothing.
+**The insight:** almost none of that state is rate-bound. Patterns are steps; chains are types + params in Hz/dB/ms;
+the patch is a struct. What IS rate-bound is the CLOCK — positions are in samples, coefficients are rate-derived.
+**Fix:** `prepare()` separates `keepClock` (same rate only → transport, voices, playing survive) from `keepData`
+(ANY later prepare → the shell-owned pointers survive `reset(keepData)`, and the Mixer restores its chains). After a
+rate change the transport stops and rewinds — as every DAW does — but the mix, patterns and patch are intact, so
+PLAY works. Verified: `at 48000: fx=2 playhead=0 seqPlaying=0`.
+**Still open (his call):** should playback AUTO-RESUME across a rate change? Rescaling every component's
+sample-domain state across a rate ratio is real risk for a rare action; stopping is the DAW norm. Ask before building it.
+
+**Gates for all four fixes:** mac-debug 0 warnings + ctest **233/233** · RTSan 234/234 · universal (0 warnings)
+233/233 · ui gate (tsc baseline 5) · app probe green on debug AND universal (`enginePrepared`, `mixerPageOk`,
 `mixerLoudnessOk`) with his real settings file in place.
+
+**A second method note:** the app probe is genuinely flaky under CPU load — chasing the rate-change report it failed
+on `metroPageOk` once and `drumPageOk` twice, at BOTH rates, then went green on a quiet machine. Different check
+failing each run = flakiness, not a bug; the same check failing every run = real. Do not chase a probe failure
+without repeating it on an idle machine first.
 
 **Method note worth keeping:** the app probe going red mid-session was NOT the code — stashing the work and
 rebuilding HEAD reproduced it exactly, which is what turned the hunt toward the saved audio settings. When a probe
