@@ -1161,7 +1161,19 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
                                   : k == "send" ? static_cast<std::uint8_t>(StripKind::send)
                                   : k == "bus"  ? static_cast<std::uint8_t>(StripKind::bus)
                                                 : static_cast<std::uint8_t>(StripKind::channel);
-        c = Command::mixerSetStrip(stripOf(json), kind);
+        // 4.2c: the CONSOLE seed (the page's FNV-1a of the strip NAME; absent / 0 = leave as is)
+        const auto seed = static_cast<std::uint32_t>(
+            std::clamp(static_cast<double>(json.getProperty("seed", 0.0)), 0.0, 4294967295.0));
+        c = Command::mixerSetStrip(stripOf(json), kind, seed);
+    }
+    else if (type == "mixerSetLimiter")
+        c = Command::mixerSetLimiter(static_cast<bool>(json.getProperty("on", true)));
+    else if (type == "mixerSetConsole")
+    {
+        const auto f = json.getProperty("flavour", "SSL").toString();
+        const std::uint8_t flavour = f == "NEVE" ? 1 : (f == "API" ? 2 : 0);
+        c = Command::mixerSetConsole(static_cast<bool>(json.getProperty("on", false)), flavour,
+                                     static_cast<float>(static_cast<double>(json.getProperty("amount", 50.0))));
     }
     else if (type == "mixerSetFader")
         c = Command::mixerSetFader(stripOf(json), static_cast<float>(static_cast<double>(json.getProperty("db", 0.0))));
@@ -1883,6 +1895,8 @@ void WebShell::timerCallback()
         mx->setProperty("strips", juce::var(strips)); // "<index>": [preL, preR, postL, postR, rmsPre, rmsPost, gain]
         mx->setProperty("rejected", static_cast<int>(s.mixerRoutesRejected));
         mx->setProperty("fxRejected", static_cast<int>(s.mixerFxRejected));
+        mx->setProperty("console", static_cast<bool>(s.mixerConsoleOn));
+        mx->setProperty("limiter", static_cast<bool>(s.mixerLimiterOn));
         mx->setProperty("orderValid", static_cast<bool>(s.mixerOrderValid));
         mx->setProperty("mainOut", s.mixerMainOut);
         mx->setProperty("bassStrip", s.bassStrip);

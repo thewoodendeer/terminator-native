@@ -76,6 +76,9 @@ export interface MixerNativeSink {
   fxParam(name: ChannelName | 'master', index: number, id: FxId, key: string, value: number | string): void;
   fxReorder(name: ChannelName | 'master', from: number, to: number): void;
   fxClear(name: ChannelName | 'master'): void;
+  /** CONSOLE (4.2c): the desk stage's global settings (on / flavour / amount) — the engine seeds every strip by its
+   *  name itself (the shadow sends the seed with the strip). */
+  console?(settings: ConsoleSettings): void;
 }
 let nativeSink: MixerNativeSink | null = null;
 export function setMixerNativeSink(sink: MixerNativeSink | null): void { nativeSink = sink; }
@@ -919,6 +922,7 @@ export class MixerEngine {
   private applyConsole(): void {
     for (const c of this.channels.values()) c.setConsole(this.console);
     this.master.setConsole(this.console);
+    nativeSink?.console?.(this.console);
   }
   /** Build the desk stage for an offline render (null when CONSOLE is off). */
   private offlineConsole(ctx: BaseAudioContext, role: 'channel' | 'bus', seed: string): ConsoleStage | null {

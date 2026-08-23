@@ -19,6 +19,8 @@
  *    meters (the UI binding is 4.3); the probe (part 8, `mixerPageOk`) asserts the round trips.
  *  • The INSERT CHAINS (4.2): `fxAdd` / `fxRemove` / `fxBypass` / `fxParam` / `fxReorder` / `fxClear` from the sink →
  *    (4.2b: every page device is real natively; the SC COMP's SOURCE channel NAME becomes the key strip's INDEX here) →
+ *  • CONSOLE (4.2c): `mixerSetConsole` follows MixerEngine.setConsole; every strip activation carries its seed =
+ *    FNV-1a(name), the page's own per-strip tolerance seed; `mixerSetLimiter` puts the master's safety limiter in →
  *    `mixerAddFx {strip, fx}` (+ every current param, immediate) / `mixerRemoveFx` / `mixerSetFxBypass` /
  *    `mixerSetFxParam {strip, index, fx, key, value}` / `mixerReorderFx` / `mixerClearFx`; the master's chain is strip 0.
  *    Devices the engine has not ported yet (4.2a ports utility / eq / filter / wide / mseq / pan) take their slot as a
@@ -47,6 +49,17 @@ const MAX_STRIPS = 64;
 /** DrumEngine track key → mixer channel name (ChopperView's drumMap); user lanes use their key as the channel name. */
 export const DRUM_TRACK_STRIP: Readonly<Record<string, string>> = Object.freeze({ kick: 'kick', snare: 'snare', hihat: 'hat', openhat: 'openhat', perc: 'perc' });
 
+/** The console-worklet's seed: FNV-1a (32-bit) over the name's UTF-16 code units (the page's `toleranceFor`). */
+export function fnv1a(str: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h >>> 0;
+}
+function nameOf(names: Map<string, number>, idx: number): string | undefined {
+  for (const [n, i] of names) if (i === idx) return n;
+  return undefined;
+}
+
 export class NativeMixerShadow {
   private names = new Map<string, number>(Object.entries(FIXED_STRIPS));
   private live = new Set<number>();         // strips we activated natively
@@ -70,12 +83,15 @@ export class NativeMixerShadow {
       fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value: this.fxValue(id, key, value) }),
       fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
       fxClear: (name) => this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) }),
+      console: (settings) => this.queue({ type: 'mixerSetConsole', on: settings.on, flavour: settings.flavour, amount: settings.amount }),
     });
-    // the whole page mixer, as it stands: every strip + the master + the CLICK strip + the sources
+    // the whole page mixer, as it stands: every strip + the master + the CLICK strip + the sources + CONSOLE
     for (const [name, strip] of this.mixer.channels) this.mirror(name, strip.isSend ? 'send' : 'channel');
     this.queue({ type: 'mixerSetFader', strip: 0, db: this.mixer.master.faderDb });
     this.mirrorChain('master');
-    this.activate(CLICK_STRIP, 'channel');
+    this.queue({ type: 'mixerSetConsole', on: this.mixer.console.on, flavour: this.mixer.console.flavour, amount: this.mixer.console.amount });
+    this.queue({ type: 'mixerSetLimiter', on: true }); // the page's master always carries its −1 dBFS safety limiter
+    this.activate(CLICK_STRIP, 'channel', 'click');
     this.queue({ type: 'mixerSetFader', strip: CLICK_STRIP, db: 0 });
     this.queue({ type: 'setSourceStrip', source: 'click', strip: CLICK_STRIP });
     if (this.mixer.channels.has('bass')) this.queue({ type: 'setSourceStrip', source: 'bass', strip: this.stripFor('bass') });
@@ -96,12 +112,12 @@ export class NativeMixerShadow {
    *  place. −1 when the pool is exhausted (63 strips). */
   stripFor(name: ChannelName): number {
     const have = this.names.get(name);
-    if (have !== undefined) { if (!this.live.has(have) && !this.detached) this.activate(have, name.startsWith('send') ? 'send' : 'channel'); return have; }
+    if (have !== undefined) { if (!this.live.has(have) && !this.detached) this.activate(have, name.startsWith('send') ? 'send' : 'channel', name); return have; }
     const used = new Set(this.names.values());
     for (let i = FIRST_DYNAMIC_STRIP; i < MAX_STRIPS; i++) {
       if (used.has(i)) continue;
       this.names.set(name, i);
-      this.activate(i, 'channel');
+      this.activate(i, 'channel', name);
       return i;
     }
     this.host.error(`mixer: no free strip for '${name}' (${MAX_STRIPS - 1} in use)`);
@@ -123,18 +139,19 @@ export class NativeMixerShadow {
   }
 
   // ── the mirror ──
-  private activate(idx: number, kind: 'channel' | 'send'): void {
+  private activate(idx: number, kind: 'channel' | 'send', name?: string): void {
     if (idx < 0 || idx >= MAX_STRIPS || this.live.has(idx)) return;
     this.live.add(idx);
     this.host.note('strips', 1);
-    this.queue({ type: 'mixerSetStrip', strip: idx, kind });
+    // the CONSOLE seed = the page's FNV-1a of the strip NAME (ConsoleStage seeds by name: "kick" is always the same kick)
+    this.queue({ type: 'mixerSetStrip', strip: idx, kind, seed: fnv1a(name ?? nameOf(this.names, idx) ?? 'strip') });
   }
   private mirror(name: ChannelName, kind: 'channel' | 'send'): void {
     const strip = this.mixer.channels.get(name);
     if (!strip) return;
     const idx = this.stripFor(name);
     if (idx < 0) return;
-    if (!this.live.has(idx)) this.activate(idx, kind);
+    if (!this.live.has(idx)) this.activate(idx, kind, name);
     this.queue({ type: 'mixerSetFader', strip: idx, db: strip.faderDb });
     this.queue({ type: 'mixerSetPan', strip: idx, pan: strip.pan });
     this.queue({ type: 'mixerSetMute', strip: idx, on: strip.muted });
@@ -181,7 +198,7 @@ export class NativeMixerShadow {
     const ret = SEND_CHANNELS[index];
     if (!ret) return;
     const target = this.names.get(ret) ?? -1;
-    if (target >= 0 && !this.live.has(target) && !this.detached) this.activate(target, 'send'); // the return exists natively even before the page mirrors it
+    if (target >= 0 && !this.live.has(target) && !this.detached) this.activate(target, 'send', ret); // the return exists natively even before the page mirrors it
     this.queue({ type: 'mixerSetSend', strip: this.stripFor(name), send: index, db, target });
   }
   private queue(c: AnyRecord): void {

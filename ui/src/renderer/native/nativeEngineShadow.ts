@@ -1122,9 +1122,16 @@ class NativeEngineShadow {
         mark('p8i'); r.mixerFxHeavyAdded = s2 >= 0 && s3 >= 0 && s4 >= 0 && (await wait(() => fxCountOf(sampleIdx) === fxBefore + 3));
         for (const sl of [s4, s3, s2]) if (sl >= 0) ch.removeFx(sl);
         mark('p8j'); r.mixerFxHeavyRemoved = await wait(() => fxCountOf(sampleIdx) === fxBefore);
+        // 4.2c: CONSOLE on → the engine's desk stage is in (the snapshot says so) → off
+        const consoleWas = mx.console.on;
+        mx.setConsole({ on: true });
+        mark('p8k'); r.mixerConsoleOn = await wait(() => mixerOf()?.console === true);
+        mx.setConsole({ on: consoleWas });
+        mark('p8l'); r.mixerConsoleOff = await wait(() => mixerOf()?.console === consoleWas);
+        r.mixerLimiterOn = mixerOf()?.limiter === true; // the shadow put the master's safety limiter in at attach
         r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
       } else r.mixerPageOk = null;
       mark('p8mixer');
       this.engine.removePadBuffer(62);
