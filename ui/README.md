@@ -113,6 +113,12 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   nativeEngineShadow.ts` — builds it first, `PadDesc.strip = stripFor(engine.padRoute(i))` → `setPadParams.strip`,
   probe part 8 (`mixerPageOk`), stats `mixerCommands/mixerStrips`; `native/nativeDrumShadow.ts` — `DrumShadowHost.
   stripForDrumTrack?`, `LaneDesc.strip` → the lane pad's `setPadParams.strip`.
+- **The insert chains are native (4.2a, 2026-08-23):** `src/mixer/MixerEngine.ts` — `MixerNativeSink.fxAdd/fxRemove/
+  fxBypass/fxParam/fxReorder/fxClear`; `ChannelStrip` + `MasterStrip` `addFx/removeFx/toggleBypass/setFxParam/
+  reorderFx/clearFx` report to it. `native/nativeMixerShadow.ts` — `mirrorChain` on attach / a channel re-created,
+  `fxAdd` (+ every param, immediate), the master = strip 0; `native/nativeEngineShadow.ts` — probe part 8 adds the
+  EQ round trip (`mixerFxAdded/Removed/Rejected`); the self-tests' 50 ms polls race the next native snapshot
+  (`tick()` — a hidden WebView's DOM timers crawl), per-part `timing` + the live `stats.stage`, part 7 retries once.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

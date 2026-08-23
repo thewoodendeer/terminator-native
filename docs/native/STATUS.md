@@ -996,15 +996,85 @@ its pads stay on the direct path (strip −1), as in Phase 3. The Electron app i
 the 'sample' strip against the drum strips against the bass; solo a strip; a −60 dB fader is silent; the click rides
 the mix (mute the master → no click); a pad re-routed to SAMPLE 2 follows its strip.
 
+## Phase 4 — 4.2a DONE (THE INSERT CHAIN + THE FIRST SIX DEVICES), 2026-08-23 tenth session (second half)
+**Engine — `core/fx/Effect.h`:** the insert-effect contract (`FxType` = the page's FxId order; a fixed param table per
+type — `FxParamDef` key / range / default / enum options = FX_REGISTRY's, so presets load unchanged; `prepare` non-RT,
+`reset` / `setParam(index, value, immediate)` / `param` / `latencySamples` / `process(l, r, n)` RT, all
+`TERMINATOR_NONBLOCKING`; `wetMix()` from the type's WET param or 1); `Glide` (the TS setTargetAtTime in closed form per
+block, snapped — FX τ 10 ms); `Biquad` = the Web Audio BiquadFilterNode (the spec's RBJ coefficient forms in double,
+Direct Form I like Blink; Q in dB for lowpass/highpass, linear for the rest, shelves S = 1; normalised by DIVISION so
+a 0 dB shelf/bell is detected as the identity and passes BIT-EXACT; `magnitudeAt` for gates). **`core/fx/BasicFx.h`:**
+UTILITY (GAIN τ 10 ms on the linear gain · MODE re-patch · PHASE) · EQ (low shelf 80 · bell 1 k Q 0.8 · high shelf
+12 k, ±12, gains glide and the coefficients recompute per block while moving) · FILTER (TYPE · CUTOFF · RESO; Q in dB
+for LP/HP so RESO 0..30 = 0..30 dB — Butterworth −3 dB is below the page's range, the floor is 0.0001 dB like the TS)
+· WIDE (instant, M/S) · M/S EQ (peaking Q 1 on M and S) · PAN (a sine LFO from phase 0 × DEPTH on the StereoPanner
+stereo law per sample). **`core/fx/FxPool.h`:** every instance built + prepared at `Engine::prepare` (utility/eq/
+filter 64 each, wide/mseq/pan 32 — the heavy devices get small caps when they land); `acquire` / `release` are
+pointer bookkeeping on the audio thread; an UNPORTED type comes back as a `PassFx` placeholder reporting the type (64 of
+them) so a page chain with e.g. a reverb in slot 0 keeps its indices aligned natively. **`core/Mixer.h`:** per strip
+`fx[8]` + bypass + count; `addFx` (append, the TS pushes) / `removeFx` / `setFxBypass` / `setFxParam` / `reorderFx` /
+`clearFx`; refusals (dead strip / full / pool empty) count in `fxRejected`; the chain runs IN PLACE on the strip's input
+between the pre meter and width/fader — bypass = skipped (dry, bit-exact), a WET device crossfades (dry 1−mix + wet
+mix); a strip turned off returns its devices; `prepare` drops every chain (the pool re-prepares — the page re-sends);
+`chainLatencySamples` (Σ of the non-bypassed, 0 for every 4.2a device — the PDC plan, 4.4). Commands `mixerAddFx` ·
+`mixerRemoveFx` · `mixerSetFxBypass` · `mixerSetFxParam` · `mixerReorderFx` · `mixerClearFx` (`Payload::Fx`); the
+snapshot `stripFxCount[64]` + `mixerFxRejected`. **Tests** `tests/engine/test_fx.cpp` (7 cases): the type table
+(ids / keys / option strings / defaults); UTILITY (gain, the three folds, phase, the 10 ms glide); EQ (0 dB bit-exact
+pass-through; LOW +12 = +12 at 10 Hz and 0 at 8 k; MID +6 = +6 at 1 k; HIGH −12 = −12 at 22 k; the analytic shelf at
+DC exactly ±G, the bell exactly +6 on f0); FILTER (the default flat; LP 1 k at RESO 1 dB = +1 dB at fc (|H(fc)| =
+Q_lin) and < −38 dB a decade up; RESO 0 = 0 dB at fc; HP mirrored; BP 0 dB at fc; notch < −40 at fc; the analytic
+Butterworth −3.01); WIDE + M/S EQ (the matrix; a mono sine takes the MID band, an anti-phase one the SIDE band);
+PAN (at 0.25 s hard right: L 0 / R 1.0, at 0.75 s hard left; DEPTH 0 = identity bit-exact); the chain through the
+Engine (add / bypass bit-exact / param / a second device / reorder + read-back / remove / the 8 cap / a dead strip /
+clear / the pool cap + a freed slot / a strip turned off gives back / the placeholder for an unported type keeps slot 1
+as slot 1 / chain latency 0). `test_rt_safety`: add / param / bypass / reorder / remove / clear on the callback = 0
+allocations.
+**Shell + page:** WebShell verbs (`mixerAddFx {strip, fx}` by the page's FxId, `mixerSetFxParam {strip, index, fx,
+key, value}` — key → index and option string → index through the engine's table, `immediate`), the snapshot row's
+`fxCount` + `mixer.fxRejected`. `src/mixer/MixerEngine.ts` — the sink's `fxAdd/fxRemove/fxBypass/fxParam/fxReorder/
+fxClear`, reported by `ChannelStrip` AND `MasterStrip` (`addFx` / `removeFx` / `toggleBypass` / `setFxParam` /
+`reorderFx` / `clearFx`); `native/nativeMixerShadow.ts` — `mirrorChain` on attach and on a channel re-created, `fxAdd`
+sends every current param immediately, the master's chain = strip 0; probe part 8: add an EQ to 'sample' → the
+engine's count +1, a param, bypass on/off, remove → back, `fxRejected` 0.
+**Gates (4.2a):** mac-debug 0 warnings + ctest **207/207** (200 + 7 `[fx]`) · RTSan 208/208 · universal (0 warnings)
+lipo `x86_64 arm64` + ctest 207/207 · ui gate (tsc baseline 5) · probe OK on the debug AND universal binaries
+(`mixerPageOk` incl. `mixerFxAdded` / `mixerFxRemoved`, `fxRejected` 0).
+**Honest boundary after 4.2a:** eleven page devices (clip, wave, sat, mbsat, phaser, flanger, vinyl, comp, sccomp,
+delay, reverb) are PLACEHOLDERS natively (pass-through; the page still runs its Web Audio version, which is not what
+is heard) — 4.2b ports them (the 4× shapers with real polyphase oversampling + their latency, the Blink
+DynamicsCompressor kernel, the sc-comp worklet, the deterministic IR reverb + partitioned convolution, the delay with
+its damped feedback, phaser / flanger / vinyl with their LFOs) and 4.2c builds the B4 premium devices. The console
+stage (`ConsoleStage` / the `console-stage` worklet) is not in the chain yet. Gain match not ported. The FX param
+smoothing matches the TS at rest (the numbers above); during a move the coefficient update is per block, not per
+sample.
+**Victor's pass (4.2a):** on the desktop mixer: UTILITY gain/mono/phase, EQ, FILTER (sweep the cutoff — smooth, no
+zipper), WIDE, M/S EQ, PAN on any strip — what you HEAR follows the device; bypass is clean; the master's chain too.
+**The probe hardened (found while gating 4.2a — the hidden WebView's DOM timers):** the headless probe page is not
+"visible" to WebKit, and its `setTimeout(50)` polls were seen to crawl at ~1 s (parts 6–7 taking 12 s + 6 s instead
+of 3 s + 0.7 s) and once to stall outright (part 8 stuck at its first insert-chain poll for the whole window) — the
+self-test then missed the shell's read window and the script reported "the sample upload failed" (the first assertion
+of an EMPTY result). Fixes in the app+ui commit: every self-test poll (engine / drum / bass shadows, 24 sites) now
+races the next native `terminator.snapshot` event against the timer (`tick()`; the snapshot is pushed by the shell,
+not a DOM timer); part 8's waits have a wall-clock budget; the self-test records `timing` per part and the live
+`stats.stage` (so a stall names itself in the probe output); the shell's React probe window is 30 s with the async
+checks 26 s before the read (`kProbeDelayTicksReact` 600 / `kProbeAsyncLeadTicks` 520); part 7 (live record) gets one
+RETRY (a late clock re-anchor on the throttled page once booked a hit off the grid — `seqNudges` 4 that run; the
+sample-exact landing is gated in C++, the probe checks the PATH). After the fixes: 6 consecutive probe runs green,
+the whole self-test 8.9–9.1 s every time.
+
 ### Next session (in order) — updated at the end of the tenth session
-0. Push (Victor) → `gh run list` → the 4 jobs (the universal probe now also asserts `mixerPageOk`; the smoke cap is
-   150 s).
-1. **Phase 4.2** — the FX ports, in the plan's order (utility, eq, filter, pan, wide, mseq, delay, reverb, comp (the
-   Blink DynamicsCompressor kernel), sccomp, clip/wave/sat/mbsat with real polyphase oversampling, phaser, flanger,
-   vinyl; the console stage; the legacy chopper master chain) as `Effect` objects in each strip's insert chain (≤ 8,
-   `latencySamples()` for 4.4), each with its golden gate against the TS numbers in dossier-mixer-fx.md §2 — AND the
-   premium devices of B4 ("VICTOR'S PHASE-4 BRIEF") on top. Then 4.3 meters on the bridge (`levels(name)` is ready),
-   4.4 PDC + offline parity, 4.5 exports.
+0. Push (Victor) → `gh run list` → the 4 jobs (the universal probe now also asserts `mixerPageOk` incl. the insert
+   round trip; the smoke cap is 150 s).
+1. **Phase 4.2b** — the remaining page devices as `Effect`s (the chain, the pool, the bridge and the page mirror are
+   DONE in 4.2a — each port = a class in `core/fx/`, a row in the type table with its FX_REGISTRY params, a
+   `capacityOf`, a `make`, a `[fx]` gate against dossier-mixer-fx.md §2): delay (damped feedback LP 7.5 k / HP 90, R =
+   1.02·TIME, PINGPONG), reverb (the seeded LCG IR + onset ramp + √-frac absorption + partitioned convolution, the 60 ms
+   A/B swap), comp (the Blink DynamicsCompressor kernel — its ~6 ms look-ahead = `latencySamples`), sccomp (the sc-comp
+   worklet + the sidechain tap from another strip's INPUT), clip / wave / sat / mbsat (4× with real polyphase halfbands,
+   `latencySamples` = the oversampler's group delay; MB SAT's LR4 split + AP dry leg), phaser / flanger / vinyl (their
+   LFOs + feedback), the console stage per strip (FNV-1a seeds by NAME → `mixerSetStrip` needs the name's seed), the
+   legacy chopper master chain; then 4.2c the B4 premium devices. Then 4.3 meters on the bridge (`levels(name)` is
+   ready), 4.4 PDC + offline parity (the chain latencies are plumbed), 4.5 exports.
 2. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
 
 ### Next session (in order) — updated at the end of the ninth session (superseded — kept for the record)
