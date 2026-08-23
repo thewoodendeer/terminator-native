@@ -1275,7 +1275,24 @@ changes (the shadow unretains the old rec after a 2 s grace, `RELEASE_GRACE_MS`)
 `startFrame` / `endFrame`. Gate: `[sampler][chop]` — a sounding pad survives a same-buffer re-chop and stays audible,
 a different buffer still fades it out.
 
-### BUG B — "changed buffer size, audio glitched and did not resume" — ROOT-CAUSED, **NOT FIXED**
+### BUG C — the buffer-size change left the app SILENT on every later launch — **FIXED** (`3a26960`)
+Found while chasing BUG B; it is the most damaging of the three and he almost certainly ran part of his test drive
+with it. Change the buffer size once → the app saves an audio setup → on the NEXT launch `MainWindow` applies it
+through `AudioIO::apply()` → **`setAudioDeviceSetup()` only RE-configures a manager that already has a device; on a
+never-initialised one it opens nothing and returns NO error**:
+```
+apply(out='MacBook Pro Speakers' rate=44100 buf=128) err='' -> device='(none)' open=-1
+```
+`audioError` was empty, so MainWindow's `openDefault()` fallback never fired, `Engine::prepare()` was never called,
+and the app ran with a working UI and no audio device at all — every launch, until the settings file was deleted.
+(It is also why the app probe went green → red mid-session with no code change: the probe reads
+`engine_.snapshot().prepared`. A stash-and-rebuild of HEAD failed identically, which is what proved it was not the
+device-change work.)
+**Fix:** `apply()` initialises a default device first when the manager has none (so a saved setup is HONOURED rather
+than ignored), and never reports success while silent — a setup that leaves no open device returns an error the
+caller's fallback can act on. Probe green with his real settings (bufferSize 128) in place.
+
+### BUG B — "changed buffer size, audio glitched and did not resume" — **FIXED** (`8fe4694`)
 **Measured** (a real release()+prepare() through the engine, the buffer-size path):
 
 | | before | after |
@@ -1297,20 +1314,18 @@ for `terminator.devicesChanged` is `NativeAudioPane.tsx`, which refreshes a devi
 `nativeMixerShadow.names / live`). After the engine restarts, those caches are a LIE — they claim state is already
 on the engine that the engine has just forgotten — so even a later page edit will not resend the untouched parts.
 
-**The fix (next session), a `resync()` layer:**
-1. Each shadow grows `resync()`: re-send everything it owns, bypassing its diff cache.
-2. `nativeEngineShadow` subscribes to `terminator.devicesChanged` and calls its own + the drum / bass / mixer
-   shadows' `resync()`.
-3. **Care — the retain/unretain bookkeeping:** do NOT simply clear `last[]`. `apply()` retains on
-   `!prev || prev.buf !== d.buf`, so a cleared cache double-retains the same rec with no matching unretain and leaks
-   the sample refcount. Add a `force` flag that re-sends the COMMANDS while leaving `retain`/`unretain` alone.
-   (Samples themselves survive — the store lives in the shell's SampleRegistry, not the Engine.)
-4. Gate it end to end in the probe: change the buffer size through the settings verb, then assert the strip's
-   `fxCount` comes back and a pattern still plays. That is the only test that would have caught this.
-
-**Open product question for Victor:** should PLAYBACK continue through a buffer-size change? Most DAWs (Ableton,
-Logic) stop the transport — so "stops" may be correct and only the silent FX loss is the bug. The engine test written
-for it was lifted back out of the suite rather than left red; start from this body:
+**Victor's call: playback SHOULD resume smoothly.** So the fix went into the ENGINE rather than a page `resync()`
+layer — a device change is made invisible to everything above it, which is both the better design and a much smaller
+diff (no page change, and it avoids the retain/unretain trap a cache-clearing resync would have hit).
+**What landed:** `release()` has exactly ONE caller (`AudioIO::audioDeviceStopped`), so it never means "tear the
+engine down" — only "the device stopped". It now stops pulling audio and leaves the music alone. `prepare()`
+distinguishes the FIRST call from a later one: at the SAME sample rate a later call is a device change and keeps
+transport, patterns, voices and chains while re-sizing every buffer for the new block; a genuine sample-rate change
+still resets (positions and every coefficient are rate-bound). Sampler / ChopSequencer / DrumSequencer /
+BassSequencer / BassSynth / Metronome / Arp / MidiClockOut take a `keepState` flag that skips their `reset()`;
+`Mixer::saveChains()` snapshots each strip's chain (type, params, bypass, order) BEFORE the FxPool re-prepares —
+the pool's re-prepare resets every device's params — and `prepare(…, keepState)` puts them back.
+**Gate** `[engine][devicechange]`:
 
 ```cpp
 TEST_CASE("Engine: a device change (re-prepare) keeps the transport position and the sequencer running", "[engine]")
@@ -1333,8 +1348,15 @@ TEST_CASE("Engine: a device change (re-prepare) keeps the transport position and
 }
 ```
 
-**Until it is fixed:** a buffer-size change silently wipes the insert chains. Set the buffer size FIRST, then build
-the mix.
+**Gates for all three fixes:** mac-debug 0 warnings + ctest **232/232** · RTSan 233/233 · universal (0 warnings)
+232/232 · ui gate (tsc baseline 5) · app probe green on debug AND universal (`enginePrepared`, `mixerPageOk`,
+`mixerLoudnessOk`) with his real settings file in place.
+
+**Method note worth keeping:** the app probe going red mid-session was NOT the code — stashing the work and
+rebuilding HEAD reproduced it exactly, which is what turned the hunt toward the saved audio settings. When a probe
+starts failing, bisect against HEAD before reading more code. Also: `kill %1` kills the subshell, not the app — a
+stale Terminator holds the single-instance lock and the next launch exits 0 in 0.07 s having written nothing. Use
+`pkill -f Terminator_artefacts`.
 
 ### Next session (in order) — updated at the end of the eleventh session
 -1. **BUG B above (the device-change resync)** — it silently eats his FX chains; do it before 4.4.
