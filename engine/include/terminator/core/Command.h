@@ -23,8 +23,9 @@ enum class CommandType : std::uint32_t
     setPadParams,       // padParams — pitch/fine/attack/release/gain/output/mode/reverse/choke/interp
     triggerPad,         // trigger — start a voice (hostTimeNs 0 = at the start of the next block)
     releasePad,         // trigger — note-off (gate pads release; one-shots ignore)
-    triggerPadAtSample, // trigger — hostTimeNs holds an ENGINE SAMPLE POSITION (samplesProcessed scale); must fall
-                        // inside the current block
+    triggerPadAtSample, // trigger — hostTimeNs holds an ENGINE SAMPLE POSITION (samplesProcessed scale); inside the
+                        // current block it fires at that offset, past it the engine books it (a 64-slot RT ring) and
+                        // fires it sample-exact in the block that contains it (quantized live-record hits)
     releasePadAtSample, // trigger — same, for note-off
     stopPad,            // trigger — stop the pad's voices (3 ms fade)
     setNoteMap,         // noteMap — MIDI note → pad (−1 = unmapped)

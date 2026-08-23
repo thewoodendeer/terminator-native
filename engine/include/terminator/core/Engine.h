@@ -42,6 +42,7 @@ class Engine
     static constexpr std::size_t kCommandQueueCapacity = 1024;
     static constexpr std::size_t kMidiQueueCapacity = 1024;
     static constexpr int kMaxMidiPorts = 16;
+    static constexpr int kMaxPendingTriggers = 64; // live hits booked past the current block (quantized live record)
     static constexpr std::uint32_t kCalibrationMaxFrames = 2 * 192000; // 2 s at 192 kHz
     static constexpr int kCalibrationClickFrames = 64;
 
@@ -97,6 +98,14 @@ class Engine
     void setTestToneFrequency(float hz) noexcept TERMINATOR_NONBLOCKING;
     std::int32_t offsetForHostTime(std::uint64_t hostTimeNs, int numSamples) const noexcept TERMINATOR_NONBLOCKING;
     void publish(int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    void firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    void bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release,
+                     int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    void noteLiveHit(std::uint16_t pad, double atSample) noexcept TERMINATOR_NONBLOCKING
+    {
+        if (pad < kMaxPads)
+            liveHitSample_[pad] = atSample;
+    }
 
     Config config_{};
     bool prepared_ = false;
@@ -125,6 +134,19 @@ class Engine
 
     // MIDI note → pad
     std::int16_t noteToPad_[128];
+    // when each pad was last LIVE triggered (command / MIDI — not the sequencer), engine samples; feeds the chop
+    // sequencer's one-owner-per-hit rule. A large negative value = never.
+    double liveHitSample_[kMaxPads];
+    /// triggerPadAtSample / releasePadAtSample aimed past the current block wait here (sample-exact, any lead).
+    struct PendingTrigger
+    {
+        std::uint64_t sample;
+        float velocity;
+        std::uint16_t pad;
+        bool release;
+        bool used;
+    };
+    PendingTrigger pendingTrig_[kMaxPendingTriggers] = {};
 
     // test tone — complex phasor rotation (no libm per sample)
     bool toneEnabled_ = false;

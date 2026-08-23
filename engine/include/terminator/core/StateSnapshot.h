@@ -58,6 +58,7 @@ struct StateSnapshot
     double seqBpm = 120.0;
     std::uint64_t seqLoopStartSample = 0; // engine sample of the current pass's step 0
     std::uint64_t seqHitsFired = 0;
+    std::uint64_t seqHitsSkipped = 0; // pattern hits skipped by the one-owner rule (a live hit owned the step)
 
     // calibration
     std::uint32_t calibrationState =

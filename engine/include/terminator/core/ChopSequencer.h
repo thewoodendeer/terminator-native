@@ -54,14 +54,19 @@ class ChopSequencer
   public:
     static constexpr int kMaxPending = 512;       // hits + note ends waiting inside/after the current block
     static constexpr double kTailFadeSec = 0.003; // the 3 ms stop fade ends AT the next same-group hit
+    /// ONE OWNER PER HIT (TS lastLivePadHit / LIVE_OWNER_WINDOW): a pad hand-played within this window of a
+    /// step's hit IS that step's audio — the pattern's copy is skipped (at fire time), so a live-recorded hit is
+    /// never double-triggered (the group choke would restart the chop from its head — his "cut short" report).
+    static constexpr double kLiveOwnerWindowSec = 0.12;
 
     void prepare(double sampleRate) noexcept;
     void reset() noexcept; // stop, forget patterns (non-RT use: prepare/release)
 
     // --- commands (audio thread, from Engine::apply) ---
-    void setPattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING;   // live: the steps not fired yet read it
-    void queuePattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING; // switch at the next step 0
-    void setBpm(double bpm) noexcept TERMINATOR_NONBLOCKING;                // 20..300; applies at the next step
+    void setPattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING; // live: the steps not fired yet read it
+    /// Switch at the next step 0 (nullptr while playing = cancel a pending switch; nullptr when stopped = no-op).
+    void queuePattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING;
+    void setBpm(double bpm) noexcept TERMINATOR_NONBLOCKING; // 20..300; applies at the next step
     void setLoop(bool loop) noexcept TERMINATOR_NONBLOCKING;
     /// Start at engine sample `atSample` (≥ the current block start; 0 = the start of the next block). Restarts.
     void play(std::uint64_t atSample, std::uint64_t blockStart) noexcept TERMINATOR_NONBLOCKING;
@@ -72,7 +77,11 @@ class ChopSequencer
     void resume(std::uint64_t blockStart) noexcept TERMINATOR_NONBLOCKING;
 
     /// Fire this block's hits + note ends into the sampler. Call once per block after the commands were applied.
-    void process(std::uint64_t blockStart, int numSamples, Sampler& sampler) noexcept TERMINATOR_NONBLOCKING;
+    /// `liveHitSample` (kSeqMaxPads entries, engine samples; nullptr = none) = when each pad was last LIVE
+    /// triggered (a command / MIDI note, not the sequencer) — a pattern hit within kLiveOwnerWindowSec of it is
+    /// skipped (one owner per hit).
+    void process(std::uint64_t blockStart, int numSamples, Sampler& sampler,
+                 const double* liveHitSample = nullptr) noexcept TERMINATOR_NONBLOCKING;
 
     // --- read-back for the snapshot (audio thread) ---
     bool playing() const noexcept { return playing_; }
@@ -93,6 +102,7 @@ class ChopSequencer
         return static_cast<std::uint64_t>(loopStart_ > 0.0 ? loopStart_ : 0.0);
     }
     std::uint64_t hitsFired() const noexcept { return hitsFired_; }
+    std::uint64_t hitsSkippedLiveOwned() const noexcept { return hitsSkipped_; }
 
   private:
     /// A hit or a note end waiting for its block. One ring for both so they fire in TIME order (a note end and a
@@ -129,7 +139,8 @@ class ChopSequencer
     double pausedAt_ = 0;
     PendingEvent pending_[kMaxPending] = {};
     std::uint64_t hitsFired_ = 0;
-    double stopAfter_ = -1.0; // loop off: the transport stops once this sample passed
+    std::uint64_t hitsSkipped_ = 0; // pattern hits skipped because a live hit owned them
+    double stopAfter_ = -1.0;       // loop off: the transport stops once this sample passed
 };
 
 } // namespace terminator

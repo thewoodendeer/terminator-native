@@ -42,6 +42,8 @@ Engine::Engine()
 {
     for (int n = 0; n < 128; ++n)
         noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kMaxPads ? n - 36 : -1); // A01 = C1 (note 36)
+    for (auto& t : liveHitSample_)
+        t = -1.0e12;
     (void)clickTable(); // built at static-init time; nothing to warm
 }
 
@@ -61,6 +63,10 @@ void Engine::prepare(const Config& config)
     setTestToneFrequency(toneFrequencyHz_);
     sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels);
     seq_.prepare(config_.sampleRate);
+    for (auto& t : liveHitSample_)
+        t = -1.0e12;
+    for (auto& t : pendingTrig_)
+        t.used = false;
     calibState_ = 0;
     prepared_ = true;
     publish(0);
@@ -128,6 +134,8 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         playing_ = false;
         toneEnabled_ = false;
         sampler_.stopAll();
+        for (auto& t : pendingTrig_)
+            t.used = false;
         break;
     case CommandType::setPadSample:
         sampler_.setPadSample(c.payload.padSample.pad, c.payload.padSample.sample, c.payload.padSample.startFrame,
@@ -144,27 +152,21 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         sampler_.setPadStems(c.payload.padStems.pad, c.payload.padStems.planes, c.payload.padStems.mask);
         break;
     case CommandType::triggerPad:
-        sampler_.trigger(c.payload.trigger.pad, c.payload.trigger.velocity,
-                         offsetForHostTime(c.payload.trigger.hostTimeNs, numSamples));
+    {
+        const auto off = offsetForHostTime(c.payload.trigger.hostTimeNs, numSamples);
+        sampler_.trigger(c.payload.trigger.pad, c.payload.trigger.velocity, off);
+        noteLiveHit(c.payload.trigger.pad, static_cast<double>(samplesProcessed_) + static_cast<double>(off));
         break;
+    }
     case CommandType::releasePad:
         sampler_.release(c.payload.trigger.pad);
         break;
     case CommandType::triggerPadAtSample:
-    {
-        const auto pos = c.payload.trigger.hostTimeNs; // engine sample position
-        const auto off = pos > samplesProcessed_ ? static_cast<std::int64_t>(pos - samplesProcessed_) : 0;
-        sampler_.trigger(c.payload.trigger.pad, c.payload.trigger.velocity,
-                         static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1)));
+        bookTrigger(c.payload.trigger.pad, c.payload.trigger.velocity, c.payload.trigger.hostTimeNs, false, numSamples);
         break;
-    }
     case CommandType::releasePadAtSample:
-    {
-        const auto pos = c.payload.trigger.hostTimeNs;
-        const auto off = pos > samplesProcessed_ ? static_cast<std::int64_t>(pos - samplesProcessed_) : 0;
-        sampler_.release(c.payload.trigger.pad, static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1)));
+        bookTrigger(c.payload.trigger.pad, 0.0f, c.payload.trigger.hostTimeNs, true, numSamples);
         break;
-    }
     case CommandType::stopPad:
         sampler_.stopPad(c.payload.trigger.pad);
         break;
@@ -222,6 +224,58 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     ++commandsApplied_;
 }
 
+void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release,
+                         int numSamples) noexcept TERMINATOR_NONBLOCKING
+{
+    // inside this block (or in the past): fire now at its offset; later: wait in the ring (fired by
+    // firePendingTriggers in the block that contains it — sample-exact, any lead)
+    const std::uint64_t blockEnd = samplesProcessed_ + static_cast<std::uint64_t>(numSamples);
+    if (!release)
+        noteLiveHit(pad, static_cast<double>(atSample)); // the one-owner rule sees the booking immediately
+    if (atSample < blockEnd)
+    {
+        const auto off = atSample > samplesProcessed_ ? static_cast<std::int64_t>(atSample - samplesProcessed_) : 0;
+        const auto clampedOff = static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1));
+        if (release)
+            sampler_.release(pad, clampedOff);
+        else
+            sampler_.trigger(pad, velocity, clampedOff);
+        return;
+    }
+    for (auto& t : pendingTrig_)
+        if (!t.used)
+        {
+            t.used = true;
+            t.sample = atSample;
+            t.velocity = velocity;
+            t.pad = pad;
+            t.release = release;
+            return;
+        }
+    // ring full (64 hits booked ahead): fire now rather than lose it
+    if (release)
+        sampler_.release(pad, 0);
+    else
+        sampler_.trigger(pad, velocity, 0);
+}
+
+void Engine::firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING
+{
+    const std::uint64_t blockEnd = samplesProcessed_ + static_cast<std::uint64_t>(numSamples);
+    for (auto& t : pendingTrig_)
+    {
+        if (!t.used || t.sample >= blockEnd)
+            continue;
+        const auto off = t.sample > samplesProcessed_ ? static_cast<std::int64_t>(t.sample - samplesProcessed_) : 0;
+        const auto clampedOff = static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1));
+        if (t.release)
+            sampler_.release(t.pad, clampedOff);
+        else
+            sampler_.trigger(t.pad, t.velocity, clampedOff);
+        t.used = false;
+    }
+}
+
 void Engine::drainCommands(int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
     Command c;
@@ -246,8 +300,12 @@ void Engine::drainMidi(int numSamples) noexcept TERMINATOR_NONBLOCKING
             if (pad < 0)
                 continue;
             if (status == 0x90 && vel > 0)
-                sampler_.trigger(static_cast<std::uint16_t>(pad), static_cast<float>(vel) / 127.0f,
-                                 offsetForHostTime(e.hostTimeNs, numSamples));
+            {
+                const auto off = offsetForHostTime(e.hostTimeNs, numSamples);
+                sampler_.trigger(static_cast<std::uint16_t>(pad), static_cast<float>(vel) / 127.0f, off);
+                noteLiveHit(static_cast<std::uint16_t>(pad),
+                            static_cast<double>(samplesProcessed_) + static_cast<double>(off));
+            }
             else if (status == 0x80 || (status == 0x90 && vel == 0))
                 sampler_.release(static_cast<std::uint16_t>(pad));
         }
@@ -296,6 +354,7 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.seqBpm = seq_.bpm();
     s.seqLoopStartSample = seq_.loopStartSample();
     s.seqHitsFired = seq_.hitsFired();
+    s.seqHitsSkipped = seq_.hitsSkippedLiveOwned();
     s.calibrationState = calibState_;
     s.calibrationId = calibId_;
     snapshot_.publish(s);
@@ -319,7 +378,8 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
 
     drainCommands(numSamples);
     drainMidi(numSamples);
-    seq_.process(samplesProcessed_, numSamples, sampler_); // this block's sequenced hits + note ends
+    firePendingTriggers(numSamples); // live hits booked ahead (quantized live record) land at their exact sample
+    seq_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_); // this block's sequenced hits + note ends
     if (!seq_.playing() && playing_ && seqWasPlaying_)
         playing_ = false; // the sequencer stopped itself (loop off): the transport follows
     seqWasPlaying_ = seq_.playing();

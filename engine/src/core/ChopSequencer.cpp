@@ -40,6 +40,11 @@ void ChopSequencer::setPattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCK
 
 void ChopSequencer::queuePattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING
 {
+    if (p == nullptr)
+    {
+        queued_ = nullptr; // cancel a pending switch (the UI re-selected the playing pattern)
+        return;
+    }
     if (!playing_ || pat_ == nullptr)
         setPattern(p); // not playing: just take it
     else
@@ -204,7 +209,8 @@ void ChopSequencer::pushEvent(double sample, int pad, float velocity, std::uint8
     // a full ring (512 events waiting) drops the event — impossible at musical resolutions
 }
 
-void ChopSequencer::process(std::uint64_t blockStart, int numSamples, Sampler& sampler) noexcept TERMINATOR_NONBLOCKING
+void ChopSequencer::process(std::uint64_t blockStart, int numSamples, Sampler& sampler,
+                            const double* liveHitSample) noexcept TERMINATOR_NONBLOCKING
 {
     if (!playing_ || paused_ || pat_ == nullptr || numSamples <= 0)
         return;
@@ -259,8 +265,17 @@ void ChopSequencer::process(std::uint64_t blockStart, int numSamples, Sampler& s
         const int off = static_cast<int>(std::clamp(best->sample - bStart, 0.0, static_cast<double>(numSamples - 1)));
         if (best->kind == 1)
         {
-            sampler.trigger(best->pad, best->velocity, off);
-            ++hitsFired_;
+            // one owner per hit: a live hit of this pad within the window (before OR after — a quantized live hit
+            // may be booked a few ms past the grid) already is this step's audio
+            const bool liveOwned = liveHitSample != nullptr && best->pad < kSeqMaxPads &&
+                                   std::abs(best->sample - liveHitSample[best->pad]) < kLiveOwnerWindowSec * sr_;
+            if (liveOwned)
+                ++hitsSkipped_;
+            else
+            {
+                sampler.trigger(best->pad, best->velocity, off);
+                ++hitsFired_;
+            }
         }
         else
             sampler.stopPadAt(best->pad, off);

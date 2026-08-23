@@ -325,3 +325,137 @@ TEST_CASE("ChopSequencer: ten minutes at 120 BPM / 16ths - no drift (4800 hits, 
             static_cast<std::uint64_t>(4800 + (done - total) / 6000)); // + the few extra block samples past 600 s
     REQUIRE(s.seqLoopStartSample % 96000 == 0);
 }
+
+TEST_CASE("ChopSequencer: one owner per hit - a live hit within 120 ms of a pattern hit of the same pad owns it (the "
+          "pattern copy is skipped at fire time), a live hit further away does not",
+          "[seq]")
+{
+    // pad 0 plays a 10 s ramp (0 → 1): a RESTART drops the output back to 0, a continuing voice keeps climbing
+    const long frames = 480000;
+    auto mk = [&](Rig& r)
+    {
+        auto smp = test::ramp(frames, r.sr);
+        PadParams p;
+        p.pad = 0;
+        p.attackSec = 0.0f;
+        p.interpolation = Interpolation::linear;
+        p.chokeGroup = -1; // own pad = mono: a retrigger RESTARTS the ramp (a poly pad would layer a second voice)
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, smp.get()));
+        return smp;
+    };
+    auto pat = pattern(1, 4); // 120 BPM: step 1 = sample 24000
+    hit(*pat, 1, 0);
+
+    SECTION("live hit 50 ms BEFORE the step: the pattern copy is skipped, the live voice rings on")
+    {
+        Rig r(480);
+        auto smp = mk(r);
+        r.engine.commands().push(Command::seqSetPattern(pat.get()));
+        r.engine.commands().push(Command::triggerPadAtSample(0, 1.0f, 24000 - 2400));
+        r.engine.commands().push(Command::seqPlay());
+        auto out = r.capture(120);
+        REQUIRE(out[24000 - 2400] == Approx(0.0f).margin(1e-6));
+        REQUIRE(out[24000 + 4800] == Approx(7200.0f / frames).margin(1e-6)); // 7200 frames into the LIVE voice
+        REQUIRE(r.engine.snapshot().seqHitsFired == 0);
+        REQUIRE(r.engine.snapshot().seqHitsSkipped == 1);
+    }
+    SECTION("live hit 50 ms AFTER the step (a quantized hit booked past the grid): the pattern copy is skipped too")
+    {
+        Rig r(480);
+        auto smp = mk(r);
+        r.engine.commands().push(Command::seqSetPattern(pat.get()));
+        r.engine.commands().push(Command::triggerPadAtSample(0, 1.0f, 24000 + 2400)); // booked 0.55 s ahead
+        r.engine.commands().push(Command::seqPlay());
+        auto out = r.capture(120);
+        for (long i = 24000; i < 24000 + 2400; ++i)
+            REQUIRE(out[static_cast<std::size_t>(i)] == 0.0f); // nothing until the booked live hit
+        REQUIRE(out[24000 + 2400 + 960] == Approx(960.0f / frames).margin(1e-6));
+        REQUIRE(r.engine.snapshot().seqHitsSkipped == 1);
+    }
+    SECTION("live hit 200 ms before the step: the pattern copy fires (a restart to 0)")
+    {
+        Rig r(480);
+        auto smp = mk(r);
+        r.engine.commands().push(Command::seqSetPattern(pat.get()));
+        r.engine.commands().push(Command::triggerPadAtSample(0, 1.0f, 24000 - 9600));
+        r.engine.commands().push(Command::seqPlay());
+        auto out = r.capture(120);
+        REQUIRE(out[24000 - 1] == Approx(9599.0f / frames).margin(1e-6));  // the live voice, 9599 frames in
+        REQUIRE(out[24000 + 480] == Approx(480.0f / frames).margin(1e-6)); // restarted by the pattern hit (the old
+                                                                           // voice's 3 ms fade is over 10 ms later)
+        REQUIRE(r.engine.snapshot().seqHitsFired == 1);
+        REQUIRE(r.engine.snapshot().seqHitsSkipped == 0);
+    }
+    SECTION("a live hit of ANOTHER pad never owns the step")
+    {
+        Rig r(480);
+        auto smp = mk(r);
+        auto s1 = r.bindPad(1);
+        r.engine.commands().push(Command::seqSetPattern(pat.get()));
+        r.engine.commands().push(Command::triggerPadAtSample(1, 1.0f, 24000 - 2400));
+        r.engine.commands().push(Command::seqPlay());
+        auto out = r.capture(120);
+        REQUIRE(r.engine.snapshot().seqHitsFired == 1);
+        REQUIRE(r.engine.snapshot().seqHitsSkipped == 0);
+    }
+}
+
+TEST_CASE("ChopSequencer: queuePattern(nullptr) cancels a pending switch (the UI re-selected the playing pattern)",
+          "[seq]")
+{
+    Rig r(480);
+    auto s0 = r.bindPad(0, 5), s1 = r.bindPad(1, 5);
+    auto a = pattern(1, 4, 0.0, true, 0);
+    hit(*a, 0, 0);
+    auto b = pattern(1, 4, 0.0, true, 1);
+    hit(*b, 0, 1);
+    r.engine.commands().push(Command::seqSetPattern(a.get()));
+    r.engine.commands().push(Command::seqPlay());
+    r.run(10);
+    r.engine.commands().push(Command::seqQueuePattern(b.get()));
+    r.run(10);
+    r.engine.commands().push(Command::seqQueuePattern(nullptr)); // cancel
+    auto out = r.capture(200);                                   // through the loop boundary at 96000 (abs)
+    // abs 96000 = index 96000 - 20*480 in this capture
+    const std::size_t boundary = 96000 - 20 * 480;
+    REQUIRE(out[boundary] == Approx(0.1f).epsilon(1e-4)); // still A (pad 0), not B (pad 1 = 0.2)
+    REQUIRE(r.engine.snapshot().seqPatternIndex == 0);
+    // and when NOT cancelled the switch happens (control)
+    r.engine.commands().push(Command::seqQueuePattern(b.get()));
+    auto out2 = r.capture(200); // next boundary at abs 192000 = index 192000 - 220*480
+    const std::size_t boundary2 = 192000 - 220 * 480;
+    REQUIRE(out2[boundary2] == Approx(0.2f).epsilon(1e-4));
+    REQUIRE(r.engine.snapshot().seqPatternIndex == 1);
+}
+
+TEST_CASE("Engine: triggerPadAtSample booked past the current block fires sample-exact in the block that contains it "
+          "(quantized live-record hits)",
+          "[seq]")
+{
+    Rig r(480);
+    auto s2 = r.bindPad(2);                                                // DC 0.3
+    r.engine.commands().push(Command::triggerPadAtSample(2, 1.0f, 48000)); // 1 s ahead
+    auto out = r.capture(110);
+    REQUIRE(out[47999] == 0.0f);
+    REQUIRE(out[48000] == Approx(0.3f).epsilon(1e-4));
+    r.engine.commands().push(Command::stopPad(2));
+    r.run(2); // pad 2's DC is faded (3 ms) before the gate part
+    // a release booked ahead for a gate pad ends it exactly there
+    PadParams p;
+    p.pad = 3;
+    p.attackSec = 0.0f;
+    p.releaseSec = 0.0f;
+    p.gate = 1;
+    p.interpolation = Interpolation::linear;
+    auto s3 = test::dc(static_cast<std::int64_t>(r.sr * 10.0), 0.4f, r.sr);
+    r.engine.commands().push(Command::setPadParams(p));
+    r.engine.commands().push(Command::setPadSample(3, s3.get()));
+    r.engine.commands().push(Command::triggerPadAtSample(3, 1.0f, 112 * 480 + 1000));
+    r.engine.commands().push(Command::releasePadAtSample(3, 112 * 480 + 3000));
+    auto out2 = r.capture(20);
+    REQUIRE(out2[999] == Approx(0.0f).margin(1e-6));
+    REQUIRE(out2[1000] == Approx(0.4f).epsilon(1e-4));
+    REQUIRE(out2[2990] == Approx(0.4f).epsilon(1e-4));
+    REQUIRE(out2[3000 + 480] < 0.01f); // released (the short release tail is over within a block)
+}
