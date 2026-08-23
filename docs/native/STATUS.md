@@ -1377,7 +1377,15 @@ window key handlers — so nothing there needed changing; the focus loss had sim
 focus-dependent at all (CoreMIDI → the engine directly) and a settings change only re-applies clock-send + output
 ports (`applyMidiSettings`), so it should never have been affected — **awaiting his confirmation that MIDI actually
 died, or whether he was stating the requirement.**
-**Not headlessly testable** (keyboard focus across two native windows) — needs his pass.
+**PARTIAL — his pass 2026-08-23: "i had to click on terminator again to focus. i mean its not a big deal."**
+So window-level focus is not the whole story: on macOS `toFront()` / `grabKeyboardFocus()` do nothing if TERMINATOR
+IS NOT THE FRONTMOST APPLICATION, and hiding an always-on-top window can hand the front slot to another app
+entirely. **Next step (small, untested — do it first when this is picked up): call
+`juce::Process::makeForegroundProcess()` in `WebShell::closePreferences()` before `toFront(true)`**, and if that is
+still not enough, keep the Preferences window as a child/owned window of the main one so hiding it returns the front
+slot automatically instead of dropping it. He has explicitly deprioritised this ("not a big deal") — do not spend a
+session on it, but do the one-liner and let him confirm.
+**Not headlessly testable** (keyboard focus across two native windows) — always needs his pass.
 
 **Gates for all five fixes:** mac-debug 0 warnings + ctest **233/233** · RTSan 234/234 · universal (0 warnings)
 233/233 · ui gate (tsc baseline 5) · app probe green on debug AND universal (`enginePrepared`, `mixerPageOk`,
