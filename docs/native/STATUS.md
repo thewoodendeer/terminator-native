@@ -556,6 +556,95 @@ is not quadratic, whole patterns are fine), serialises everything through one pr
   (applies at the next step in both); live-record a hit onto a playing pattern — it must sound ONCE, the next loop
   plays it from the grid; PLAY must still feel instant.
 
+## CI for the 3.2 tip `97ef977` (run 32608087978, 2026-08-23): Intel ✅ · RTSan ✅ · Windows/MSVC ✅ · **universal ❌ — the
+probe only**: `seqPageCursorTracks` false (TS cursor 7/12 vs native step 5/11 at 240 BPM, drift 21.6 ms after 1 s, one
+nudge). Root cause: the runner has no real audio device — the WebView's AudioContext clock runs FAST on the virtual
+output (`ctxOutputLatency` 0), and the 3.2 cursor read `ctx.currentTime − loopStartCtx`. Not an engine bug (mac-universal
+tests + the native sequencer assertions were green; locally 7/7 12/12 at 1.1 ms). **Fixed in 3.3 (sixth session): the
+page cursors (chop + drums) read the ENGINE's position at the ear through NativeClock + `performance.now()`
+(`ChopperEngine.nativeCursorHook` / `DrumSink.elapsedSec`) — the AudioContext clock no longer decides what the
+playhead shows.** The YouTube pull on the runner hit YouTube's "sign in to confirm you're not a bot" (a warning, not a
+failure — the runner's IP; locally the pull succeeds).
+
+## Phase 3 — 3.3 DONE (THE DRUM MACHINE IS NATIVE), 2026-08-23 sixth session
+**What changed (engine):** `core/DrumSequencer.h/.cpp` — the drum step sequencer as a native EventSource on the same
+sample clock as the chop sequencer (semantics = `drums/DrumEngine.ts` scheduleAhead/scheduleStep/emitVoice, dossier
+§2): 96 internal steps/bar (the UI's views are lenses), stepDur 60/bpm×4/96 re-read per step, the pattern ALWAYS loops;
+per hit = lane volume × step VELOCITY × drum master; SWING on the step's 16th slot (the shared formula); SHIFT (ms ±50)
+snapped to the PPQ pulse (JS rounding) — it may be NEGATIVE, so steps are scheduled **110 ms ahead** of the block
+(a −50 ms hit snapped to a < 100 ms pulse can land ~100 ms early) and fire sample-exact; PAN per hit; REPEAT = a roll
+of sub-hits from the swung+shifted hit until the step's STRAIGHT slot end, each fading (4 ms) INTO the next, sub-hits
+cut nothing and are cut by nothing but their own end (TS: they bypass the lane registry); arranged pattern SWAPS
+(`scheduleDrumPattern {atSample}`, the TS `patternFor(when + stepDur/2)` tolerance) + `drumPlay {atSample, stepOffset}`
+(the arranger's seek); one owner per hit (a lane live-triggered within 120 ms owns the pattern's copy, `drumHitsSkipped`).
+**Drum lanes = Sampler pads 64..127** (`kMaxPads` 64 → 128; `kChopPads`/`kDrumPadBase`/`kDrumLanes`; MIDI's default
+note map still covers 0..63): the page's DECODED buffers (already ceilPeak'd + declicked by the DrumEngine at decode)
+are uploaded + bound like any pad; Sampler additions — `PadParams::pan` + per-hit pan (`triggerEx`: the Web Audio
+StereoPanner law as a 2×2 matrix resolved at trigger: mono equal-power cos/sin, stereo side-mix; **exactly 0 = no
+panner = unity on both**, as the TS only inserts the node when ≠ 0), `PadParams::chokeFadeSec` (pads 3 ms, drum lanes
+4 ms = DRUM_CHOKE_S; the retrigger / mute-group / stopPad fade), `Voice::subHit` + `stopSubHitsAt`, `stopPadRange`,
+`drumActiveMask`; the mute-group choke now follows the documented time-order rule: **a group mate starting at the SAME
+sample layers** (`muteGroups.ts` "strictly later cuts" — the TS LIVE path cut it; live now matches the export rule).
+Found + fixed while porting: **a choke deferred to a block offset lost its fade length** (always 3 ms — the chop pads
+never noticed, theirs IS 3 ms; the drums' 4 ms became 3 ms); a booked live hit now RE-STAMPS the one-owner window when
+it fires (two bookings on one pad overwrote each other). Bridge: `setDrumPattern` / `scheduleDrumPattern` /
+`clearDrumPatterns` / `setDrumGraphs` / `setDrumLane` / `setDrumParams` / `drumPlay` / `drumStop`, `triggerPad{pan}`,
+`setPadParams{pan, chokeFade}`, snapshot `drumPlaying/drumStep/drumStepCount/drumStepPhase/drumLoopStartSample
+(signed)/drumHitsFired/drumHitsSkipped/drumActiveMask`, `activePads` to 127, info `chopPads/drumPadBase/drumLanes`.
+- **Gates:** Catch2 `[drums]` 12 cases / 424 assertions at 0-sample tolerance — grid + loop + snapshot + stop; swing
+  (odd 16ths + the 32nds inside them, even 16ths never move); SHIFT at 960/24 PPQ incl. negative (fired 50 ms BEFORE the
+  grid) and the first-step clamp (= the PLAY block, never the past); level = volume × VELOCITY × master, muted / zero
+  lanes skip; PAN mono + stereo laws (+ unity at 0); REPEAT rolls (4 sub-hits, each 4 ms fade ending AT the next, the
+  last at the slot end; a rate ≥ the slot = one normal hit; a ringing live voice is NOT cut by a roll); mute groups by
+  time order + same-instant layer + ungrouped lanes ring; one owner; swaps at the bar (1-sample-early tolerance) +
+  clearScheduled + play with stepOffset; BPM change at the next scheduled step; **block-size invariance 64 vs 512
+  (swing + SHIFT + roll + groups, < 1e-6) with zero allocations**; **10 minutes at 120 BPM: 300 passes, every loop start
+  exactly k×96000**. ctest **137/137**, RTSan **138/138**; ui gate (tsc baseline 5, library 39, clock 23, vite);
+  **the probe** (part 4, asserted by probe-app.sh `drumPageOk`): a synthetic buffer PRIMED into the kick lane →
+  the REAL path (onBufferReady → syncLane → upload → setPadSample 64) → a 1-bar pattern (4 hits) at 240 BPM →
+  `drumEngine.start()` → native `drumPlaying`, 96 steps, 4 hits in 900 ms, `getStep()` tracks the native step
+  (54/51, 82/82 — the snapshot is ≤ 50 ms old, the playhead is "now at the ear"), `stop()` lands natively; and the
+  3.2 cursor check now 7/7 12/12 at 0.15 ms drift. The probe's async budget grew to 10 s / 14 s.
+- **The page binding (ui):** `DrumEngine.drumSink` (PLAY/STOP/hit/swaps/`elapsedSec`/`leadSec`) — when set the TS books
+  NO Web Audio drum voices (scheduleAhead skips, playHit forwards), `nudge` is a no-op (the drums share the engine's
+  clock — **the two-clock nudge now only serves bass + MIDI clock + metronome**), `getStep()` reads the engine's
+  position at the ear, the live-record `booked = wasOn` rule (the engine fires the copy), `nativeDrumUpdate` keeps the
+  ctx-time grid origin for the landing; `cachedBufferFor/ensureLoaded/onBufferReady/primeBuffer` for the shadow.
+  `native/nativeDrumShadow.ts`: lane SLOTS (track key → 0..63), buffers through the pad shadow's refcounted uploads,
+  attack = the TS head rule (0 if the first ms < 0.02 else 3 ms), group → chokeGroup 1000+g, volume/mute+solo/group →
+  `setDrumLane`; pattern (reference-diffed), graphs (reference-diffed), params (value-diffed) per state emit; PLAY →
+  `drumPlay` at the page's anchor as an engine sample; hand hits → `triggerPad {pad 64+L, velocity, pan, atSample?}`.
+  `attachNativeEngineShadow(engine, drumEngine)` from ChopperView + HardwareView.
+- **Honest boundary after 3.3:** what you hear natively = live pads + chop sequencer + THE DRUM MACHINE (dry, outs
+  1/2 — lane → mixer strip routing is Phase 4, so the drum lanes bypass the mixer/FX/master chain like the pads); still
+  Web Audio on the page's AudioContext: bass (3.4), metronome + count-in clicks (3.6), the drum browser's audition of a
+  sample NOT on a lane (`playPreviewBuffer`), the ARP. A graph / swing DRAG applies natively at pointer-up (the TS Live
+  setters mutate without an emit; the TS scheduler read them live). Pause/resume do not touch the drums — the TS never
+  paused them either (`pauseSeq` does not call the stop hook; resume re-anchors only the chops → after a pause the two
+  are out of phase by the pause length — a latent TS behaviour, kept).
+- **Latent TS findings (flag, not fixed in the Electron app):** (1) **REPEAT rolls are dead since the 1/96 storage
+  change (2026-08-19)**: the roll is bounded by ONE internal step (= 1/24 beat) and the fastest rate (1/64T) IS one
+  step → `times.length < 2` → a single hit, always; before that (1/32 storage) only 1/32T·1/64·1/64T rolled; the Drum
+  Dojo intent (16 steps) was a roll filling the 1/16 slot. The native port keeps the machinery (`stepsPerBar` is a
+  pattern field; the tests roll at 8/bar) — the fix is to bound the roll by the VIEW column (stride × stepDur) or the
+  lane's next lit step, in both apps. (2) Live mute-group same-instant hits cut (4 ms blip) while the export rule
+  layers — native follows the export rule. (3) Pause leaves the drums running (above).
+- **Victor's pass (3.3):** PLAY with a chop pattern + the drum machine at 90 BPM for 10 minutes against a DAW click —
+  drums and chops on ONE clock now (no nudges needed: `seqNudges` should stay 0 in the shadow stats); hats in a mute
+  group (closed/open) — the open hat stops when the closed lands, both on one step = both sound; SWING knob → both
+  sequencers swing together; a SHIFT'd step (±) and a PAN'd step; a VELOCITY ramp; mute/solo lanes; drum ▶ alone
+  (no chops) from the DRUMS section; live-record drum hits with REC on (each sounds ONCE, the next loop plays it from
+  the grid); STOP cuts every lane (4 ms); the drum browser preview (tap a lane header = native; audition of an
+  unloaded sample = still Web Audio, the system default device). Known: lanes bypass the mixer strips/FX (Phase 4).
+
+### Next session (in order) — updated at the end of the sixth session
+0. `gh run list` — CI for the 3.3 push (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk` — the cursor
+   checks no longer depend on the runner's ctx clock).
+1. **3.4 bass synth native** (the Model D-style worklet → C++; PPQ 96 tick map, slides, bends — the last satellite on
+   the two-clock nudge besides the metronome/MIDI clock). 2. 3.5 MIDI clock in/out from the transport. 3. 3.6 arp,
+   metronome (through the mixer), count-in on the sample grid. 4. 3.7 live-record landing on the native clock.
+   Then Phase 4 (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" first).
+
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
 Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).
 **Shape: one native Transport, everything an EventSource; the page's sequencers become SHADOWS then move over.**
