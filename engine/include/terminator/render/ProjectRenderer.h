@@ -29,6 +29,10 @@ struct SampleBank
     // A masked pad attaches them when its span is inside the tree's readyRanges; otherwise the original plays.
     StemPlanes mainStems{};
     std::map<juce::String, StemPlanes> stemsBySourceVideoId;
+    /// Phase 4.5c: the drum machine's lane audio, keyed by the page's lane key ('kick', 'snare', … or a user lane's).
+    /// The renderer never resolves the drum CATALOG itself (sampleIndex + genre → a bundled/R2 file is the shell's
+    /// job) — the caller decodes and hands the buffers in, exactly as it does for pad sources.
+    std::map<juce::String, std::shared_ptr<SampleBuffer>> drumLanes;
 };
 
 struct ProjectRenderOptions
@@ -45,6 +49,9 @@ struct ProjectRenderOptions
     /// TRACKOUTS: channel names to tap, in order, onto hardware pairs 1, 2, 3 … (pair 0 is the master). Every
     /// tapped channel needs its own pair, so `numChannels` must be 2 × (1 + stemChannels.size()).
     std::vector<juce::String> stemChannels;
+    /// Phase 4.5c: render the project's DRUM MACHINE too, through the engine's own DrumSequencer. False = chops
+    /// only, which is what every pre-4.5c project render did.
+    bool renderDrums = false;
     /// The master's −1 dBFS safety limiter. The page always has it in, so exports carry it by default; off gives an
     /// UNLIMITED master bounce, which is also what makes the master exactly the sum of its trackouts.
     bool masterLimiter = true;
@@ -70,6 +77,12 @@ class StripNamer
 /// The strip a pad plays through — the page's `padRoute`: the pad's own override, else its source's route, else
 /// 'sample'.
 juce::String padRouteName(const juce::ValueTree& project, int pad);
+
+/// The project's `drums` blob (the page's DrumPreset: tracks / sequences / the four step graphs / swing / master)
+/// → the drum machine for an export. Lane order follows the preset's `tracks` array, which is how the page hands
+/// slots out. Lanes whose key is missing from `bank.drumLanes` still take their slot (silent) so the graphs and the
+/// mute groups keep their lane indices. `namer` gives each lane its mixer strip when `useMixer` is on.
+RenderDrumsSpec buildDrumsSpec(const juce::ValueTree& project, const SampleBank& bank, StripNamer* namer);
 
 /// The project's `mixer` blob (the page's MixerPreset: channels / master / console) → a RenderMixerSpec. Channels
 /// the blob does not mention still get a default strip if `extraChannels` names them (a pad routed to a channel the

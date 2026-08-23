@@ -23,6 +23,7 @@
 #include <juce_core/juce_core.h>
 
 #include "terminator/core/Command.h"
+#include "terminator/core/DrumSequencer.h"
 #include "terminator/core/Mixer.h"
 #include "terminator/core/SampleBuffer.h"
 
@@ -59,6 +60,34 @@ struct RenderEvent
     double timeSec = 0.0;
     float velocity = 1.0f;
     Type type = Type::on;
+};
+
+/// One drum lane in an export (Phase 4.5c): what it plays, how loud, its mute group and its mixer strip. Lane L is
+/// pad `kDrumPadBase + L`, exactly as live.
+struct RenderDrumLane
+{
+    int lane = 0;
+    juce::String key; // the page's lane key ('kick', 'snare', … or a user lane's) — names its mixer strip
+    std::shared_ptr<SampleBuffer> sample;
+    float volume = 1.0f;
+    bool audible = true;
+    int muteGroup = 0; // 0 = none
+    float attackSec = 0.0f;
+    int strip = -1; // the mixer strip the lane sums into (−1 = the Phase-3 direct path)
+};
+
+/// The drum machine for an export. The engine's OWN DrumSequencer renders it — the same object, the same swing, the
+/// same per-step VELOCITY / SHIFT / PAN / REPEAT graphs and the same mute-group choke order as playback. This is why
+/// a bounce is the beat rather than an approximation of it.
+struct RenderDrumsSpec
+{
+    bool enabled = false;
+    std::shared_ptr<DrumPattern> pattern;
+    std::shared_ptr<DrumGraphs> graphs;
+    std::vector<RenderDrumLane> lanes;
+    double swing = 0.0;
+    float masterVolume = 1.0f;
+    int ppq = 96;
 };
 
 /// One insert in an exported chain: the device and the params it is carrying (by the type's param INDEX, the same
@@ -120,6 +149,8 @@ struct RenderSpec
     std::vector<RenderPadSpec> pads;
     std::vector<RenderEvent> events;
     RenderMixerSpec mixer;
+    RenderDrumsSpec drums;
+    double tempoBpm = 120.0; // the drum sequencer reads this (seqSetBpm)
 
     std::int64_t totalSamples() const noexcept { return static_cast<std::int64_t>(lengthSeconds * sampleRate + 0.5); }
 };

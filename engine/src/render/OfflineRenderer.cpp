@@ -326,6 +326,43 @@ RenderResult renderOffline(const RenderSpec& spec)
         engine.commands().push(Command::mixerSetLimiter(spec.mixer.limiter));
         engine.commands().push(Command::mixerSetPdc(spec.mixer.pdc));
     }
+    // the page's own two drum constants (nativeDrumShadow.ts): a mute group travels as chokeGroup 1000+g so it can
+    // never collide with a chop pad's group, and a drum lane's choke fade is 4 ms (DRUM_CHOKE_S)
+    constexpr int kGroupIdBase = 1000;
+    constexpr float kDrumChokeSec = 0.004f;
+    // the DRUM MACHINE (Phase 4.5c): the engine's own DrumSequencer renders the pattern — same swing, same per-step
+    // graphs, same mute-group choke order as playback. Lane L is pad kDrumPadBase + L, bound exactly as the live
+    // shadow binds it (chokeGroup = the mute group offset by kGroupIdBase, the 4 ms drum choke fade).
+    if (spec.drums.enabled)
+    {
+        engine.commands().push(Command::seqSetBpm(spec.tempoBpm));
+        for (const auto& l : spec.drums.lanes)
+        {
+            const auto pad = static_cast<std::uint16_t>(kDrumPadBase + l.lane);
+            PadParams p;
+            p.pad = pad;
+            p.attackSec = l.attackSec;
+            p.releaseSec = 0.0f;
+            p.gain = 1.0f;
+            p.mode = PadMode::oneShot;
+            p.interpolation = Interpolation::hermite;
+            p.chokeGroup = static_cast<std::int16_t>(l.muteGroup > 0 ? kGroupIdBase + l.muteGroup : -1);
+            p.chokeFadeSec = kDrumChokeSec;
+            p.strip = static_cast<std::int16_t>(l.strip);
+            engine.commands().push(Command::setPadParams(p));
+            if (l.sample != nullptr)
+                engine.commands().push(Command::setPadSample(pad, l.sample.get()));
+            engine.commands().push(Command::drumSetLane(static_cast<std::uint16_t>(l.lane), l.volume, l.audible,
+                                                        static_cast<std::int16_t>(l.muteGroup)));
+        }
+        if (spec.drums.graphs != nullptr)
+            engine.commands().push(Command::drumSetGraphs(spec.drums.graphs.get()));
+        if (spec.drums.pattern != nullptr)
+            engine.commands().push(Command::drumSetPattern(spec.drums.pattern.get()));
+        engine.commands().push(Command::drumSetParams(spec.drums.swing, spec.drums.masterVolume,
+                                                      static_cast<std::uint16_t>(spec.drums.ppq)));
+        engine.commands().push(Command::drumPlay());
+    }
     engine.commands().push(Command::setMasterGain(spec.masterGain));
     engine.commands().push(
         Command::setTestTone(spec.testToneEnabled, spec.testToneFrequencyHz, spec.testToneAmplitude));

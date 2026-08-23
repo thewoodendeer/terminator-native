@@ -293,6 +293,128 @@ RenderMixerSpec buildMixerSpec(const juce::ValueTree& project, StripNamer& namer
     return mix;
 }
 
+RenderDrumsSpec buildDrumsSpec(const juce::ValueTree& project, const SampleBank& bank, StripNamer* namer)
+{
+    RenderDrumsSpec out;
+    const auto blob = project.getProperty(ids::drums);
+    if (!blob.isObject())
+        return out;
+    auto* tracks = blob.getProperty("tracks", juce::var()).getArray();
+    if (tracks == nullptr || tracks->isEmpty())
+        return out;
+
+    // the grid the page stored at: `gridRes` absent = an old preset written at its VIEW resolution, which the page
+    // upscales to INTERNAL_SPB on load — do the same here rather than playing it at the wrong speed
+    const double storedRes = blob.hasProperty("gridRes") ? static_cast<double>(blob.getProperty("gridRes", 96))
+                                                         : static_cast<double>(blob.getProperty("stepDivision", 16));
+    const int bars = std::clamp(static_cast<int>(blob.getProperty("bars", 2)), 1, 4);
+    const double upscale = storedRes > 0.0 ? static_cast<double>(kDrumStepsPerBar) / storedRes : 1.0;
+
+    out.pattern = std::make_shared<DrumPattern>();
+    out.graphs = std::make_shared<DrumGraphs>();
+    out.graphs->clear();
+    out.pattern->clear();
+    out.pattern->bars = bars;
+    out.pattern->stepsPerBar = kDrumStepsPerBar;
+    out.pattern->stepCount = std::min(bars * kDrumStepsPerBar, kDrumMaxSteps);
+
+    // the sequence the project is on
+    const int seqIndex = static_cast<int>(blob.getProperty("seqIndex", 0));
+    juce::var sequence;
+    if (auto* seqs = blob.getProperty("sequences", juce::var()).getArray())
+        if (seqIndex >= 0 && seqIndex < seqs->size())
+            sequence = (*seqs)[seqIndex];
+
+    const auto velocity = blob.getProperty("stepVelocity", juce::var());
+    const auto shift = blob.getProperty("stepShift", juce::var());
+    const auto pan = blob.getProperty("stepPan", juce::var());
+    const auto repeat = blob.getProperty("stepRepeat", juce::var());
+    auto row = [](const juce::var& graph, const juce::String& key) -> const juce::Array<juce::var>*
+    {
+        if (!graph.isObject())
+            return nullptr;
+        return graph.getProperty(juce::Identifier(key), juce::var()).getArray();
+    };
+
+    int lane = 0;
+    for (const auto& t : *tracks)
+    {
+        if (lane >= kDrumLanes)
+            break;
+        const auto key = t.getProperty("key", "").toString();
+        if (key.isEmpty())
+            continue;
+        RenderDrumLane l;
+        l.lane = lane;
+        l.key = key;
+        l.volume = static_cast<float>(static_cast<double>(t.getProperty("volume", 1.0)));
+        // mute / solo are resolved HERE, the way the UI resolves them: any solo anywhere silences the un-soloed
+        l.muteGroup = static_cast<int>(t.getProperty("muteGroup", 0));
+        auto it = bank.drumLanes.find(key);
+        if (it != bank.drumLanes.end())
+            l.sample = it->second;
+        if (namer != nullptr)
+            l.strip = (*namer)(key);
+        out.lanes.push_back(std::move(l));
+
+        // this lane's steps → the pattern bits, and its four graph rows → the shared graphs, both at INTERNAL_SPB
+        if (const auto* steps =
+                sequence.isObject() ? sequence.getProperty(juce::Identifier(key), juce::var()).getArray() : nullptr)
+            for (int i = 0; i < steps->size(); ++i)
+            {
+                if (!static_cast<bool>((*steps)[i]))
+                    continue;
+                const int step = static_cast<int>(std::llround(static_cast<double>(i) * upscale));
+                if (step >= 0 && step < out.pattern->stepCount)
+                    out.pattern->grid[step] |= std::uint64_t{1} << lane;
+            }
+        auto fill = [&](const juce::Array<juce::var>* src, auto&& set)
+        {
+            if (src == nullptr)
+                return;
+            for (int i = 0; i < src->size(); ++i)
+            {
+                const int step = static_cast<int>(std::llround(static_cast<double>(i) * upscale));
+                if (step >= 0 && step < kDrumMaxSteps)
+                    set(step, (*src)[i]);
+            }
+        };
+        fill(row(velocity, key), [&](int st, const juce::var& v)
+             { out.graphs->velocity[st][lane] = static_cast<float>(static_cast<double>(v)); });
+        fill(row(shift, key), [&](int st, const juce::var& v)
+             { out.graphs->shiftMs[st][lane] = static_cast<float>(static_cast<double>(v)); });
+        fill(row(pan, key), [&](int st, const juce::var& v)
+             { out.graphs->pan[st][lane] = static_cast<float>(static_cast<double>(v)); });
+        fill(row(repeat, key), [&](int st, const juce::var& v)
+             { out.graphs->repeat[st][lane] = static_cast<std::uint8_t>(static_cast<int>(v)); });
+        ++lane;
+    }
+
+    // the solo law across the lanes we kept (the UI resolves mute+solo before it reaches the engine)
+    bool anySolo = false;
+    for (const auto& t : *tracks)
+        if (static_cast<bool>(t.getProperty("solo", false)))
+            anySolo = true;
+    std::size_t li = 0;
+    for (const auto& t : *tracks)
+    {
+        if (li >= out.lanes.size())
+            break;
+        if (t.getProperty("key", "").toString().isEmpty())
+            continue;
+        const bool muted = static_cast<bool>(t.getProperty("muted", false));
+        const bool solo = static_cast<bool>(t.getProperty("solo", false));
+        out.lanes[li].audible = !muted && (!anySolo || solo);
+        ++li;
+    }
+
+    out.swing = static_cast<double>(blob.getProperty("drumSwing", 0.0));
+    out.masterVolume = static_cast<float>(static_cast<double>(blob.getProperty("masterVolume", 1.0)));
+    out.ppq = std::clamp(static_cast<int>(blob.getProperty("ppq", 96)), 24, 960);
+    out.enabled = !out.lanes.empty();
+    return out;
+}
+
 RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBank& bank,
                                   const ProjectRenderOptions& opts)
 {
@@ -490,6 +612,17 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
     spec.lengthSeconds = std::max(patternDur * std::max(1, opts.loops), lastEnd) + opts.tailSeconds;
     // the mix LAST: the strips a pad routed to must exist, and the namer has been handing out their indices as the
     // pads asked for them, so the blob's channels and the routed ones land on the same numbering
+    spec.tempoBpm = tempo;
+    if (opts.renderDrums)
+    {
+        spec.drums = buildDrumsSpec(project, bank, opts.useMixer ? &namer : nullptr);
+        for (const auto& l : spec.drums.lanes)
+            if (l.strip >= 0)
+                routed.push_back(l.key);
+        // a drum lane rings past the last hit like any one-shot: give the tail the same room the chops get
+        if (spec.drums.enabled)
+            spec.lengthSeconds = std::max(spec.lengthSeconds, patternDur * std::max(1, opts.loops) + opts.tailSeconds);
+    }
     if (opts.useMixer)
         spec.mixer = buildMixerSpec(project, namer, routed, opts.stemChannels, opts.masterLimiter);
     return spec;
