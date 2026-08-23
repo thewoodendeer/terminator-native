@@ -1311,6 +1311,37 @@ now, not smear; put a COMP on a send/bus and the dry channel beside it should st
 The PDC button should still switch it, and with it off you should hear the old early/late behaviour return. It only
 costs latency while such a device is in the mix.
 
+## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
+
+`TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
+change to a .tsx/.ts file hot-reloads in the running app** — no `npm run build`, no `cmake --build`. Only C++ changes
+need a rebuild. `vite.config.ts` has `root: 'src/renderer'`, so the dev server's paths (`/index.html`,
+`/preferences/preferences.html`) are exactly what `WebShell::startUrlFor()` asks for.
+
+```
+cd ui && npm run dev            # vite on :5173 (strictPort)
+TERMINATOR_UI_URL=http://localhost:5173 \
+  open -a build/mac-release-universal/app/Terminator_artefacts/Release/Terminator.app   # or run the binary directly
+```
+
+**It was BROKEN until now, and this is the trap:** the shell injected its boot payload as
+`window.__TERMINATOR_NATIVE__`, which is ALSO the name of Vite's build-time boolean flag
+(`define: { __TERMINATOR_NATIVE__: true }`). In the bundled build esbuild only substitutes the bare identifier and
+never creates a global, so the two never met. **The DEV SERVER assigns the define as a real global**, overwriting the
+payload with `true` — `nativeBoot()` then returned a boolean, `boot?.dirs.sep` threw at module scope, and ChopperView
+never rendered (`chopperView: false`, `rootChildren: 0`). Diagnosed by throwing `typeof boot` from the page itself
+through the hot-reload loop: `{"t":"boolean","keys":[],"dirs":"undefined"}`.
+
+Fix: the shell now injects **`window.__TERMINATOR_BOOT__`** (ShellServices.cpp) and `juceBridge.nativeBoot()` reads
+that. `isNative()` was never affected — it tests `window.__JUCE__.backend`. BRIDGE-PROTOCOL.md updated.
+**Standing rule: never name anything the shell injects the same as a Vite `define` — dev and bundled disagree.**
+
+Verified: with `TERMINATOR_UI_URL` set, `chopperView: true` / `prefsReady: true` / the shadow self-test `ok: true`;
+the bundled path is unchanged (PROBE OK on debug and universal).
+**Known dev-only wart:** one `unhandledrejection: json@[native code]` still appears under the dev server (a fetch the
+resource provider serves in the bundled app). Harmless — everything renders and the engine round trips — but it means
+`tools/ci/probe-app.sh` (which requires `errors: []`) still fails in dev mode. Not worth chasing unless it bites.
+
 ## BUGS FROM VICTOR'S FIRST NATIVE TEST DRIVE (2026-08-23, eleventh session)
 
 He ran the universal build and found two. Both root-caused with the systematic-debugging loop; evidence below.

@@ -14,8 +14,10 @@ type AnyRecord = Record<string, any>;
 // (`window.__JUCE__` itself is declared by @juce-framework/webview.)
 declare global {
   interface Window {
-    /** Injected by the shell before any page script: the synchronous boot reads (version, UI settings, dirs). */
-    __TERMINATOR_NATIVE__?: { version: string; settings: AnyRecord; dirs: NativeDirs };
+    /** Injected by the shell before any page script: the synchronous boot reads (version, UI settings, dirs).
+     *  Deliberately NOT `__TERMINATOR_NATIVE__` — that is Vite's build-time boolean flag, and the dev server
+     *  assigns it as a real global, which would overwrite this payload with `true` under TERMINATOR_UI_URL. */
+    __TERMINATOR_BOOT__?: { version: string; settings: AnyRecord; dirs: NativeDirs };
   }
 }
 type JuceBackend = { addEventListener: (id: string, fn: (payload: any) => void) => unknown; removeEventListener: (handle: unknown) => void; emitEvent: (id: string, payload: unknown) => void };
@@ -28,7 +30,7 @@ export interface NativeDirs {
 /** True when the page runs inside the Terminator 3.0 JUCE shell (WKWebView / WebView2). */
 export const isNative = (): boolean => !!backend();
 /** The shell's boot payload (null outside the shell). */
-export const nativeBoot = () => (typeof window !== 'undefined' ? window.__TERMINATOR_NATIVE__ ?? null : null);
+export const nativeBoot = () => (typeof window !== 'undefined' ? window.__TERMINATOR_BOOT__ ?? null : null);
 
 /** A big reply (> ~24 KB) comes back as { __largeReply: "/blob/<token>" } — JUCE's emitEvent escapes C++→JS
  *  payloads with a quadratic String::replace, so the shell stashes large JSON and we fetch it through the resource

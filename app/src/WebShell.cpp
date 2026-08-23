@@ -517,7 +517,7 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
             .withKeepPageLoadedWhenBrowserIsHidden()
             .withUserScript(kErrorCollector)
             .withUserScript(probeAudio)
-            // window.__TERMINATOR_NATIVE__ = { version, settings, dirs } before any page script (sync boot reads)
+            // window.__TERMINATOR_BOOT__ = { version, settings, dirs } before any page script (sync boot reads)
             .withUserScript(services_.bootUserScript(terminator::versionString()))
             .withResourceProvider([this](const juce::String& url) { return provideResource(url); })
             .withNativeFunction("terminatorFs", [this](const juce::Array<juce::var>& args,

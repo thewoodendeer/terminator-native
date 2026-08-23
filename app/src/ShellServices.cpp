@@ -82,7 +82,10 @@ juce::String ShellServices::bootUserScript(const juce::String& version) const
     put(o, "version", version);
     put(o, "settings", appSettings());
     put(o, "dirs", dirsVar());
-    return "window.__TERMINATOR_NATIVE__ = " + juce::JSON::toString(o, true) + ";";
+    // NOT `__TERMINATOR_NATIVE__`: that name is Vite's build-time boolean flag, and the DEV SERVER assigns it as a
+    // real global — which overwrote this payload with `true` and broke every TERMINATOR_UI_URL run (see
+    // docs/native/STATUS.md "the dev-server loop").
+    return "window.__TERMINATOR_BOOT__ = " + juce::JSON::toString(o, true) + ";";
 }
 
 juce::var ShellServices::handleSettings(const juce::var& req)

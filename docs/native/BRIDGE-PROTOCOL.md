@@ -212,7 +212,7 @@ native panes (`ui/src/renderer/native/NativeAudioPane.tsx` = Ableton layout over
 `NativeMidiPane.tsx` over `terminatorMidi`).
 
 ### Boot user script
-Before any page script the shell injects `window.__TERMINATOR_NATIVE__ = { version, settings, dirs }` so the
+Before any page script the shell injects `window.__TERMINATOR_BOOT__ = { version, settings, dirs }` so the
 synchronous boot reads the Electron preload offered (`getSettingsSync`) work; plus an error collector
 (`window.__terminatorErrors`) the probe reads.
 
