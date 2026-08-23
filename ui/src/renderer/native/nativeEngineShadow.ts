@@ -186,9 +186,15 @@ class NativeEngineShadow {
   attach(): void {
     this.engine.mutePadVoices = true;
     this.engine.voiceSink = {
-      start: (pad, velocity, when, reverseOverride, nativeOwned) => this.onStart(pad, velocity, when, reverseOverride, nativeOwned),
+      start: (pad, velocity, when, reverseOverride, nativeOwned, atSample) => this.onStart(pad, velocity, when, reverseOverride, nativeOwned, atSample),
       stop: (pad) => this.onStop(pad),
       release: (pad) => this.onRelease(pad),
+    };
+    // the live-record clock (3.7): a live hit's musical time + its landed line measured on the ENGINE clock
+    this.engine.liveClockHook = {
+      hitElapsedSec: (ts) => this.hitElapsedSec(ts),
+      sampleAt: (el) => this.loopSampleAt(el),
+      outputLatencySec: () => (this.clock.ready ? this.clock.outputLatencyMs / 1000 : 0),
     };
     // the native transport (Phase 3.2): the TS engine's PLAY/STOP/PAUSE/RESUME drive the C++ ChopSequencer
     this.engine.seqSink = {
@@ -308,6 +314,7 @@ class NativeEngineShadow {
     this.detached = true;
     this.stats.attached = false;
     this.engine.nativeCursorHook = null;
+    this.engine.liveClockHook = null;
     this.drumShadow?.detach(); this.drumShadow = null;
     this.bassShadow?.detach(); this.bassShadow = null;
     this.unsubscribe?.(); this.unsubscribe = null;
@@ -568,6 +575,27 @@ class NativeEngineShadow {
     const stepMs = Math.max(1e-6, stepDurSec * 1000);
     return Math.ceil((this.snapshotAgeMs() + this.clock.outputLatencyMs) / stepMs) + 1;
   }
+  /** 3.7: a live hit's musical time — seconds from the audible loop start (the engine's own loop-start sample) to the
+   *  hit's HEARD instant on the engine clock (`ts` = the input's performance stamp — a native MIDI note's driver stamp
+   *  mapped by the 3.5 router, a DOM event's timeStamp for the mouse/keys — clamped to the TS 50 ms handler-lag window;
+   *  undefined = now). null = the native transport is not running (paused / stopped) or the clock is not calibrated. */
+  private hitElapsedSec(ts?: number): number | null {
+    const s = this.latestSnapshot;
+    if (!s || !s.seqPlaying || s.seqPaused || !this.clock.ready) return null;
+    const ls = Number(s.seqLoopStartSample);
+    if (!(ls > 0)) return null;
+    const now = performance.now();
+    const perf = ts !== undefined && Number.isFinite(ts) && ts > 0 ? Math.max(now - 50, Math.min(now, ts)) : now;
+    return (this.clock.sampleHeardAtPerfMs(perf) - ls) / this.clock.sampleRate;
+  }
+  /** 3.7: the absolute engine sample `el` seconds after the audible loop start (0 = unknown). */
+  private loopSampleAt(el: number): number {
+    const s = this.latestSnapshot;
+    if (!s || !s.seqPlaying || !this.clock.ready || !Number.isFinite(el)) return 0;
+    const ls = Number(s.seqLoopStartSample);
+    if (!(ls > 0)) return 0;
+    return Math.round(ls + el * this.clock.sampleRate);
+  }
   /** The chop cursor: seconds since the audible loop start, at the ear, on the engine's clock (null = not known). */
   private seqElapsedSec(): number | null {
     const s = this.latestSnapshot;
@@ -670,7 +698,7 @@ class NativeEngineShadow {
   }
 
   // ── voices ──
-  private onStart(pad: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean): void {
+  private onStart(pad: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean, atSampleExact?: number): void {
     if (this.detached || pad < 0 || pad >= MAX_PADS) return;
     // a hit right after an edit: make sure THIS pad's latest state is queued before the trigger (the subscribe
     // cadence is rAF-coalesced; the hit is now)
@@ -678,7 +706,8 @@ class NativeEngineShadow {
     if (nativeOwned) return; // the engine played it already (direct MIDI path) — only the bookkeeping above
     // a hit booked AHEAD (the live-record quantize, triggerPadAt): with the clock calibrated it goes out as an engine
     // sample (sample-exact, the engine books it — no timer jitter); otherwise the old timer path
-    const atSample = when !== undefined && this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(when, ctxPair(this.engine.ctx))) : 0;
+    // 3.7: a live-recorded hit arrives as the exact engine sample it landed on (no ctx round trip); else the mapping
+    const atSample = atSampleExact && atSampleExact > 0 ? Math.round(atSampleExact) : (when !== undefined && this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(when, ctxPair(this.engine.ctx))) : 0);
     const fire = async () => {
       const d = this.last[pad];
       const flip = reverseOverride !== undefined && d !== null && d.mode !== 'loop' && reverseOverride !== d.reverse;
@@ -926,10 +955,75 @@ class NativeEngineShadow {
         this.engine.setMetronomeSound(soundWas);
         r.metroPageOk = r.metroEnabled && r.metroClicks >= 2 && r.metroOnGrid && r.metroStops && r.countInRan && r.countInClicks >= 4 && r.countInTransportStarted && r.countInExact && r.arpOk;
       } else r.metroPageOk = null;
+      // part 7 — Phase 3.7: LIVE RECORD lands on the engine clock. The chop seq plays a cleared 1-bar/16 pattern at 240;
+      // REC arms (already playing → no count-in); a hit on pad 62 (with its input stamp) lands on a grid line: the page
+      // writes the step AND books the audible hit at that line's ENGINE sample — lastLiveHitSample == loop start +
+      // step × stepSamples (mod the loop), 0 samples off at INPUT Q 100. Then the drums: lane 0 live-recorded the same way.
+      if (this.engine.seqSink && this.engine.liveClockHook && this.latestSnapshot?.prepared) {
+        const sr = Number(this.latestSnapshot?.sampleRate) || this.clock.sampleRate || 48000;
+        const wasIq = this.engine.getInputQuantize();
+        this.engine.setInputQuantize(100);
+        this.engine.setSeqBars(1); this.engine.setSeqResolution(16);
+        for (let st = 0; st < 16; st++) for (const pd of [...(this.engine.getState().seqGrid[st] ?? [])]) this.engine.toggleSeqStep(st, pd); // clear
+        this.engine.setMetronomeBpm(240);
+        const stepSamples = 60 / 240 * 4 / 16 * sr, loopSamples = stepSamples * 16;
+        this.engine.playSeq();
+        for (let t = 0; t < 40 && !this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+        await new Promise((res) => setTimeout(res, 300));
+        this.engine.startLiveRecord(); // playing → arms at once
+        r.liveRecArmed = this.engine.getState().liveRecording;
+        const trig0 = this.stats.triggers;
+        this.engine.triggerPad(62, 1, performance.now());
+        for (let t = 0; t < 40 && (this.stats.triggers === trig0 || Number(this.latestSnapshot?.lastLiveHitPad) !== 62); t++) await new Promise((res) => setTimeout(res, 50));
+        const sl = this.latestSnapshot;
+        const grid = this.engine.getState().seqGrid;
+        let step = -1;
+        for (let st = 0; st < 16; st++) if ((grid[st] ?? []).includes(62)) { step = st; break; }
+        r.liveRecStep = step;
+        r.liveRecHitPad = Number(sl?.lastLiveHitPad);
+        const hitSample = Number(sl?.lastLiveHitSample ?? 0), ls = Number(sl?.seqLoopStartSample ?? 0);
+        const rel = hitSample > 0 && ls > 0 ? (((hitSample - ls) % loopSamples) + loopSamples) % loopSamples : NaN;
+        r.liveRecOffsetSamples = step >= 0 && Number.isFinite(rel) ? Math.round(Math.min(Math.abs(rel - step * stepSamples), loopSamples - Math.abs(rel - step * stepSamples))) : null;
+        r.liveRecExact = r.liveRecOffsetSamples !== null && r.liveRecOffsetSamples <= 1;
+        this.engine.stopLiveRecord();
+        // the drums: lane 0 (bound in part 4) live-recorded on the engine clock while the drums play (they started with PLAY)
+        let drumOk: boolean | null = null;
+        if (this.drums && this.drumShadow) {
+          const ds = this.drums;
+          const key = ds.getState().tracks[0]?.key;
+          if (key && ds.getState().playing) {
+            const rows = [...(ds.getState().pattern[key] ?? [])]; // a COPY: the engine mutates the row in place
+            const on0 = rows.filter(Boolean).length;
+            ds.startLiveRec();
+            const trigD = this.stats.drumHits;
+            ds.liveHit(0, performance.now());
+            for (let t = 0; t < 40 && (this.stats.drumHits === trigD || Number(this.latestSnapshot?.lastLiveHitPad) !== 64); t++) await new Promise((res) => setTimeout(res, 50));
+            await new Promise((res) => setTimeout(res, 120)); // the drum engine flushes its live writes on its 25 ms tick
+            const sd = this.latestSnapshot;
+            const rowsAfter = ds.getState().pattern[key] ?? [];
+            const spb = Number(sd?.drumStepCount ?? 0) / Math.max(1, ds.getState().bars);
+            const dStep = 60 / (Number(sd?.seqBpm) || 240) * 4 / (spb || 96) * sr; // the EXACT step length (fractional samples — the engine's grid is double)
+            let wrote = -1;
+            for (let i = 0; i < rowsAfter.length; i++) if (rowsAfter[i] && !rows[i]) { wrote = i; break; }
+            const dHit = Number(sd?.lastLiveHitSample ?? 0), dls = Number(sd?.drumLoopStartSample ?? 0), dLoop = dStep * rowsAfter.length;
+            const dRel = dHit > 0 && dLoop > 0 ? (((dHit - dls) % dLoop) + dLoop) % dLoop : NaN;
+            r.drumLiveRec = { wroteStep: wrote, before: on0, after: rowsAfter.filter(Boolean).length, hitPad: Number(sd?.lastLiveHitPad), offsetSamples: wrote >= 0 && Number.isFinite(dRel) ? Math.round(Math.min(Math.abs(dRel - wrote * dStep), dLoop - Math.abs(dRel - wrote * dStep))) : null };
+            drumOk = wrote >= 0 && Number(sd?.lastLiveHitPad) === 64 && r.drumLiveRec.offsetSamples !== null && r.drumLiveRec.offsetSamples <= 1;
+            ds.stopLiveRec();
+            if (wrote >= 0) ds.toggleStep(key, wrote); // leave the pattern as it was
+          }
+        }
+        r.drumLiveRecOk = drumOk;
+        this.engine.stopSeq();
+        for (let t = 0; t < 40 && this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+        if (step >= 0) this.engine.toggleSeqStep(step, 62);
+        this.engine.setInputQuantize(wasIq);
+        r.liveRecOk = r.liveRecArmed && r.liveRecHitPad === 62 && step >= 0 && r.liveRecExact && (drumOk === null || drumOk);
+      } else r.liveRecOk = null;
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true)) : true);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true) && (this.engine.liveClockHook ? r.liveRecOk === true : true)) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;

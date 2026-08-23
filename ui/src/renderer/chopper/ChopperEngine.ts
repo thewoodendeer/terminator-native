@@ -706,7 +706,7 @@ export class ChopperEngine {
    *  hear — while the voice records, LEDs, playhead, chokes and the sequencer's own scheduled voices keep
    *  working unchanged. Null (Electron / web) = no-op. The sequencer's scheduled voices (scheduleSeqStepAudio)
    *  are NOT muted: the chop sequencer stays Web Audio until the native transport lands (Phase 3). */
-  voiceSink: { start(padIdx: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean): void; stop(padIdx: number): void; release(padIdx: number): void } | null = null;
+  voiceSink: { start(padIdx: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean, atSample?: number): void; stop(padIdx: number): void; release(padIdx: number): void } | null = null;
   /** Route live-hit voices into a silent bus (the native engine sounds instead). Set with voiceSink. */
   mutePadVoices = false;
   /** NATIVE TRANSPORT (Terminator 3.0, Phase 3.2 — nativeEngineShadow.ts): when set, the chop sequencer RUNS IN THE
@@ -730,6 +730,14 @@ export class ChopperEngine {
   /** NATIVE ARP (3.6): when set, holding a pad with ARP on steps in the C++ engine on the sample clock (no setTimeout
    *  jitter); a native-owned MIDI hit is already arping there. Null = the timer arp below. */
   arpSink: { hold(pad: number, velocity: number): void; release(pad: number): void } | null = null;
+  /** NATIVE LIVE-RECORD CLOCK (3.7, nativeEngineShadow.ts): when set, a live hit's musical time and its landed line
+   *  are measured on the ENGINE's clock — `hitElapsedSec(eventTimestamp)` = seconds from the audible loop start (the
+   *  engine's own loop-start sample) to the hit's HEARD instant (the input's performance stamp → NativeClock; the
+   *  native device's output latency, not this AudioContext's), null when the native transport is not running;
+   *  `sampleAt(elapsedSec)` = the absolute engine sample of a point on the loop (the booked hit goes out as that
+   *  sample — no ctx-time round trip); `outputLatencySec()` = the native device's output latency (the latency
+   *  readout + the playhead compensation read it). Null (Electron / web) = the AudioContext math below. */
+  liveClockHook: { hitElapsedSec(eventTimestamp?: number): number | null; sampleAt(elapsedSec: number): number; outputLatencySec(): number } | null = null;
   /** A pending count-in's DOWNBEAT as a ctx time (scheduleCountIn sets it; the downbeat's transport start consumes
    *  it — playSeq / takeCountInDownbeat) so the "1" lands exactly where the clicks said, not at "now + lead" when the
    *  timer happened to fire. NaN = none. */
@@ -2750,6 +2758,9 @@ export class ChopperEngine {
    *  Both the playhead and the latency readout read this, so what the meter
    *  claims and what the playhead compensates for can never drift apart. */
   private hwLatencySec(): number {
+    // NATIVE (3.7): what is heard is the native device — its reported output latency, not this WebView context's
+    const nat = this.liveClockHook?.outputLatencySec() ?? 0;
+    if (nat > 0) return nat;
     const outLat = this.ctx.outputLatency ?? 0;
     return outLat > 0 ? outLat : (0.02 + (this.ctx.baseLatency ?? 0));
   }
@@ -2758,6 +2769,7 @@ export class ChopperEngine {
    *  falling back to the 20ms estimate — the readout says which it is, because
    *  an estimate presented as a measurement is worse than no number. */
   private hwLatencyMeasured(): boolean {
+    if ((this.liveClockHook?.outputLatencySec() ?? 0) > 0) return true; // the native device reports it
     return (this.ctx.outputLatency ?? 0) > 0;
   }
 
@@ -4210,7 +4222,7 @@ export class ChopperEngine {
    *  fall out of sync, then pick back up). The chokes run on a timer at
    *  `when` — a few ms of timer jitter on a 3 ms fade is inaudible; the
    *  audio start itself is exact. */
-  triggerPadAt(padIdx: number, when: number, velocity = 1, opts?: { reverse?: boolean; nativeOwned?: boolean }): void {
+  triggerPadAt(padIdx: number, when: number, velocity = 1, opts?: { reverse?: boolean; nativeOwned?: boolean; atSample?: number }): void {
     if (this.lockedPadFrom !== null && padIdx >= this.lockedPadFrom) return;
     const pad = this.pads[padIdx];
     if (!pad) return;
@@ -4239,7 +4251,7 @@ export class ChopperEngine {
       if (i >= 0) this.loopTimers.splice(i, 1);
     }, delay);
     this.loopTimers.push(timer);
-    this.startVoice(padIdx, velocity, opts?.reverse, when, opts?.nativeOwned);
+    this.startVoice(padIdx, velocity, opts?.reverse, when, opts?.nativeOwned, opts?.atSample);
   }
 
   private _doTrigger(padIdx: number, velocity: number, eventTimestamp?: number, opts?: { reverse?: boolean; nativeOwned?: boolean }): void {
@@ -4293,7 +4305,13 @@ export class ChopperEngine {
     const eventLagSec = eventTimestamp !== undefined
       ? Math.max(0, Math.min(0.05, (performance.now() - eventTimestamp) / 1000))
       : 0;
-    const hitTime = this.ctx.currentTime - eventLagSec - this.hwLatencySec();
+    // NATIVE (3.7): the hit's musical time on the ENGINE clock — the input's stamp → the heard engine sample (the
+    // native device's latency) against the engine's own loop start; no AudioContext time in the chain (WebKit's
+    // currentTime is render-quantum coarse). null = the transport is not running natively → the ctx math below.
+    const nativeElapsed = this.liveClockHook ? this.liveClockHook.hitElapsedSec(eventTimestamp) : null;
+    const hitTime = nativeElapsed !== null
+      ? this.seqCurrentLoopStart + nativeElapsed
+      : this.ctx.currentTime - eventLagSec - this.hwLatencySec();
 
     // LIVE record (looper): each hit lands on the nearest grid line for the
     // current resolution — and the AUDIBLE hit snaps too (his ask 2026-08-20:
@@ -4319,8 +4337,11 @@ export class ChopperEngine {
         // within 120 ms of the step owns it) lives in RT code — a pad already on the step is always "booked".
         const booked = wasOn && (this.seqSink ? true : lineT <= this.seqScheduledUpTo);
         if (!booked) {
-          if (lineT > this.ctx.currentTime + 0.002) {
-            this.triggerPadAt(padIdx, lineT, velocity, opts);
+          // NATIVE: the landed line as an ENGINE sample (the engine fires it there, or at once when it is already
+          // past) — never a second ctx → sample mapping
+          const atSample = nativeElapsed !== null && this.liveClockHook ? this.liveClockHook.sampleAt(lineT - this.seqCurrentLoopStart) : 0;
+          if (atSample > 0 || lineT > this.ctx.currentTime + 0.002) {
+            this.triggerPadAt(padIdx, lineT, velocity, atSample > 0 ? { ...opts, atSample } : opts);
             this.lastLivePadHit.set(padIdx, lineT);
           } else {
             this.chokeGroup(padIdx);
@@ -4378,7 +4399,7 @@ export class ChopperEngine {
   /** @param nativeOwned Terminator 3.0: the native engine already played this hit itself (a MIDI note on the direct
    *  MidiHub → engine path) — the shadow must not trigger it again; everything else (voice record, LEDs, chokes,
    *  recording) runs as usual. */
-  private startVoice(padIdx: number, velocity: number, reverseOverride?: boolean, when?: number, nativeOwned = false): void {
+  private startVoice(padIdx: number, velocity: number, reverseOverride?: boolean, when?: number, nativeOwned = false, atSample?: number): void {
     if (this.ctx.state === 'closed') return;
     this.lastTriggeredPad = padIdx;
     const pad = this.pads[padIdx];
@@ -4531,7 +4552,7 @@ export class ChopperEngine {
       this.voices.set(padIdx, lv);
       this.activePadSet.add(padIdx);
       this.emitActivity();
-      this.voiceSink?.start(padIdx, velocity, when, reverseOverride, nativeOwned);
+      this.voiceSink?.start(padIdx, velocity, when, reverseOverride, nativeOwned, atSample);
       return;
     }
 
@@ -4585,7 +4606,7 @@ export class ChopperEngine {
     this.voices.set(padIdx, voice);
     this.activePadSet.add(padIdx);
     this.emitActivity();
-    this.voiceSink?.start(padIdx, velocity, when, reverseOverride, nativeOwned);
+    this.voiceSink?.start(padIdx, velocity, when, reverseOverride, nativeOwned, atSample);
   }
 
   /** LIVE stem toggle (his ask 2026-08-20: hear the chips without restarting

@@ -84,6 +84,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     # count-in in the engine and the transport starts ON its downbeat (the page took the exact anchor → ≤ 3 samples);
     # the ARP holds/steps/releases natively
     grep -Eq '"metroPageOk": ?true' "$OUT" || { echo "::error::the metronome / count-in / arp did not run natively (metroPageOk false — see metroEnabled / metroClicks / metroOnGrid / metroStops / countInRan / countInClicks / countInTransportStarted / countInExact / arpOk)"; exit 1; }
+    # Phase 3.7: a live-recorded hit (with its input stamp) lands on the engine clock — the page wrote the step and the
+    # engine got the hit at that line's exact sample (chop pad 62 + drum lane 0)
+    grep -Eq '"liveRecOk": ?true' "$OUT" || { echo "::error::live record did not land on the engine clock (liveRecOk false — see liveRecArmed / liveRecStep / liveRecHitPad / liveRecOffsetSamples / drumLiveRec)"; exit 1; }
+    echo "live record on the engine clock OK: chop step=$(grep -Eo '"liveRecStep": ?-?[0-9]+' "$OUT") offset=$(grep -Eo '"liveRecOffsetSamples": ?[-0-9.e]+|"liveRecOffsetSamples": ?null' "$OUT") drums=$(grep -Eo '"drumLiveRec": ?\{[^}]*\}' "$OUT")"
     echo "metronome + count-in + arp native OK: $(grep -Eo '"metroLastClick": ?\{[^}]*\}' "$OUT") countIn offset=$(grep -Eo '"countInOffsetSamples": ?[-0-9.e]+|"countInOffsetSamples": ?null' "$OUT") anchorTaken=$(grep -Eo '"countInAnchorTaken": ?(true|false)' "$OUT") arpHits=$(grep -Eo '"arpHits": ?[0-9]+' "$OUT" | head -1)"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else

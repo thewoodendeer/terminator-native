@@ -71,12 +71,18 @@ interface LaneVoice {
 export interface DrumSink {
   play(anchorCtxTime: number, stepOffset: number): void;
   stop(): void;
-  /** One hit (a hand-played lane / the header preview) — `whenCtx` undefined = now. */
-  hit(track: TrackKey, volume: number, whenCtx: number | undefined, pan: number): void;
+  /** One hit (a hand-played lane / the header preview) — `whenCtx` undefined = now; `atSample` (3.7) = the exact
+   *  engine sample a live-recorded hit landed on (wins over whenCtx). */
+  hit(track: TrackKey, volume: number, whenCtx: number | undefined, pan: number, atSample?: number): void;
   schedulePattern(pattern: Record<TrackKey, boolean[]>, atCtxTime: number): void;
   clearScheduledPatterns(): void;
   /** Seconds since the audible loop start, at the ear, from the engine's own clock (null = unknown). */
   elapsedSec(): number | null;
+  /** 3.7: a live hit's musical time — seconds from the audible loop start to the hit's HEARD instant on the engine
+   *  clock (the input's performance stamp; the native device's output latency), null = not running natively. */
+  hitElapsedSec?(eventTimestamp?: number): number | null;
+  /** 3.7: the absolute engine sample of a point `elapsedSec` after the audible loop start (0 = unknown). */
+  sampleAt?(elapsedSec: number): number;
   /** The lead a standalone PLAY needs so the engine renders the anchor in time (default 20 ms). */
   leadSec?(): number;
 }
@@ -2083,11 +2089,11 @@ export class DrumEngine {
    *  the moment it lands — at `when` if that is still ahead, else now; a hit is
    *  never dropped for being cold, and the registry is only ever touched from
    *  emitVoice, so two cold hits resolving out of order cannot cross wires. */
-  private playHit(track: TrackKey, sampleIndex: number, volume: number, when: number, pan = 0, chokeAt?: number): Promise<void> {
+  private playHit(track: TrackKey, sampleIndex: number, volume: number, when: number, pan = 0, chokeAt?: number, atSample?: number): Promise<void> {
     if (this.drumSink) {
       // NATIVE: the hit plays on the C++ lane (sub-hits never reach here — the TS scheduler is off); keep the decoded
       // buffer warm so the shadow can mirror the lane
-      if (chokeAt === undefined) this.drumSink.hit(track, volume, when, pan);
+      if (chokeAt === undefined) this.drumSink.hit(track, volume, when, pan, atSample);
       if (!this.cachedBuffer(track, sampleIndex)) void this.loadSample(track, sampleIndex);
       return Promise.resolve();
     }
@@ -2277,7 +2283,7 @@ export class DrumEngine {
    *  to full gain when a track is at 0 so an explicit tap is never silent.
    *  Resumes a suspended AudioContext SYNCHRONOUSLY so the first hit isn't
    *  delayed by a cold context. */
-  playLive(track: TrackKey, offsetSec = 0, when?: number): void {
+  playLive(track: TrackKey, offsetSec = 0, when?: number, atSample?: number): void {
     const t = this.state.tracks.find(x => x.key === track);
     if (!t) return;
     if (this.ctx.state !== 'running') void this.ctx.resume();
@@ -2289,7 +2295,7 @@ export class DrumEngine {
     // scheduler can skip the pattern's copy of the SAME hit (a live-recorded
     // step) instead of double-firing and self-choking the hand voice short.
     this.lastLiveHit[track] = at;
-    void this.playHit(track, t.sampleIndex, vol, at);
+    void this.playHit(track, t.sampleIndex, vol, at, 0, undefined, atSample);
     // A human hit this pad — tell whoever cares (the bar-graph editor follows
     // it). AFTER the audio is scheduled, so a listener can never delay a hit.
     this.firePadHit(track);
@@ -2374,14 +2380,20 @@ export class DrumEngine {
       ? Math.max(0, Math.min(0.05, (performance.now() - eventTimestamp) / 1000)) : 0;
     const quantizing = this.state.liveRecording && this.state.playing && !this.state.gridOff;
     const stepDur = this.stepDurSec();
+    // NATIVE (3.7): the hit's musical time on the ENGINE clock (the input's stamp → the heard engine sample against the
+    // engine's own loop start) — null = not running natively → the ctx math (now − lag − output latency)
+    const nativeEl = this.state.playing && this.drumSink?.hitElapsedSec ? this.drumSink.hitElapsedSec(eventTimestamp) : null;
     if (!quantizing || stepDur <= 0) {
       // Schedule as early as the input allows (never in the past) — the MIDI
       // path's old inline compensation, now shared by every input.
       this.playLive(track.key, 0, lag > 0 ? Math.max(now, now - lag + (this.ctx.baseLatency ?? 0)) : undefined);
-      if (this.state.liveRecording) this.recordLiveHit(trackIndex, now - lag);
+      if (this.state.liveRecording) {
+        if (nativeEl !== null) this.recordLiveHitAt(trackIndex, this.playStartTime + nativeEl); // musical time already
+        else this.recordLiveHit(trackIndex, now - lag);
+      }
       return;
     }
-    const intent = now - lag - this.outLatSec();
+    const intent = nativeEl !== null ? this.playStartTime + nativeEl : now - lag - this.outLatSec();
     // INPUT QUANTIZE strength (the fader next to SWING): the audible hit is
     // pulled toward its nearest grid line by the same fraction the write is —
     // 100 waits for the line, 0 sounds at the exact played time, between =
@@ -2398,7 +2410,12 @@ export class DrumEngine {
     // stamps lastLiveHit → the scheduler skips its copy).
     // NATIVE: the engine fires the pattern's copy itself (one owner per hit, in RT code) — the hand copy is skipped
     const booked = !!r?.wasOn && (this.drumSink ? true : lineT <= this.nextStepTime);
-    if (!booked) this.playLive(track.key, 0, Math.max(now, intent + s * (lineT - intent)));
+    if (!booked) {
+      // NATIVE: the audible (quantized) instant as an ENGINE sample — the engine fires it there (or at once when past)
+      const audibleEl = nativeEl !== null ? nativeEl + s * (nearest * gridDur - nativeEl) : NaN;
+      const atSample = nativeEl !== null && this.drumSink?.sampleAt ? this.drumSink.sampleAt(audibleEl) : 0;
+      this.playLive(track.key, 0, Math.max(now, intent + s * (lineT - intent)), atSample > 0 ? atSample : undefined);
+    }
   }
 
   recordLiveHit(trackIndex: number, hitAudioContextTime: number): void {

@@ -82,8 +82,10 @@ export class NativeDrumShadow {
   attach(): void {
     this.drums.drumSink = {
       play: (anchor, stepOffset) => this.play(anchor, stepOffset),
+      hitElapsedSec: (ts) => this.hitElapsedSec(ts),
+      sampleAt: (el) => this.loopSampleAt(el),
       stop: () => this.queue(() => this.host.cmd({ type: 'drumStop' })),
-      hit: (track, volume, when, pan) => this.hit(track, volume, when, pan),
+      hit: (track, volume, when, pan, atSample) => this.hit(track, volume, when, pan, atSample),
       schedulePattern: (pattern, at) => this.queue(() => this.sendPattern(pattern, this.drums.getState().bars, 'scheduleDrumPattern', at)),
       clearScheduledPatterns: () => this.queue(() => this.host.cmd({ type: 'clearDrumPatterns' })),
       elapsedSec: () => this.elapsedSec(),
@@ -244,7 +246,7 @@ export class NativeDrumShadow {
       await this.host.cmd({ type: 'drumPlay', atSample: atSample > 0 ? atSample : 0, stepOffset: Math.max(0, Math.floor(stepOffset)) });
     });
   }
-  private hit(track: TrackKey, volume: number, when: number | undefined, pan: number): void {
+  private hit(track: TrackKey, volume: number, when: number | undefined, pan: number, atSampleExact?: number): void {
     if (this.detached) return;
     const lane = this.slotOf(track);
     if (lane < 0) return;
@@ -252,7 +254,8 @@ export class NativeDrumShadow {
     const pad = DRUM_PAD_BASE + lane;
     const vel = Math.max(0, Math.min(1, volume));
     const p = Math.max(-1, Math.min(1, pan || 0));
-    const atSample = when !== undefined && this.host.clock.ready ? Math.round(this.host.clock.sampleAtCtxTime(when, ctxPair(this.host.ctx))) : 0;
+    // 3.7: a live-recorded hit arrives as the exact engine sample it landed on (no ctx round trip); else the ctx mapping
+    const atSample = atSampleExact && atSampleExact > 0 ? Math.round(atSampleExact) : (when !== undefined && this.host.clock.ready ? Math.round(this.host.clock.sampleAtCtxTime(when, ctxPair(this.host.ctx))) : 0);
     const fire = async () => {
       this.host.note('hits', 1);
       const c: AnyRecord = { type: 'triggerPad', pad, velocity: vel };
@@ -263,6 +266,25 @@ export class NativeDrumShadow {
     const delayMs = when !== undefined && atSample <= 0 ? (when - this.host.ctx.currentTime) * 1000 : 0;
     const go = () => { this.chain[lane] = this.chain[lane].then(fire).catch(() => {}); };
     if (delayMs > 2) setTimeout(go, delayMs); else go();
+  }
+  /** 3.7: a live hit's musical time — seconds from the audible loop start to the hit's HEARD instant on the engine
+   *  clock (`ts` = the input's performance stamp, clamped to the TS 50 ms handler-lag window; undefined = now). */
+  hitElapsedSec(ts?: number): number | null {
+    const snap = this.host.latestSnapshot();
+    if (!snap || !snap.drumPlaying || !this.host.clock.ready) return null;
+    const ls = Number(snap.drumLoopStartSample);
+    if (!Number.isFinite(ls)) return null;
+    const now = performance.now();
+    const perf = ts !== undefined && Number.isFinite(ts) && ts > 0 ? Math.max(now - 50, Math.min(now, ts)) : now;
+    return (this.host.clock.sampleHeardAtPerfMs(perf) - ls) / this.host.clock.sampleRate;
+  }
+  /** 3.7: the absolute engine sample `el` seconds after the audible loop start (0 = unknown). */
+  loopSampleAt(el: number): number {
+    const snap = this.host.latestSnapshot();
+    if (!snap || !snap.drumPlaying || !this.host.clock.ready || !Number.isFinite(el)) return 0;
+    const ls = Number(snap.drumLoopStartSample);
+    if (!Number.isFinite(ls)) return 0;
+    return Math.round(ls + el * this.host.clock.sampleRate);
   }
   /** Seconds since the audible pass's step 0, at the ear — the playhead (null until the engine reports playing). */
   elapsedSec(): number | null {

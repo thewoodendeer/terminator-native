@@ -58,11 +58,11 @@ namespace
 {
 constexpr int kSnapshotHz = 20;
 constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
-constexpr int kProbeDelayTicksReact = 380; // 19 s — the React UI: fonts + first render + engines constructing, then
-                                           // the async checks (start at kProbeAsyncLeadTicks = 15 s before the read)
-constexpr int kProbeAsyncLeadTicks = 300;  // the shim round-trip checks start 15 s before the final read (the shadow's
-                                           // self-test alone runs ~9 s since 3.2–3.6 drive the native sequencers, the
-                                           // count-in and the arp)
+constexpr int kProbeDelayTicksReact = 420; // 21 s — the React UI: fonts + first render + engines constructing, then
+                                           // the async checks (start at kProbeAsyncLeadTicks = 17 s before the read)
+constexpr int kProbeAsyncLeadTicks = 340;  // the shim round-trip checks start 17 s before the final read (the shadow's
+                                           // self-test alone runs ~11 s since 3.2–3.7 drive the native sequencers, the
+                                           // count-in, the arp and the live-record landing)
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -1692,6 +1692,8 @@ void WebShell::timerCallback()
     obj->setProperty("drumActiveMask", static_cast<juce::int64>(s.drumActiveMask));
     obj->setProperty("lastTriggeredPad", s.lastTriggeredPad);
     obj->setProperty("lastTriggeredPadPositionSec", s.lastTriggeredPadPositionSec);
+    obj->setProperty("lastLiveHitPad", s.lastLiveHitPad);
+    obj->setProperty("lastLiveHitSample", static_cast<juce::int64>(s.lastLiveHitSample));
     obj->setProperty("seqPlaying", static_cast<bool>(s.seqPlaying));
     obj->setProperty("seqPaused", static_cast<bool>(s.seqPaused));
     obj->setProperty("seqLoop", static_cast<bool>(s.seqLoop));
