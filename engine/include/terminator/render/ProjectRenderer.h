@@ -39,7 +39,44 @@ struct ProjectRenderOptions
     int loops = 1;                    // how many times the current pattern repeats
     double tailSeconds = 0.5;         // extra time after the last note so tails ring out
     bool classicInterpolation = true; // linear = golden-match the Web Audio engine; false = hermite (native default)
+    /// Phase 4.5b: build the mix from the project's `mixer` blob (strips, sends, inserts, console) and route every
+    /// pad into its strip, so the export carries what the mixer is doing. False = the Phase-3 direct path.
+    bool useMixer = false;
+    /// TRACKOUTS: channel names to tap, in order, onto hardware pairs 1, 2, 3 … (pair 0 is the master). Every
+    /// tapped channel needs its own pair, so `numChannels` must be 2 × (1 + stemChannels.size()).
+    std::vector<juce::String> stemChannels;
+    /// The master's −1 dBFS safety limiter. The page always has it in, so exports carry it by default; off gives an
+    /// UNLIMITED master bounce, which is also what makes the master exactly the sum of its trackouts.
+    bool masterLimiter = true;
 };
+
+/// The page's strip numbering (renderer/native/nativeMixerShadow.ts): the fixed names take fixed indices so a
+/// project's strip is the same strip session after session, and anything else takes the next free slot from 13.
+/// Shared by the export path and the tests.
+class StripNamer
+{
+  public:
+    /// The index for a channel name, allocating one on first sight. −1 when all 63 are taken.
+    int operator()(const juce::String& name);
+    /// Every name seen so far, with its index and whether it is a send return.
+    const std::vector<std::pair<juce::String, int>>& seen() const noexcept { return seen_; }
+    static bool isSend(const juce::String& name) { return name.startsWith("send"); }
+
+  private:
+    std::vector<std::pair<juce::String, int>> seen_;
+    int next_ = 13;
+};
+
+/// The strip a pad plays through — the page's `padRoute`: the pad's own override, else its source's route, else
+/// 'sample'.
+juce::String padRouteName(const juce::ValueTree& project, int pad);
+
+/// The project's `mixer` blob (the page's MixerPreset: channels / master / console) → a RenderMixerSpec. Channels
+/// the blob does not mention still get a default strip if `extraChannels` names them (a pad routed to a channel the
+/// user never touched). `namer` carries the name → index allocation.
+RenderMixerSpec buildMixerSpec(const juce::ValueTree& project, StripNamer& namer,
+                               const std::vector<juce::String>& extraChannels,
+                               const std::vector<juce::String>& stemChannels, bool masterLimiter = true);
 
 /// The region's audio as the voice will read it (base, or the lit planes summed), reversed when the pad is —
 /// the input to the LOOP render (TS loopBufferFor renders from the resolved, already-reversed source buffer).

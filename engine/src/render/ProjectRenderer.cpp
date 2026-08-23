@@ -4,6 +4,8 @@
 #include <cmath>
 #include <vector>
 
+#include "terminator/core/fx/ConsoleStage.h"
+#include "terminator/core/fx/Effect.h"
 #include "terminator/core/planners/LoopRender.h"
 #include "terminator/core/planners/StemMask.h"
 #include "terminator/model/Ids.h"
@@ -116,6 +118,181 @@ std::shared_ptr<SampleBuffer> renderPadLoop(const SampleBuffer& base, const Stem
     return out;
 }
 
+// ── Phase 4.5b: the project's mixer → the render spec ──────────────────────────────────────────────────────────
+
+int StripNamer::operator()(const juce::String& name)
+{
+    // the page's fixed numbering (nativeMixerShadow.ts FIXED_STRIPS + CLICK_STRIP): a project's strip is the same
+    // strip every session, so a saved chain lands where it was saved
+    static const std::pair<const char*, int> kFixed[] = {{"sample", 1},  {"kick", 2},   {"snare", 3},  {"hat", 4},
+                                                         {"openhat", 5}, {"perc", 6},   {"bass", 7},   {"send1", 8},
+                                                         {"send2", 9},   {"send3", 10}, {"send4", 11}, {"click", 12}};
+    for (const auto& [n, i] : kFixed)
+        if (name == n)
+        {
+            for (const auto& sn : seen_)
+                if (sn.first == name)
+                    return sn.second;
+            seen_.emplace_back(name, i);
+            return i;
+        }
+    for (const auto& sn : seen_)
+        if (sn.first == name)
+            return sn.second;
+    if (next_ >= kMaxStrips)
+        return -1;
+    const int i = next_++;
+    seen_.emplace_back(name, i);
+    return i;
+}
+
+juce::String padRouteName(const juce::ValueTree& project, int pad)
+{
+    const auto padRoutes = project.getChildWithName(ids::PadRoutes);
+    const auto own = mapGet(padRoutes, juce::String(pad), {});
+    if (own.isString() && own.toString().isNotEmpty())
+        return own.toString();
+    const ProjectPlanner planner(project);
+    const auto key = planner.padSourceKey(pad);
+    if (key.isNotEmpty())
+    {
+        const auto viaSource = mapGet(project.getChildWithName(ids::SourceRoutes), key, {});
+        if (viaSource.isString() && viaSource.toString().isNotEmpty())
+            return viaSource.toString();
+    }
+    return "sample";
+}
+
+namespace
+{
+/// One serialized insert ({id, bypassed, params}) → a RenderFxSpec, mapping the page's KEYS and its enum OPTION
+/// STRINGS through the same lookups the live bridge uses (fxTypeFromId / fxParamIndex / fxOptionIndex). SC COMP's
+/// SOURCE is a channel NAME on the page and a strip INDEX natively, exactly as nativeMixerShadow.fxValue() does it.
+bool readFx(const juce::var& v, StripNamer& namer, RenderFxSpec& out)
+{
+    if (!v.isObject())
+        return false;
+    const auto id = v.getProperty("id", "").toString();
+    const FxType t = fxTypeFromId(id.toRawUTF8());
+    if (t == FxType::none)
+        return false; // a device this build does not know: skip it rather than shift every slot after it
+    out.type = t;
+    out.bypass = static_cast<bool>(v.getProperty("bypassed", false));
+    const auto params = v.getProperty("params", juce::var());
+    if (auto* po = params.getDynamicObject())
+        for (const auto& kv : po->getProperties())
+        {
+            const int idx = fxParamIndex(t, kv.name.toString().toRawUTF8());
+            if (idx < 0)
+                continue;
+            if (kv.value.isString())
+            {
+                const auto str = kv.value.toString();
+                const int opt = fxOptionIndex(t, idx, str.toRawUTF8());
+                if (opt >= 0)
+                    out.params.emplace_back(idx, static_cast<float>(opt));
+                else if (t == FxType::sccomp && idx == 0) // SOURCE: a channel name, or NONE
+                    out.params.emplace_back(idx, str == "NONE" ? -1.0f : static_cast<float>(namer(str)));
+            }
+            else
+                out.params.emplace_back(idx, static_cast<float>(static_cast<double>(kv.value)));
+        }
+    return true;
+}
+} // namespace
+
+RenderMixerSpec buildMixerSpec(const juce::ValueTree& project, StripNamer& namer,
+                               const std::vector<juce::String>& extraChannels,
+                               const std::vector<juce::String>& stemChannels, bool masterLimiter)
+{
+    RenderMixerSpec mix;
+    mix.enabled = true;
+    mix.limiter = masterLimiter; // the page's master always carries its −1 dBFS safety limiter
+    const auto blob = project.getProperty(ids::mixer);
+
+    // the master first (strip 0), then every channel the blob names
+    RenderStripSpec master;
+    master.index = kMasterStrip;
+    master.kind = StripKind::master;
+    const auto masterV = blob.getProperty("master", juce::var());
+    if (masterV.isObject())
+    {
+        master.faderDb = static_cast<float>(static_cast<double>(masterV.getProperty("fader", 0.0)));
+        if (auto* fxs = masterV.getProperty("fx", juce::var()).getArray())
+            for (const auto& f : *fxs)
+            {
+                RenderFxSpec fx;
+                if (readFx(f, namer, fx))
+                    master.fx.push_back(std::move(fx));
+            }
+    }
+    mix.strips.push_back(std::move(master));
+
+    std::vector<juce::String> names;
+    auto want = [&names](const juce::String& n)
+    {
+        for (const auto& e : names)
+            if (e == n)
+                return;
+        names.push_back(n);
+    };
+    const auto channels = blob.getProperty("channels", juce::var());
+    if (auto* co = channels.getDynamicObject())
+        for (const auto& kv : co->getProperties())
+            want(kv.name.toString());
+    for (const auto& n : extraChannels)
+        want(n);
+    for (const auto& n : stemChannels)
+        want(n);
+
+    for (const auto& name : names)
+    {
+        RenderStripSpec st;
+        st.index = namer(name);
+        if (st.index < 0)
+            continue;
+        st.kind = StripNamer::isSend(name) ? StripKind::send : StripKind::channel;
+        st.seed = ConsoleStage::fnv1a(name.toRawUTF8()); // the page seeds the desk stage by the strip NAME
+        const auto c = channels.getProperty(juce::Identifier(name), juce::var());
+        if (c.isObject())
+        {
+            st.faderDb = static_cast<float>(static_cast<double>(c.getProperty("fader", 0.0)));
+            st.pan = static_cast<float>(static_cast<double>(c.getProperty("pan", 0.0)));
+            st.mute = static_cast<bool>(c.getProperty("mute", false));
+            st.solo = static_cast<bool>(c.getProperty("solo", false));
+            if (auto* sends = c.getProperty("sends", juce::var()).getArray())
+                for (int k = 0; k < kMaxSends && k < sends->size(); ++k)
+                    st.sendDb[k] = static_cast<float>(static_cast<double>((*sends)[k]));
+            if (auto* fxs = c.getProperty("fx", juce::var()).getArray())
+                for (const auto& f : *fxs)
+                {
+                    RenderFxSpec fx;
+                    if (readFx(f, namer, fx))
+                        st.fx.push_back(std::move(fx));
+                }
+        }
+        // the four sends always target the send returns, exactly as the page wires them
+        for (int k = 0; k < kMaxSends; ++k)
+            st.sendTarget[k] = namer("send" + juce::String(k + 1));
+        for (std::size_t i = 0; i < stemChannels.size(); ++i)
+            if (stemChannels[i] == name)
+                st.stemTap = static_cast<int>(i) + 1; // pair 0 is the master's
+        mix.strips.push_back(std::move(st));
+    }
+
+    const auto con = blob.getProperty("console", juce::var());
+    if (con.isObject())
+    {
+        mix.consoleOn = static_cast<bool>(con.getProperty("on", false));
+        mix.consoleAmount = static_cast<float>(static_cast<double>(con.getProperty("amount", 50.0)));
+        const auto fl = con.getProperty("flavour", "ssl").toString();
+        mix.consoleFlavour = fl == "neve"  ? ConsoleFlavour::neve
+                             : fl == "api" ? ConsoleFlavour::api
+                                           : ConsoleFlavour::ssl;
+    }
+    return mix;
+}
+
 RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBank& bank,
                                   const ProjectRenderOptions& opts)
 {
@@ -129,6 +306,8 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
                                              : static_cast<double>(project.getProperty(ids::chopVolume, 1.0)));
 
     ProjectPlanner planner(project);
+    StripNamer namer;
+    std::vector<juce::String> routed; // every channel a pad actually plays through
     // choke-group strings → stable ints (pads of one source choke each other; 'none' = poly = -2)
     std::map<juce::String, int> chokeIds;
     auto chokeInt = [&](int pad) -> int
@@ -262,6 +441,15 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         p.params.reverse = reversed ? 1 : 0;
         p.params.chokeGroup = static_cast<std::int16_t>(chokeInt(idx));
         p.params.interpolation = opts.classicInterpolation ? Interpolation::linear : Interpolation::hermite;
+        if (opts.useMixer)
+        {
+            // the page's padRoute: this pad sums into its channel's strip, not straight to the outs
+            const auto route = padRouteName(project, idx);
+            const int strip = namer(route);
+            p.params.strip = static_cast<std::int16_t>(strip);
+            if (strip >= 0)
+                routed.push_back(route);
+        }
         if (looping && p.endFrame > p.startFrame)
             p.loopSample = renderPadLoop(*buffer, useStems ? planes : nullptr, mask, p.startFrame,
                                          p.endFrame - p.startFrame, fadeIn, fadeOut, reversed, p.loopStart, p.loopEnd);
@@ -300,6 +488,10 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
     }
     (void)resolution;
     spec.lengthSeconds = std::max(patternDur * std::max(1, opts.loops), lastEnd) + opts.tailSeconds;
+    // the mix LAST: the strips a pad routed to must exist, and the namer has been handing out their indices as the
+    // pads asked for them, so the blob's channels and the routed ones land on the same numbering
+    if (opts.useMixer)
+        spec.mixer = buildMixerSpec(project, namer, routed, opts.stemChannels, opts.masterLimiter);
     return spec;
 }
 
