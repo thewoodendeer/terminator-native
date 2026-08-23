@@ -108,6 +108,21 @@ class DelayLine
     double maxD_ = 0.0;
 };
 
+/// An integer delay (the PDC lines): an exact-size ring of maxDelay + maxBlock doubles; delay 0 = a true pass-through.
+class IntDelay
+{
+  public:
+    void prepare(int maxDelaySamples, int maxBlockSize); // non-RT
+    void reset() noexcept TERMINATOR_NONBLOCKING;
+    /// In place: out[i] = in[i − delay] (delay clamped to [0, maxDelay]).
+    void process(double* x, int numSamples, int delaySamples) noexcept TERMINATOR_NONBLOCKING;
+    int maxDelay() const noexcept { return maxDelay_; }
+
+  private:
+    std::vector<double> buf_;
+    int size_ = 0, head_ = 0, maxDelay_ = 0;
+};
+
 /// OscillatorNode shapes from phase φ ∈ [0, 1): sine starts at 0 rising; triangle starts at 0 rising (the
 /// band-limiting of a sub-10 Hz LFO is moot).
 inline double lfoSine(double phase) noexcept TERMINATOR_NONBLOCKING

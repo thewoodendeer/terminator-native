@@ -368,6 +368,9 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::mixerSetLimiter:
         mixer_->setMasterLimiter(c.payload.strip.flag != 0);
         break;
+    case CommandType::mixerSetPdc:
+        mixer_->setPdc(c.payload.strip.flag != 0);
+        break;
     case CommandType::mixerSetConsole:
         mixer_->setConsole(c.payload.strip.flag != 0,
                            static_cast<ConsoleFlavour>(c.payload.strip.kind > 2 ? 0 : c.payload.strip.kind),
@@ -709,6 +712,11 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.mixerFxRejected = mixer_->fxRejected();
     s.mixerConsoleOn = mixer_->consoleOn() ? 1 : 0;
     s.mixerLimiterOn = mixer_->masterLimiter() ? 1 : 0;
+    s.mixerPdcOn = mixer_->pdcOn() ? 1 : 0;
+    s.mixerPdcToMaster = static_cast<std::int32_t>(mixer_->pdcToMaster());
+    s.mixerPdcMaxChan = static_cast<std::int32_t>(mixer_->pdcMaxChan());
+    for (int i = 0; i < kMaxStrips; ++i)
+        s.stripPdc[i] = static_cast<std::int16_t>(mixer_->pdcDelay(i));
     for (int i = 0; i < kMaxStrips; ++i)
         for (int k = 0; k < 8; ++k)
             s.stripFxGr[i][k] = k < mixer_->fxCount(i) ? mixer_->fxGainReductionDb(i, k) : 0.0f;

@@ -162,6 +162,49 @@ void DelayLine::reset() noexcept TERMINATOR_NONBLOCKING
     head_ = 0;
 }
 
+// ---- IntDelay -----------------------------------------------------------------------------------------------
+
+void IntDelay::prepare(int maxDelaySamples, int maxBlockSize)
+{
+    maxDelay_ = std::max(0, maxDelaySamples);
+    size_ = maxDelay_ + std::max(1, maxBlockSize) + 1;
+    buf_.assign(static_cast<std::size_t>(size_), 0.0);
+    head_ = 0;
+}
+
+void IntDelay::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    std::fill(buf_.begin(), buf_.end(), 0.0);
+    head_ = 0;
+}
+
+void IntDelay::process(double* x, int n, int delaySamples) noexcept TERMINATOR_NONBLOCKING
+{
+    const int d = std::clamp(delaySamples, 0, maxDelay_);
+    double* b = buf_.data();
+    if (d == 0)
+    {
+        // bit-exact pass-through — the ring still records the input so a later delay reads real history
+        for (int i = 0; i < n; ++i)
+        {
+            b[head_] = x[i];
+            if (++head_ >= size_)
+                head_ = 0;
+        }
+        return;
+    }
+    for (int i = 0; i < n; ++i)
+    {
+        b[head_] = x[i];
+        int r = head_ - d;
+        if (r < 0)
+            r += size_;
+        x[i] = b[r];
+        if (++head_ >= size_)
+            head_ = 0;
+    }
+}
+
 // ---- Fft ----------------------------------------------------------------------------------------------------
 
 void Fft::prepare(int size)

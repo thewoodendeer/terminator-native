@@ -138,6 +138,11 @@ void Mixer::prepare(double sampleRate, int maxBlockSize, bool keepState)
     limiter_.prepare(static_cast<float>(sampleRate));
     limiter_.setPreDelayTime(0.006f);
     loudness_.prepare(sampleRate);
+    toMasterL_.prepare(kMaxPdcSamples, maxBlock_);
+    toMasterR_.prepare(kMaxPdcSamples, maxBlock_);
+    masterDirectL_.assign(static_cast<std::size_t>(n), 0.0);
+    masterDirectR_.assign(static_cast<std::size_t>(n), 0.0);
+    pdcMaxChan_ = pdcMaxBus_ = 0;
     // the settings survive a re-prepare (a device change): only the smoothed state + meters restart at the targets;
     // the insert chains are DROPPED (the pool re-prepares and frees every device — the page re-sends its chains)
     for (int i = 0; i < kMaxStrips; ++i)
@@ -160,6 +165,9 @@ void Mixer::prepare(double sampleRate, int maxBlockSize, bool keepState)
         s.console.prepare(sampleRate);
         s.console.configure(i == kMasterStrip, s.seed);
         s.console.set(consoleFlavour_, consoleAmount_ * 0.01f, true);
+        s.pdc = 0;
+        s.pdcL.prepare(kMaxPdcSamples, maxBlock_);
+        s.pdcR.prepare(kMaxPdcSamples, maxBlock_);
         const bool live = s.set.kind != StripKind::off;
         inputPtrs_[static_cast<std::size_t>(i) * 2] =
             live ? inputs_.data() + static_cast<std::size_t>(i) * 2 * n : trash_.data();
@@ -189,6 +197,7 @@ void Mixer::prepare(double sampleRate, int maxBlockSize, bool keepState)
             }
         }
     }
+    rebuildPdc();
     rebuildOrder();
 }
 
@@ -236,6 +245,8 @@ void Mixer::setStripKind(int strip, StripKind kind) noexcept TERMINATOR_NONBLOCK
             s.meter = StripMeter{};
             s.console.reset();
             s.console.set(consoleFlavour_, consoleAmount_ * 0.01f, true);
+            s.pdcL.reset();
+            s.pdcR.reset();
             std::fill_n(inputPtrs_[static_cast<std::size_t>(strip) * 2], n, 0.0);
             std::fill_n(inputPtrs_[static_cast<std::size_t>(strip) * 2 + 1], n, 0.0);
         }
@@ -248,6 +259,7 @@ void Mixer::setStripKind(int strip, StripKind kind) noexcept TERMINATOR_NONBLOCK
     updateSilence();
     if (live && !wasLive)
         s.muteCur = (silentMask_ >> strip) & 1u ? 0.0f : 1.0f;
+    rebuildPdc(); // a strip joining / leaving the mix changes maxChan / maxBus
     rebuildOrder();
 }
 
@@ -422,6 +434,7 @@ bool Mixer::addFx(int strip, FxType type) noexcept TERMINATOR_NONBLOCKING
     s.fxBypass[s.fxCount] = false;
     ++s.fxCount;
     rebuildKeyMask();
+    rebuildPdc();
     return true;
 }
 
@@ -443,6 +456,7 @@ bool Mixer::removeFx(int strip, int index) noexcept TERMINATOR_NONBLOCKING
     s.fx[s.fxCount] = nullptr;
     s.fxBypass[s.fxCount] = false;
     rebuildKeyMask();
+    rebuildPdc();
     return true;
 }
 
@@ -450,6 +464,41 @@ float Mixer::fxGainReductionDb(int strip, int index) const noexcept TERMINATOR_N
 {
     const auto& s = strips_[clampIdx(strip)];
     return (index >= 0 && index < s.fxCount && s.fx[index] != nullptr) ? s.fx[index]->gainReductionDb() : 0.0f;
+}
+
+void Mixer::rebuildPdc() noexcept TERMINATOR_NONBLOCKING
+{
+    // tier 1 = channels, tier 2 = sends + buses; the master is neither (its own chain latency is the mix's latency)
+    int maxChan = 0, maxBus = 0;
+    for (int i = 1; i < kMaxStrips; ++i)
+    {
+        const auto& s = strips_[i];
+        if (s.set.kind == StripKind::off)
+            continue;
+        const int own = std::min(chainLatencySamples(i), kMaxPdcSamples);
+        if (s.set.kind == StripKind::channel)
+            maxChan = std::max(maxChan, own);
+        else
+            maxBus = std::max(maxBus, own);
+    }
+    pdcMaxChan_ = maxChan;
+    pdcMaxBus_ = maxBus;
+    for (int i = 0; i < kMaxStrips; ++i)
+    {
+        auto& s = strips_[i];
+        if (i == kMasterStrip || s.set.kind == StripKind::off)
+        {
+            s.pdc = 0;
+            continue;
+        }
+        const int own = std::min(chainLatencySamples(i), kMaxPdcSamples);
+        s.pdc = std::max(0, (s.set.kind == StripKind::channel ? maxChan : maxBus) - own);
+    }
+}
+
+void Mixer::setPdc(bool on) noexcept TERMINATOR_NONBLOCKING
+{
+    pdcOn_ = on;
 }
 
 void Mixer::rebuildKeyMask() noexcept TERMINATOR_NONBLOCKING
@@ -474,6 +523,7 @@ void Mixer::setFxBypass(int strip, int index, bool on) noexcept TERMINATOR_NONBL
     if (index < 0 || index >= s.fxCount)
         return;
     s.fxBypass[index] = on;
+    rebuildPdc(); // a bypassed device contributes no latency — the plan moves
 }
 
 void Mixer::setFxParam(int strip, int index, int param, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
@@ -532,6 +582,7 @@ void Mixer::clearFx(int strip) noexcept TERMINATOR_NONBLOCKING
     }
     s.fxCount = 0;
     rebuildKeyMask();
+    rebuildPdc();
 }
 
 FxType Mixer::fxType(int strip, int index) const noexcept
@@ -729,6 +780,12 @@ void Mixer::process(float* const* outputs, int numOut, int numSamples) noexcept 
         return;
     const int n = std::min(numSamples, maxBlock_);
     processedMask_ = 0;
+    if (pdcOn_ && pdcMaxBus_ > 0)
+    {
+        // the tier-2 direct leg is summed apart this block, then delayed once (see processStrip)
+        std::fill_n(masterDirectL_.data(), n, 0.0);
+        std::fill_n(masterDirectR_.data(), n, 0.0);
+    }
     for (int k = 0; k < orderCount_; ++k)
     {
         const int idx = order_[k];
@@ -747,6 +804,19 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
     double* inR = inputPtrs_[static_cast<std::size_t>(idx) * 2 + 1];
     double* oL = outL_.data();
     double* oR = outR_.data();
+    // ---- PDC tier 2 (4.4): the CHANNELS' direct leg to the master was summed apart this block; it arrives delayed
+    // by maxBus so it lands with the bus / send returns (which carry maxChan + their own tier-2 alignment). One line
+    // on the sum, not one per strip — linear, so identical to the page's per-strip toMaster delays and far cheaper.
+    if (isMaster && pdcOn_ && pdcMaxBus_ > 0)
+    {
+        toMasterL_.process(masterDirectL_.data(), n, pdcMaxBus_);
+        toMasterR_.process(masterDirectR_.data(), n, pdcMaxBus_);
+        for (int i = 0; i < n; ++i)
+        {
+            inL[i] += masterDirectL_[static_cast<std::size_t>(i)];
+            inR[i] += masterDirectR_[static_cast<std::size_t>(i)];
+        }
+    }
     const double invN = 1.0 / static_cast<double>(n);
     // one exp per strip per block: the closed-form one-pole (setTargetAtTime τ) from the block start to its end
     const float a = std::exp(-static_cast<float>(n) / (kMixerSmoothSec * static_cast<float>(sampleRate_)));
@@ -827,6 +897,15 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
             inL[i] = inL[i] * d + wl[i] * m;
             inR[i] = inR[i] * d + wr[i] * m;
         }
+    }
+
+    // ---- PDC tier 1/2 (4.4): this strip's alignment delay, AFTER the inserts and BEFORE the fader, in whole
+    // samples and instant (a glide would pitch-bend). 0 = untouched and bit-exact, which is every strip until a
+    // device with latency is in the mix. ----
+    if (pdcOn_ && s.pdc > 0)
+    {
+        s.pdcL.process(inL, n, s.pdc);
+        s.pdcR.process(inR, n, s.pdc);
     }
 
     // ---- width → fader × mute → pan ----
@@ -945,8 +1024,12 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         const int target = ok == StripOutput::master ? kMasterStrip : oi;
         if (target < 0 || target >= kMaxStrips || strips_[target].set.kind == StripKind::off)
             break;
-        double* tL = inputPtrs_[static_cast<std::size_t>(target) * 2];
-        double* tR = inputPtrs_[static_cast<std::size_t>(target) * 2 + 1];
+        // PDC: a CHANNEL straight to the master is the tier-2 direct leg (delayed by maxBus at the master); a send /
+        // bus return is already aligned and goes in as it is. With PDC off / no bus latency nothing is diverted, so
+        // the sum order is unchanged and the mix stays bit-exact.
+        const bool directLeg = pdcOn_ && pdcMaxBus_ > 0 && target == kMasterStrip && s.set.kind == StripKind::channel;
+        double* tL = directLeg ? masterDirectL_.data() : inputPtrs_[static_cast<std::size_t>(target) * 2];
+        double* tR = directLeg ? masterDirectR_.data() : inputPtrs_[static_cast<std::size_t>(target) * 2 + 1];
         for (int i = 0; i < n; ++i)
         {
             tL[i] += oL[i];

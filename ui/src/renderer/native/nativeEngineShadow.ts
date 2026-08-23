@@ -1129,12 +1129,27 @@ class NativeEngineShadow {
         mx.setConsole({ on: consoleWas });
         mark('p8l'); r.mixerConsoleOff = await wait(() => mixerOf()?.console === consoleWas);
         r.mixerLimiterOn = mixerOf()?.limiter === true; // the shadow put the master's safety limiter in at attach
+        // 4.4: PDC — a COMP on 'sample' gives the mix a real chain latency, so the engine's two-tier plan shows up in
+        // the snapshot and every other live channel catches up to exactly it; the switch takes the whole plan out
+        const planOf = () => Number(mixerOf()?.pdcMaxChan ?? -1);
+        const stripPdcOf = (i: number) => Number(((mixerOf()?.pdcPlan as Record<string, number> | undefined) ?? {})[String(i)] ?? 0);
+        const kickIdx = ms.stripFor('kick');
+        const pdcWas = mx.pdcOn;
+        const pdcSlot = ch.addFx('comp');
+        mark('p8m'); r.mixerPdcPlan = pdcSlot >= 0 && (await wait(() => planOf() > 0 && stripPdcOf(kickIdx) === planOf() && stripPdcOf(sampleIdx) === 0));
+        mx.setPdc(false);
+        mark('p8n'); r.mixerPdcOff = await wait(() => mixerOf()?.pdc === false && planOf() === 0 && stripPdcOf(kickIdx) === 0);
+        mx.setPdc(true);
+        mark('p8o'); r.mixerPdcOn = await wait(() => mixerOf()?.pdc === true && planOf() > 0);
+        if (pdcSlot >= 0) ch.removeFx(pdcSlot);
+        mx.setPdc(pdcWas);
+        mark('p8p'); r.mixerPdcCleared = await wait(() => planOf() === 0);
         // 4.3: the master's BS.1770 reading + the per-slot GR rows ride the snapshot; the page's meters read them
         const lo = mixerOf()?.loudness as Record<string, unknown> | undefined;
         r.mixerLoudnessOk = !!lo && typeof lo.m === 'number' && typeof lo.hops === 'number' && typeof mixerOf()?.fxGr === 'object' && mx.master.updateLoudness().worklet === true;
         r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
       } else r.mixerPageOk = null;
       mark('p8mixer');
       this.engine.removePadBuffer(62);

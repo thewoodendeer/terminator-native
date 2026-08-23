@@ -23,6 +23,7 @@
 #include "terminator/core/fx/ConsoleStage.h"
 #include "terminator/core/LoudnessMeter.h"
 #include "terminator/core/fx/DynamicsFx.h"
+#include "terminator/core/fx/FxDsp.h"
 #include "terminator/core/fx/Effect.h"
 
 namespace terminator
@@ -127,6 +128,17 @@ class Mixer
     void resetLoudness() noexcept TERMINATOR_NONBLOCKING { loudness_.reset(); }
     /// A dynamics insert's gain reduction (dB ≤ 0), 0 for any other slot.
     float fxGainReductionDb(int strip, int index) const noexcept TERMINATOR_NONBLOCKING;
+    /// PDC (4.4) — the page's two-tier plan in integer samples on the exact chain latencies: tier 1 (channels) is
+    /// aligned at maxChan (each strip delayed by maxChan − own before its fader), tier 2 (sends + buses) at maxBus,
+    /// and the channels' direct leg to the master is delayed by maxBus (once, on their sum) so it lands with the bus
+    /// returns. Recomputed on every chain / strip change; instant (a glide would pitch-bend); delays cap at
+    /// kMaxPdcSamples. Default ON (the page's; with no latency insert every delay is 0 = bit-exact).
+    static constexpr int kMaxPdcSamples = 4096;
+    void setPdc(bool on) noexcept TERMINATOR_NONBLOCKING;
+    bool pdcOn() const noexcept { return pdcOn_; }
+    int pdcDelay(int strip) const noexcept { return pdcOn_ ? strips_[clampIdx(strip)].pdc : 0; }
+    int pdcToMaster() const noexcept { return pdcOn_ ? pdcMaxBus_ : 0; }
+    int pdcMaxChan() const noexcept { return pdcOn_ ? pdcMaxChan_ : 0; }
     void setFader(int strip, float db) noexcept TERMINATOR_NONBLOCKING;
     void setPan(int strip, float pan) noexcept TERMINATOR_NONBLOCKING;
     void setWidth(int strip, float width) noexcept TERMINATOR_NONBLOCKING;
@@ -229,6 +241,9 @@ class Mixer
         // the desk stage (4.2c): between the pre meter and the inserts
         ConsoleStage console;
         std::uint32_t seed = 0;
+        // PDC (4.4): this strip's delay before its fader (samples) + its lines
+        int pdc = 0;
+        IntDelay pdcL, pdcR;
     };
 
     static int clampIdx(int i) noexcept { return i < 0 ? 0 : (i >= kMaxStrips ? kMaxStrips - 1 : i); }
@@ -236,6 +251,7 @@ class Mixer
     void rebuildOrder() noexcept TERMINATOR_NONBLOCKING;
     void updateSilence() noexcept TERMINATOR_NONBLOCKING;
     void rebuildKeyMask() noexcept TERMINATOR_NONBLOCKING;
+    void rebuildPdc() noexcept TERMINATOR_NONBLOCKING;
     void processStrip(int idx, float* const* outputs, int numOut, int numSamples) noexcept TERMINATOR_NONBLOCKING;
 
     double sampleRate_ = 48000.0;
@@ -263,6 +279,10 @@ class Mixer
     bool limiterOn_ = false;
     BlinkCompressorKernel limiter_;
     LoudnessMeter loudness_;
+    bool pdcOn_ = true;
+    int pdcMaxChan_ = 0, pdcMaxBus_ = 0;
+    IntDelay toMasterL_, toMasterR_; // the channels' direct leg to the master, delayed by maxBus (their sum)
+    std::vector<double> masterDirectL_, masterDirectR_; // that sum, this block
     bool consoleOn_ = false;
     ConsoleFlavour consoleFlavour_ = ConsoleFlavour::ssl;
     float consoleAmount_ = 50.0f;

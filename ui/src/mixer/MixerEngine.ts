@@ -79,6 +79,8 @@ export interface MixerNativeSink {
   /** CONSOLE (4.2c): the desk stage's global settings (on / flavour / amount) — the engine seeds every strip by its
    *  name itself (the shadow sends the seed with the strip). */
   console?(settings: ConsoleSettings): void;
+  /** PDC (4.4): on / off only — the engine builds the same two-tier plan from the chain latencies it already owns. */
+  pdc?(on: boolean): void;
 }
 let nativeSink: MixerNativeSink | null = null;
 export function setMixerNativeSink(sink: MixerNativeSink | null): void { nativeSink = sink; }
@@ -966,6 +968,7 @@ export class MixerEngine {
     this.pdcOn = on;
     try { localStorage.setItem(PDC_LS, on ? '1' : '0'); } catch { /* */ }
     this.recomputeRouting();
+    nativeSink?.pdc?.(on);
   }
   private onAnyChainChanged = (): void => { this.recomputeRouting(); };
   private sidechainWires = new Map<MixerFX, ChannelStrip | null>();

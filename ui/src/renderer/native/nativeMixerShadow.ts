@@ -27,8 +27,9 @@
  *    `mixerSetFxParam {strip, index, fx, key, value}` / `mixerReorderFx` / `mixerClearFx`; the master's chain is strip 0.
  *    Devices the engine has not ported yet (4.2a ports utility / eq / filter / wide / mseq / pan) take their slot as a
  *    PASS-THROUGH placeholder natively (the slot indices stay aligned; the device does nothing until its port lands).
- *  Honest boundary (4.2a): the console stage / PDC / the master limiter are still the page's Web Audio graph — which is
- *  NOT what is heard natively (the sources are in the engine).
+ *  • PDC (4.4): `mixerSetPdc {on}` follows MixerEngine.setPdc (and goes out at attach with the saved setting). Only
+ *    the switch crosses — the engine owns every chain's latency, so it builds the same two-tier plan itself and
+ *    publishes it back in the snapshot (`mixer.pdc` / `pdcMaxChan` / `pdcToMaster` / `pdcPlan[idx]`, whole samples).
  */
 import { MixerEngine, ChannelName, setMixerNativeSink, setMixerNativeMeters, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
 import type { FxId } from '../../mixer/fx';
@@ -86,6 +87,7 @@ export class NativeMixerShadow {
       fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
       fxClear: (name) => this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) }),
       console: (settings) => this.queue({ type: 'mixerSetConsole', on: settings.on, flavour: settings.flavour, amount: settings.amount }),
+      pdc: (on) => this.queue({ type: 'mixerSetPdc', on }),
     });
     // the whole page mixer, as it stands: every strip + the master + the CLICK strip + the sources + CONSOLE
     for (const [name, strip] of this.mixer.channels) this.mirror(name, strip.isSend ? 'send' : 'channel');
@@ -93,6 +95,7 @@ export class NativeMixerShadow {
     this.mirrorChain('master');
     this.queue({ type: 'mixerSetConsole', on: this.mixer.console.on, flavour: this.mixer.console.flavour, amount: this.mixer.console.amount });
     this.queue({ type: 'mixerSetLimiter', on: true }); // the page's master always carries its −1 dBFS safety limiter
+    this.queue({ type: 'mixerSetPdc', on: this.mixer.pdcOn }); // PDC (4.4) — the engine builds the plan itself
     this.installMeters();
     this.activate(CLICK_STRIP, 'channel', 'click');
     this.queue({ type: 'mixerSetFader', strip: CLICK_STRIP, db: 0 });

@@ -92,6 +92,7 @@ enum class CommandType : std::uint32_t
                      // the page's strip NAME; 0 = leave as is)
     mixerSetConsole, // strip.flag = on + strip.kind = flavour (0 SSL · 1 NEVE · 2 API) + strip.value = amount 0..100
     mixerSetLimiter, // strip.flag = on — the master's safety limiter (the page's −1 dBFS / 20:1 DynamicsCompressor)
+    mixerSetPdc,     // strip.flag = on — plugin-delay compensation (4.4, the page's two-tier plan in whole samples)
     loudnessReset,   // the master's BS.1770 meter: integrated + LRA + the holds restart (the page's RESET)
     mixerSetFader,   // strip.strip + strip.value — dB, −60 (= −∞) .. +6 (τ 8 ms)
     mixerSetPan,     // strip.strip + strip.value — −1..1 (τ 8 ms); the master has no pan
@@ -769,6 +770,12 @@ struct Command
     static Command mixerSetLimiter(bool on) noexcept
     {
         Command c = stripCmd(CommandType::mixerSetLimiter, 0);
+        c.payload.strip.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command mixerSetPdc(bool on) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetPdc, 0);
         c.payload.strip.flag = on ? 1 : 0;
         return c;
     }

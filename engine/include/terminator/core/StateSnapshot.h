@@ -139,6 +139,12 @@ struct StateSnapshot
     std::uint32_t mixerFxRejected = 0;          // lifetime mixerAddFx refusals (full / pool empty / not ported / dead)
     std::uint8_t mixerConsoleOn = 0;            // CONSOLE (4.2c): the desk stage is in on every live strip
     std::uint8_t mixerLimiterOn = 0;            // the master's safety limiter (4.2c)
+    // PDC (4.4): the two-tier plan the mixer is running, in whole samples
+    std::uint8_t mixerPdcOn = 1;            // plugin-delay compensation is in (default on, the page's)
+    std::int32_t mixerPdcMaxChan = 0;       // tier 1: the longest CHANNEL insert chain every channel lines up on
+    std::int32_t mixerPdcToMaster = 0;      // tier 2: the longest SEND/BUS chain — the channels' direct-to-master
+                                            // leg carries it, so it lands with the bus returns
+    std::int16_t stripPdc[kMaxStrips] = {}; // per strip: its alignment delay before the fader (0 with PDC off)
     // 4.3 meters on the bridge
     float stripFxGr[kMaxStrips][8] = {}; // per insert slot: a dynamics device's gain reduction (dB ≤ 0), else 0
     float masterLimiterGr = 0.0f;        // the master limiter's gain reduction (dB ≤ 0)

@@ -1191,6 +1191,8 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         c = Command::loudnessReset();
     else if (type == "mixerSetLimiter")
         c = Command::mixerSetLimiter(static_cast<bool>(json.getProperty("on", true)));
+    else if (type == "mixerSetPdc")
+        c = Command::mixerSetPdc(static_cast<bool>(json.getProperty("on", true)));
     else if (type == "mixerSetConsole")
     {
         const auto f = json.getProperty("flavour", "SSL").toString();
@@ -1933,6 +1935,15 @@ void WebShell::timerCallback()
         }
         mx->setProperty("fxGr", juce::var(gr));
         mx->setProperty("limiterGr", static_cast<double>(s.masterLimiterGr));
+        // PDC (4.4): the plan in whole samples — `pdc` on/off, the two tiers, and every strip with a real delay
+        mx->setProperty("pdc", static_cast<bool>(s.mixerPdcOn));
+        mx->setProperty("pdcMaxChan", static_cast<int>(s.mixerPdcMaxChan));
+        mx->setProperty("pdcToMaster", static_cast<int>(s.mixerPdcToMaster));
+        auto* pd = new juce::DynamicObject();
+        for (int i = 0; i < kMaxStrips; ++i)
+            if (((s.mixerActiveMask >> i) & 1u) && s.stripPdc[i] != 0)
+                pd->setProperty(juce::String(i), static_cast<int>(s.stripPdc[i]));
+        mx->setProperty("pdcPlan", juce::var(pd));
         auto* lo = new juce::DynamicObject();
         lo->setProperty("m", static_cast<double>(s.lufsM));
         lo->setProperty("s", static_cast<double>(s.lufsS));
