@@ -796,13 +796,94 @@ MPC reads the true tempo). Pads from the controller (direct path, sub-ms); bass 
 mode from the controller; CC LEARN on a knob; pad LEARN — all through the one router. The MIDI pane shows outputs, the
 running clock's position and the last send's lateness.
 
-### Next session (in order) — updated at the end of the eighth session
-0. `gh run list` — CI for the 3.5 commits (4 jobs; the universal probe now also asserts `midiTransportOk` +
-   `midiClockOk`).
-1. 3.6 arp, metronome (through the mixer), count-in on the sample grid — the last Web Audio satellites.
-2. 3.7 live-record landing on the native clock. Then Phase 4 (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4
-   BRIEF" first) — routes pads / drum lanes / the bass into their strips; MIDI note OUT per strip rides the 3.5 pump.
-3. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
+## CI for the 3.5 tip `04eef9a` (run 32614333456, 2026-08-23): GREEN on all 4 jobs (Windows/MSVC · RTSan · Intel ·
+universal) — the ASCII test names + the probe's poll closed the three reds of the 3.4 tip.
+
+## Phase 3 — 3.6 DONE (METRONOME + COUNT-IN + ARP ON THE SAMPLE CLOCK), 2026-08-23 ninth session
+**What changed (engine):** `core/Metronome.h/.cpp` (JUCE-free) — the five click sounds (click / hihat / rimshot /
+kick / clap, accent) SYNTHESISED inside the callback at their exact sample: the Web Audio graphs ported per sample
+(OscillatorNode sine from phase 0 with the kick's exponential frequency sweep, the gain automation's linear attack +
+`v0·(v1/v0)^t` exponential decay held at the floor until the source's stop, BiquadFilterNode highpass (Q in dB) /
+bandpass (Q linear) per the Web Audio spec, the 0.2 s noise buffer read from 0 each click — a seeded table, so a
+render is deterministic). **The beats ride the DRIVING sequencer's own grid:** every step the ChopSequencer (or, when
+it is silent, the DrumSequencer) schedules is logged (`takeGridLog`: straight grid time + duration + index + steps
+per bar) and the beats inside that step are placed from it — at ANY resolution (a beat between two triplet steps is
+interpolated with the step's own duration; a 2-steps/bar pattern books the two beats inside each step) and through
+a tempo change by construction: the click lands where the sequencer's step lands (at 16ths, 120 → 90 mid-bar, the
+TS walker re-reading 60/bpm per beat would have clicked 4000 samples — 83 ms — before the step; the native click is
+AT the step's sample). Gated like the TS (clicks only while the chop seq plays and is not paused, else the drums
+alone), METRO on mid-play → the next beat, off / stop / pause / a restart drop the booked beats, a driver hand-over
+(drums → seq at one anchor) dedupes the same beat (1 ms). **Count-in:** `countIn{beats, atSample}` books N clicks a
+beat (60/setBpm) apart from the anchor, the first accented, regardless of METRO (the TS rule), publishes
+`countInBeat` (N..1 then −1), `countInPending`, `countInDownbeatSample` = atSample + N·beat; the regular train is
+silent until that downbeat and the transport's beat 0 there is ONE click (a beat within 5 ms before it IS the
+downbeat); `cancelCountIn` drops the rest. The clicks are added AFTER the master gain (the TS clicks went straight to
+`ctx.destination`; Phase 4 routes them to the mixer's CLICK bus) and show in the out-1/2 peak meters.
+`core/Arp.h/.cpp` — the TS `startArp / arpFire / stopArp` on the sample clock: holding a pad steps through the bank
+every 60/bpm/rate (UP `(hold+step) mod padCount`, DOWN, RANDOM seeded xorshift64*) at the held velocity, each step a
+live hit through the Sampler (mute group / retrigger rules) that stamps the pad's live-hit time (one owner: a pattern
+hit of that pad within 120 ms is the arp's), the held pad's release stops it, a tempo change lands at the NEXT step
+with the phase kept (the TS re-gridded from the start and burst to catch up), `setArp enabled:false` stops a held arp,
+`arpHold` with the arp off = a plain hit; **the direct MIDI path holds/releases it when the arp is on** (note-on →
+`hold`, note-off → `release`). Commands `setMetronome{enabled, sound}` · `countIn{beats, atSample}` ·
+`cancelCountIn` · `setArp{enabled, rate, down, random, padCount}` · `arpHold{pad, velocity, atSample}` ·
+`arpRelease{pad}`; `seqSetBpm` feeds the count-in beat + the arp interval; `panic` drops the count-in and the arp;
+snapshot `metronome*` / `countIn*` / `arp*`.
+**Shell:** the six JSON verbs (`sound` click|hihat|rimshot|kick|clap, `direction` up|down) + the snapshot fields; the
+probe's async budget grew to 19 s / 15 s lead (the self-test runs ~9 s now).
+**The page binding (ui):** `ChopperEngine.metroSink` (METRO / the click sound → `setMetronome`; `scheduleCountIn` →
+`countIn` at the page's anchor — the TS Worker click scheduler does not run and no Web Audio click is booked; the
+visual countdown timers + the downbeat callback stay on the page) and `ChopperEngine.arpSink` (`startArp` → `arpHold`
+unless the hit is native-owned — the engine is already arping that MIDI note; `stopArp` → `arpRelease`); the shadow
+diffs METRO/sound and the ARP settings + `pads.length` from the state (`syncMetroArp`). **The "1" is exact:**
+`scheduleCountIn` keeps the downbeat's ctx time (`countInDownbeatCtx`) and the transport start takes it (`playSeq`
+reads it before its `stopSeq`; `takeCountInDownbeat()` / `peekCountInDownbeat()` for the drum-only / bass REC
+count-ins in DrumSection + HardwareView) instead of "now + lead when the timer fired" — the downbeat timer now runs
+`max(50 ms, lead + 30 ms)` ahead so its jitter cannot move the "1" (fired too late → the old now + lead, as before).
+Natively the shadow remembers the count-in's downbeat SAMPLE (atSample + N·60/bpm·sr — the engine's own math) and
+PLAY on that downbeat sends exactly it to `seqPlay` AND to the drum/bass anchors (`anchorSampleFor`): mapping the
+downbeat's ctx time a second time through WebKit's render-quantum-coarse `currentTime` pair had put the transport
+45 samples (1 ms at 44.1 k) before the count-in's last click (the first probe run) — now 0 samples.
+**Gates:** mac-debug 0 warnings + ctest **188/188** (175 + 8 `[metronome]`: the five sounds render at their sample,
+peak in bounds, silent by 350 ms, bit-identical at 37 vs 64 samples/block; beats on the seq grid from the anchor with
+accent on 0 at 37/64/512; the tempo-change click AT the sequencer's step (53000, not 49000); 6-steps/bar + 2-steps/bar
+beats; pause/resume/stop/toggle-on; the drums alone + the hand-over without a double click + drumStop; the count-in
+incl. "the train is silent until the downbeat" / "the transport's beat 0 at the downbeat is one click" / cancel / a
+count-in at the block start at 90 BPM; the master-gain bypass — and 4 `[arp]`: UP exact samples + release rules +
+the sampler really played them; DOWN / RANDOM deterministic / rates / padCount 0 / re-hold; tempo change at the next
+step + arp-off stops + plain hit; MIDI direct path + one owner + block invariance) + 1 RT case (metronome + count-in
++ arp on the callback: 0 allocations); RTSan **189/189**; ui gate (tsc baseline 5, library, clock, bass-theory, vite);
+the probe asserts **`metroPageOk`** (METRO → clicks on the grid `(lastClick − loopStart) % beat == 0`, STOP silences,
+REC from stopped → the engine's count-in (`countInPending`, 4 clicks + the first beat), the transport started, the
+page took the downbeat anchor and the seq loop start == the count-in downbeat sample at **0 samples**, the arp held
+pad 62 / stepped ≥ 2 / released). **Evidence (ninth session):** mac-debug 0 warnings + ctest 188/188 · RTSan 189/189 · universal lipo
+`x86_64 arm64` on the app + terminator-render + ctest 188 (0 warnings) · ui gate green · probe OK
+(`countInOffsetSamples: 0`, `anchorTaken: true`, `metroLastClick.beat: 2`, `arpHits: 2`).
+**Honest boundary after 3.6:** the metronome is the LAST Web Audio satellite gone — what you hear is now entirely the
+native engine (pads, chop seq, drums, bass, clicks) except the mixer/master FX (Phase 4), time-STRETCH (dry), live
+re-stem, per-hit reverse of a rendered LOOP. NOT done from the 3.6 line: the click through a mixer CLICK bus (Phase 4
+— today after the master gain, like the TS), an ARP UI (the TS never exposed toggleArp/setArpRate — the engine + the
+bridge + the sink are ready; exposing it is a UI decision), the count-in's visual countdown still runs on page
+timers (ms-level, the clicks are exact), a resumed step's remaining beats at resolutions < 4 are not re-booked (a
+beat inside a 2-steps/bar step that was paused mid-step clicks again from the next step). Electron-visible change in
+the shared renderer: the count-in downbeat anchor (better there too — the "1" is where the clicks said, not now+20 ms
+± timer jitter) and the downbeat timer firing 50 ms (not 20 ms) ahead.
+**Victor's pass (3.6):** METRO on, PLAY a chop pattern at 90 BPM — the click sits on the pattern for 10 minutes;
+drag the BPM knob while it plays — the click never falls off the beat (it moves WITH the pattern, not on its own
+walker); pause/resume (space) — no click while paused, back on the beat after; toggle METRO mid-play — the first
+click is the next beat; the five sounds (LOAD tab metronome sound menu); the drums alone (DRUMS ▶ with the chop seq
+stopped) click too. COUNT-IN: REC with the transport stopped — 4 clicks, the "1" lands exactly where the 5th click
+would have been (the loop starts ON it, drums and bass with it); the same from the DRUMS LIVE REC and the BASS REC;
+cancel mid-count (click REC again). ARP has no UI yet — nothing to test there (MIDI + ARP on would arp natively).
+
+### Next session (in order) — updated at the end of the ninth session
+0. `gh run list` — CI for the 3.6 commits (4 jobs; the universal probe now also asserts `metroPageOk`).
+1. 3.7 live-record landing on the native clock + the one-owner rule already in C++ — the last page-side timing
+   logic (the hit time from the driver stamp / NativeClock, `liveLanding` → a booked `triggerPad{atSample}` it
+   already is; move the landing + INPUT Q storage refit decision next to the engine's grid). Then Phase 4 (read
+   TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" first) — routes pads / drum lanes / the bass / the CLICK
+   into their strips; MIDI note OUT per strip rides the 3.5 pump.
+2. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
 
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
 Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).

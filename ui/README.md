@@ -85,6 +85,18 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `src/renderer/native/NativeMidiPane.tsx` shows the native outputs (toggles → `enableOutput`) + the clock OUT/IN status;
   `PreferencesWindow.tsx` hides the Web MIDI device cards in the native shell. `nativeEngineShadow.ts`: the
   `terminator.midiMessage` → `midiHub.injectNative` bridge, the `midiSink`, the probe part (START/STOP + clock OUT).
+- **Metronome + count-in + arp through the engine (3.6, 2026-08-23):** `src/renderer/chopper/ChopperEngine.ts` — the
+  `metroSink` field (`set(enabled, sound)` / `countIn(beats, startAtCtx, downbeatCtx)` / `cancelCountIn()`; when set:
+  `toggleMetronome`/`setMetronomeSound` push, `startMetronomeTimer`/`startMetronomeForDrums`/`scheduleMetronomeClick`
+  are no-ops — the engine clicks on its own grid, `scheduleCountIn` books the count-in natively, `cancelCountIn`
+  forwards a REAL cancel), the `arpSink` field (`startArp` → `hold` unless native-owned, `stopArp` → `release`), and
+  the exact count-in downbeat: `countInDownbeatCtx` + `takeCountInDownbeat()` / `peekCountInDownbeat()` — `playSeq()`
+  takes it as its anchor when it is still ahead of the lead (read BEFORE its `stopSeq`), the downbeat timer runs
+  `max(50 ms, lead + 30 ms)` ahead; `drums/DrumSection.tsx` + `chopper/HardwareView.tsx` — the drum-only count-in
+  starts the drums ON the downbeat (`peek`/`take`). NEW in `native/nativeEngineShadow.ts`: the two sinks,
+  `syncMetroArp` (METRO/sound + ARP settings + `pads.length` diffed from the state), `anchorSampleFor` (PLAY on a
+  count-in downbeat sends the engine's downbeat SAMPLE — also to the drum/bass shadows via `host.anchorSample`), the
+  probe part 6 (`metroPageOk`); `nativeDrumShadow.ts` / `nativeBassShadow.ts` — the optional `anchorSample` host hook.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 
