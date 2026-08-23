@@ -134,7 +134,7 @@ TEST_CASE("BassSequencer: note-ons land exactly on their PPQ-96 ticks, the loop 
     REQUIRE(r.snap().bassEventsDropped == 0);
 }
 
-TEST_CASE("BassSequencer: at a shared tick the OFF fires before the ON — a retrigger of the same pitch is not eaten",
+TEST_CASE("BassSequencer: at a shared tick the OFF fires before the ON - a retrigger of the same pitch is not eaten",
           "[bass][seq]")
 {
     Rig r(1);
@@ -151,7 +151,7 @@ TEST_CASE("BassSequencer: at a shared tick the OFF fires before the ON — a ret
     REQUIRE(r.snap().bassVoices == 1);
 }
 
-TEST_CASE("BassSequencer: an off past the loop end fires at its wrap — the note holds into the repeat", "[bass][seq]")
+TEST_CASE("BassSequencer: an off past the loop end fires at its wrap - the note holds into the repeat", "[bass][seq]")
 {
     Rig r(480);
     auto p = pattern(1);
@@ -166,7 +166,7 @@ TEST_CASE("BassSequencer: an off past the loop end fires at its wrap — the not
     REQUIRE(rmsOf(out, 24000 - 2400, 24000) < 0.002); // released well before the next on at 180000
 }
 
-TEST_CASE("BassSequencer: a BPM change applies at the NEXT tick — the grid stays continuous", "[bass][seq]")
+TEST_CASE("BassSequencer: a BPM change applies at the NEXT tick - the grid stays continuous", "[bass][seq]")
 {
     Rig r(1);
     auto p = pattern(1);
@@ -311,7 +311,7 @@ TEST_CASE("BassSequencer: a live note / slide / preview through the engine land 
     REQUIRE(r.snap().bassPlaying == 0);
 }
 
-TEST_CASE("BassSequencer: block-size invariance — the engine renders the bass bit-identically at 64 / 480 / 512",
+TEST_CASE("BassSequencer: block-size invariance - the engine renders the bass bit-identically at 64 / 480 / 512",
           "[bass][seq]")
 {
     auto make = [](int block)
@@ -359,7 +359,7 @@ TEST_CASE("BassSequencer: block-size invariance — the engine renders the bass 
     }
 }
 
-TEST_CASE("BassSequencer: ten minutes at 120 BPM — every loop start exactly k × 192000, nothing drops, no allocation",
+TEST_CASE("BassSequencer: ten minutes at 120 BPM - every loop start exactly k x 192000, nothing drops, no allocation",
           "[bass][seq]")
 {
     Rig r(480);

@@ -189,7 +189,7 @@ BassPatch plain() // the TS tests' usual base: open-ish filter, no drift, no sub
 }
 } // namespace
 
-TEST_CASE("BassSynth: default patch — pitch on the note, the envelope opens and releases, sane level, no NaN", "[bass]")
+TEST_CASE("BassSynth: default patch - pitch on the note, the envelope opens and releases, sane level, no NaN", "[bass]")
 {
     BassPatch p = BassPatch::defaults();
     p.cutoff = 2000.0;
@@ -318,7 +318,7 @@ TEST_CASE("BassSynth: the sub an octave down moves the fundamental", "[bass]")
     REQUIRE(near(fundamentalHz(y, 0.3, 8192), midiHz(36)));
 }
 
-TEST_CASE("BassSynth: mono legato + glide — the second note glides, the note-off falls back to the held note", "[bass]")
+TEST_CASE("BassSynth: mono legato + glide - the second note glides, the note-off falls back to the held note", "[bass]")
 {
     BassPatch p = plain();
     p.voices = 1;
@@ -335,7 +335,7 @@ TEST_CASE("BassSynth: mono legato + glide — the second note glides, the note-o
     REQUIRE(rms(y, 0.5, 0.52) > rms(y, 0.45, 0.5) * 0.5); // legato: no retrigger dip
 }
 
-TEST_CASE("BassSynth: poly — two notes louder than one, both release", "[bass]")
+TEST_CASE("BassSynth: poly - two notes louder than one, both release", "[bass]")
 {
     BassPatch p = plain();
     p.voices = 4;
@@ -381,7 +381,7 @@ TEST_CASE("BassSynth: clear(tag) drops only that tag's pending events", "[bass]"
     REQUIRE(near(fundamentalHz(out, 0.4, 8192), midiHz(52)));
 }
 
-TEST_CASE("BassSynth: MOD matrix — a slow LFO on the cutoff moves brightness; a trigger env opens then returns",
+TEST_CASE("BassSynth: MOD matrix - a slow LFO on the cutoff moves brightness; a trigger env opens then returns",
           "[bass]")
 {
     BassPatch base = BassPatch::defaults();
@@ -421,7 +421,7 @@ TEST_CASE("BassSynth: MOD matrix — a slow LFO on the cutoff moves brightness; 
     REQUIRE(std::abs(late - ref) < ref * 0.35 + 0.002);
 }
 
-TEST_CASE("BassSynth: SHAPE morph — finite everywhere, lands on tri/saw/sine at its points, climbs tri→saw", "[bass]")
+TEST_CASE("BassSynth: SHAPE morph - finite everywhere, lands on tri/saw/sine at its points, climbs tri->saw", "[bass]")
 {
     BassPatch base = BassPatch::defaults();
     base.cutoff = 8000.0;
@@ -484,7 +484,7 @@ TEST_CASE("BassSynth: SLIDE notes bend what sounds over their length; the origin
     REQUIRE(finite(silent));
 }
 
-TEST_CASE("BassSynth: timed BEND events land at their sample — a stepwise ramp 0→+7 st glides through", "[bass]")
+TEST_CASE("BassSynth: timed BEND events land at their sample - a stepwise ramp 0->+7 st glides through", "[bass]")
 {
     BassPatch p = plain();
     p.voices = 1;
@@ -505,7 +505,7 @@ TEST_CASE("BassSynth: timed BEND events land at their sample — a stepwise ramp
     REQUIRE(finite(y));
 }
 
-TEST_CASE("BassSynth: the output is block-size invariant — 128 vs 64 vs 512 vs 37 render bit-identically", "[bass]")
+TEST_CASE("BassSynth: the output is block-size invariant - 128 vs 64 vs 512 vs 37 render bit-identically", "[bass]")
 {
     // drift + pink noise + an S&H LFO + a key-synced LFO + the mixer drive → every per-quantum branch runs
     BassPatch p = BassPatch::defaults();

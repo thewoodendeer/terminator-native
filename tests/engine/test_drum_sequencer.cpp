@@ -190,7 +190,7 @@ TEST_CASE("DrumSequencer: SHIFT snaps to the PPQ pulse, may be negative (fired b
     Rig r(480);
     auto s0 = r.bindLane(0, 0.1f), s1 = r.bindLane(1, 0.2f);
     auto g = graphs();
-    SECTION("960 PPQ: 25-sample pulses; +10 ms → 475 samples (19 pulses), −50 ms → −2400 (96 pulses)")
+    SECTION("960 PPQ: 25-sample pulses; +10 ms -> 475 samples (19 pulses), ?50 ms -> ?2400 (96 pulses)")
     {
         auto p = pattern(1);
         hit(*p, 24, 0);
@@ -207,7 +207,7 @@ TEST_CASE("DrumSequencer: SHIFT snaps to the PPQ pulse, may be negative (fired b
         REQUIRE(on[0] == 24000 + 475);
         REQUIRE(on[1] == 48000 - 2400); // 45600: booked 50 ms before its grid time — the look-ahead
     }
-    SECTION("24 PPQ (SP-1200): 1000-sample pulses; +10 ms rounds to 0, −30 ms rounds to −1000 (JS round)")
+    SECTION("24 PPQ (SP-1200): 1000-sample pulses; +10 ms rounds to 0, ?30 ms rounds to ?1000 (JS round)")
     {
         auto p = pattern(1);
         hit(*p, 24, 0);
