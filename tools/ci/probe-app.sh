@@ -9,12 +9,14 @@ OUT="${2:-build/probe.json}"
 rm -f "$OUT"
 TERMINATOR_PROBE_FILE="$OUT" "$BIN" &
 PID=$!
-for _ in $(seq 1 60); do
+# 150 s: the React probe's self-test runs the sequencers in real time (≈ 25 s on a Mac, 60+ s on a starved CI runner —
+# the 3.7 tip's universal job was killed at 60 s mid-test); the cap only has to catch "the page never loaded"
+for _ in $(seq 1 150); do
   sleep 1
   kill -0 "$PID" 2>/dev/null || break
 done
 if kill -0 "$PID" 2>/dev/null; then
-  echo "::error::app did not quit within 60 s (page never loaded?)"; kill "$PID" || true; exit 1
+  echo "::error::app did not quit within 150 s (page never loaded, or the self-test hung?)"; kill "$PID" || true; exit 1
 fi
 wait "$PID" || { echo "::error::app exited non-zero"; exit 1; }
 echo "== probe output"; cat "$OUT"; echo
@@ -87,6 +89,7 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     # Phase 3.7: a live-recorded hit (with its input stamp) lands on the engine clock — the page wrote the step and the
     # engine got the hit at that line's exact sample (chop pad 62 + drum lane 0)
     grep -Eq '"liveRecOk": ?true' "$OUT" || { echo "::error::live record did not land on the engine clock (liveRecOk false — see liveRecArmed / liveRecStep / liveRecHitPad / liveRecOffsetSamples / drumLiveRec)"; exit 1; }
+    grep -Eq '"mixerPageOk": ?true' "$OUT" || { echo "::error::the page mixer did not drive the native mixer (mixerPageOk false — see mixerStripsLive / mixerSources / mixerFaderDown / mixerFaderUp / mixerMuteOn / mixerMuteOff / mixerOrderValid / mixerRejected / mixerPadStrip)"; exit 1; }
     echo "live record on the engine clock OK: chop step=$(grep -Eo '"liveRecStep": ?-?[0-9]+' "$OUT") offset=$(grep -Eo '"liveRecOffsetSamples": ?[-0-9.e]+|"liveRecOffsetSamples": ?null' "$OUT") drums=$(grep -Eo '"drumLiveRec": ?\{[^}]*\}' "$OUT")"
     echo "metronome + count-in + arp native OK: $(grep -Eo '"metroLastClick": ?\{[^}]*\}' "$OUT") countIn offset=$(grep -Eo '"countInOffsetSamples": ?[-0-9.e]+|"countInOffsetSamples": ?null' "$OUT") anchorTaken=$(grep -Eo '"countInAnchorTaken": ?(true|false)' "$OUT") arpHits=$(grep -Eo '"arpHits": ?[0-9]+' "$OUT" | head -1)"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"

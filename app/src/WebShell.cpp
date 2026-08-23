@@ -399,6 +399,12 @@ std::uint8_t bassTagOf(const juce::var& j, std::uint8_t fallback)
         return 5;
     return fallback;
 }
+/// `strip` 0..kMaxStrips−1 (the mixer, Phase 4.1).
+int stripOf(const juce::var& j)
+{
+    return std::clamp(static_cast<int>(j.getProperty("strip", 0)), 0, kMaxStrips - 1);
+}
+
 std::uint64_t atSampleOf(const juce::var& j)
 {
     const auto at = static_cast<juce::int64>(j.getProperty("atSample", 0));
@@ -1142,7 +1148,52 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
                                                                                               : Interpolation::hermite;
         p.pan = static_cast<float>(static_cast<double>(json.getProperty("pan", 0.0)));
         p.chokeFadeSec = static_cast<float>(static_cast<double>(json.getProperty("chokeFade", 0.003)));
+        p.strip = static_cast<std::int16_t>(
+            std::clamp(static_cast<int>(json.getProperty("strip", -1)), -1, kMaxStrips - 1)); // 4.1: the mixer strip
         c = Command::setPadParams(p);
+    }
+    // the mixer (Phase 4.1, core/Mixer.h) — strips by index (0 = the master; the page names them)
+    else if (type == "mixerSetStrip")
+    {
+        const auto k = json.getProperty("kind", "channel").toString();
+        const std::uint8_t kind = k == "off"    ? static_cast<std::uint8_t>(StripKind::off)
+                                  : k == "send" ? static_cast<std::uint8_t>(StripKind::send)
+                                  : k == "bus"  ? static_cast<std::uint8_t>(StripKind::bus)
+                                                : static_cast<std::uint8_t>(StripKind::channel);
+        c = Command::mixerSetStrip(stripOf(json), kind);
+    }
+    else if (type == "mixerSetFader")
+        c = Command::mixerSetFader(stripOf(json), static_cast<float>(static_cast<double>(json.getProperty("db", 0.0))));
+    else if (type == "mixerSetPan")
+        c = Command::mixerSetPan(stripOf(json), static_cast<float>(static_cast<double>(json.getProperty("pan", 0.0))));
+    else if (type == "mixerSetWidth")
+        c = Command::mixerSetWidth(stripOf(json),
+                                   static_cast<float>(static_cast<double>(json.getProperty("width", 1.0))));
+    else if (type == "mixerSetMute")
+        c = Command::mixerSetMute(stripOf(json), static_cast<bool>(json.getProperty("on", false)));
+    else if (type == "mixerSetSolo")
+        c = Command::mixerSetSolo(stripOf(json), static_cast<bool>(json.getProperty("on", false)));
+    else if (type == "mixerSetSend")
+        c = Command::mixerSetSend(stripOf(json), std::clamp(static_cast<int>(json.getProperty("send", 0)), 0, 3),
+                                  static_cast<float>(static_cast<double>(json.getProperty("db", -60.0))),
+                                  std::clamp(static_cast<int>(json.getProperty("target", -1)), -1, kMaxStrips - 1));
+    else if (type == "mixerSetOutput")
+    {
+        const auto to = json.getProperty("to", "master").toString();
+        const std::uint8_t kind = to == "strip"      ? static_cast<std::uint8_t>(StripOutput::strip)
+                                  : to == "hardware" ? static_cast<std::uint8_t>(StripOutput::hardware)
+                                  : to == "none"     ? static_cast<std::uint8_t>(StripOutput::none)
+                                                     : static_cast<std::uint8_t>(StripOutput::master);
+        c = Command::mixerSetOutput(stripOf(json), kind,
+                                    std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, kMaxStrips - 1));
+    }
+    else if (type == "mixerSetMainOut")
+        c = Command::mixerSetMainOut(std::clamp(static_cast<int>(json.getProperty("pair", 0)), 0, 63));
+    else if (type == "setSourceStrip")
+    {
+        const auto src = json.getProperty("source", "bass").toString();
+        c = Command::setSourceStrip(src == "click" ? 1 : 0,
+                                    std::clamp(static_cast<int>(json.getProperty("strip", -1)), -1, kMaxStrips - 1));
     }
     else
         return ok(false, "unknown command type '" + type + "'");
@@ -1761,6 +1812,38 @@ void WebShell::timerCallback()
     obj->setProperty("arpStep", s.arpStep);
     obj->setProperty("arpLastPad", s.arpLastPad);
     obj->setProperty("arpHits", static_cast<juce::int64>(s.arpHits));
+    // the mixer (4.1): the live strips + their meters (dead strips are omitted)
+    {
+        auto* mx = new juce::DynamicObject();
+        juce::Array<juce::var> active, silent;
+        auto* strips = new juce::DynamicObject();
+        for (int i = 0; i < kMaxStrips; ++i)
+        {
+            if (((s.mixerActiveMask >> i) & 1u) == 0)
+                continue;
+            active.add(i);
+            if ((s.mixerSilentMask >> i) & 1u)
+                silent.add(i);
+            juce::Array<juce::var> m;
+            m.add(static_cast<double>(s.stripPeakPre[i][0]));
+            m.add(static_cast<double>(s.stripPeakPre[i][1]));
+            m.add(static_cast<double>(s.stripPeakPost[i][0]));
+            m.add(static_cast<double>(s.stripPeakPost[i][1]));
+            m.add(static_cast<double>(s.stripRmsPre[i]));
+            m.add(static_cast<double>(s.stripRmsPost[i]));
+            m.add(static_cast<double>(s.stripGain[i]));
+            strips->setProperty(juce::String(i), juce::var(m));
+        }
+        mx->setProperty("active", juce::var(active));
+        mx->setProperty("silent", juce::var(silent));
+        mx->setProperty("strips", juce::var(strips)); // "<index>": [preL, preR, postL, postR, rmsPre, rmsPost, gain]
+        mx->setProperty("rejected", static_cast<int>(s.mixerRoutesRejected));
+        mx->setProperty("orderValid", static_cast<bool>(s.mixerOrderValid));
+        mx->setProperty("mainOut", s.mixerMainOut);
+        mx->setProperty("bassStrip", s.bassStrip);
+        mx->setProperty("clickStrip", s.clickStrip);
+        obj->setProperty("mixer", juce::var(mx));
+    }
     browser_->emitEventIfBrowserIsVisible("terminator.snapshot", juce::var(obj));
 }
 

@@ -44,6 +44,7 @@ import { isNative, native, onNativeEvent } from './juceBridge';
 import { NativeClock, ctxPair, ctxHeardLatencySec } from './nativeClock';
 import { NativeBassShadow } from './nativeBassShadow';
 import { NativeDrumShadow } from './nativeDrumShadow';
+import { NativeMixerShadow, CLICK_STRIP, DRUM_TRACK_STRIP } from './nativeMixerShadow';
 import { midiHub } from '../chopper/midiHub';
 
 type AnyRecord = Record<string, any>;
@@ -67,6 +68,7 @@ interface PadDesc {
   choke: number;   // −1 own pad · −2 poly ('none') · ≥0 group id
   fadeIn: number;  // LOOP crossfade (seconds) — render inputs
   fadeOut: number;
+  strip: number;   // the mixer strip its voices sum into (4.1: stripFor(padRoute)); −1 = the direct path (no mixer)
 }
 
 interface BufRec {
@@ -99,7 +101,7 @@ function sameDesc(a: PadDesc | null, b: PadDesc | null): boolean {
 }
 const sameParams = (a: PadDesc, b: PadDesc) =>
   a.pitch === b.pitch && a.fine === b.fine && a.attack === b.attack && a.release === b.release && a.gain === b.gain
-  && a.mode === b.mode && a.gate === b.gate && a.reverse === b.reverse && a.choke === b.choke && a.fadeOut === b.fadeOut;
+  && a.mode === b.mode && a.gate === b.gate && a.reverse === b.reverse && a.choke === b.choke && a.fadeOut === b.fadeOut && a.strip === b.strip;
 const sameRegion = (a: PadDesc, b: PadDesc) => a.buf === b.buf && a.start === b.start && a.end === b.end;
 const loopOf = (d: PadDesc | null) => (d && d.mode === 'loop' && (d.fadeIn > 0 || d.fadeOut > 0))
   ? { start: d.start, end: d.end, fadeIn: d.fadeIn, fadeOut: d.fadeOut, reverse: d.reverse, buf: d.buf } : null;
@@ -139,6 +141,9 @@ export interface NativeShadowStats {
   /** Phase 3.6 — the native metronome / count-in / arp */
   metroCommands: number;
   arpCommands: number;
+  /** Phase 4.1 — the native mixer */
+  mixerCommands: number;
+  mixerStrips: number;
   lastError: string | null;
 }
 
@@ -172,9 +177,10 @@ class NativeEngineShadow {
   private playStartSample = NaN; // the engine sample the run started at (its first loop start)
   private nudgeApplied = 0;      // seconds of satellite nudge applied this run
   private snapEmitPerfMs = NaN;  // performance.now() the newest snapshot's position was stamped at (its emit)
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, metroCommands: 0, arpCommands: 0, lastError: null };
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, metroCommands: 0, arpCommands: 0, mixerCommands: 0, mixerStrips: 0, lastError: null };
   private drumShadow: NativeDrumShadow | null = null;
   private bassShadow: NativeBassShadow | null = null;
+  private mixerShadow: NativeMixerShadow | null = null; // 4.1 — the page's MixerEngine strips are the engine's
   // ── Phase 3.6: the metronome / count-in / arp ──
   private lastMetro: { enabled: boolean; sound: string } | null = null;
   private lastArp: { enabled: boolean; rate: number; direction: string; random: boolean; padCount: number } | null = null;
@@ -207,10 +213,20 @@ class NativeEngineShadow {
     // the cursor at the EAR from the engine's own clock (3.3): the TS Timeline/grid playheads stop depending on the
     // AudioContext's clock quality (a headless / virtual device runs it fast or slow; the native position is the truth)
     this.engine.nativeCursorHook = () => this.seqElapsedSec();
+    // the mixer (4.1) — first: the pads' / lanes' strips are resolved through it
+    if (this.engine.mixerEngine) {
+      this.mixerShadow = new NativeMixerShadow(this.engine.mixerEngine, {
+        cmd: (c) => this.cmd(c),
+        note: (stat, v) => { if (stat === 'commands') this.stats.mixerCommands += v; else this.stats.mixerStrips += v; },
+        error: (msg) => { this.stats.lastError = msg; },
+      });
+      this.mixerShadow.attach();
+    }
     // the drum machine (3.3)
     if (this.drums) {
       this.drumShadow = new NativeDrumShadow(this.drums, {
         cmd: (c) => this.cmd(c),
+        stripForDrumTrack: (key) => this.mixerShadow ? this.mixerShadow.stripFor(DRUM_TRACK_STRIP[key] ?? key) : -1,
         ensure: (buf, hint) => this.ensure(buf, hint),
         retain: (buf) => this.retain(this.ensure(buf, 'drum')),
         unretain: (buf) => { const r = this.recs.get(buf); if (r) this.unretain(r); },
@@ -317,6 +333,7 @@ class NativeEngineShadow {
     this.engine.liveClockHook = null;
     this.drumShadow?.detach(); this.drumShadow = null;
     this.bassShadow?.detach(); this.bassShadow = null;
+    this.mixerShadow?.detach(); this.mixerShadow = null;
     this.unsubscribe?.(); this.unsubscribe = null;
     this.unsubSnapshot?.(); this.unsubSnapshot = null;
     this.unsubMidi?.(); this.unsubMidi = null;
@@ -448,6 +465,7 @@ class NativeEngineShadow {
       pitch: pad.pitch + fx.pitch, fine: fx.fine, attack, release: s.master.release, gain,
       mode: looping ? 'loop' : 'oneshot', gate: !!pad.gate, reverse: this.engine.reversedFor(i),
       choke: this.chokeId(this.engine.chokeGroupOf(i)), fadeIn, fadeOut,
+      strip: this.mixerShadow ? this.mixerShadow.stripFor(this.engine.padRoute(i)) : -1,
     };
   }
 
@@ -615,6 +633,7 @@ class NativeEngineShadow {
     this.stats.snapshotAgeMs = this.snapshotAgeMs();
     this.drumShadow?.onSnapshot(s);
     this.bassShadow?.onSnapshot(s);
+    this.mixerShadow?.onSnapshot(s);
     if (!s || this.detached || !this.engine.seqSink || typeof s.seqPlaying !== 'boolean') return;
     const idx = Number(s.seqPatternIndex);
     const held = this.sentPatterns.get(idx);
@@ -688,7 +707,7 @@ class NativeEngineShadow {
       this.lastKey[i] = rec.key;
     }
     if (!prev || !sameParams(prev, d)) {
-      await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, fadeOut: d.mode === 'oneshot' ? d.fadeOut : 0, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'hermite' });
+      await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, fadeOut: d.mode === 'oneshot' ? d.fadeOut : 0, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'hermite', strip: d.strip });
     }
     const lp = loopOf(d);
     if (!sameLoop(loopOf(prev), lp) || (lp && prev && !sameRegion(prev, d))) {
@@ -711,10 +730,10 @@ class NativeEngineShadow {
     const fire = async () => {
       const d = this.last[pad];
       const flip = reverseOverride !== undefined && d !== null && d.mode !== 'loop' && reverseOverride !== d.reverse;
-      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'hermite' });
+      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'hermite', strip: d!.strip });
       this.stats.triggers++;
       await this.cmd(atSample > 0 ? { type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)), atSample } : { type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)) });
-      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'hermite' });
+      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'hermite', strip: d!.strip });
     };
     const delayMs = when !== undefined && atSample <= 0 ? (when - this.engine.ctx.currentTime) * 1000 : 0;
     const go = () => { this.chain[pad] = this.chain[pad].then(fire).catch(() => {}); };
@@ -1020,10 +1039,44 @@ class NativeEngineShadow {
         this.engine.setInputQuantize(wasIq);
         r.liveRecOk = r.liveRecArmed && r.liveRecHitPad === 62 && step >= 0 && r.liveRecExact && (drumOk === null || drumOk);
       } else r.liveRecOk = null;
+      // ── part 8 (4.1): the mixer — the page's strips are the engine's (the strips are live, the sources ride them,
+      // a fader move / a mute round-trip through the engine and back into the snapshot)
+      if (this.mixerShadow && this.engine.mixerEngine && this.latestSnapshot?.prepared) {
+        const mx = this.engine.mixerEngine;
+        const ms = this.mixerShadow;
+        const sampleIdx = ms.stripFor('sample');
+        const bassIdx = mx.channels.has('bass') ? ms.stripFor('bass') : -1;
+        const mixerOf = () => (this.latestSnapshot?.mixer as AnyRecord | undefined) ?? null;
+        const activeHas = (i: number) => ((mixerOf()?.active as number[] | undefined) ?? []).includes(i);
+        const silentHas = (i: number) => ((mixerOf()?.silent as number[] | undefined) ?? []).includes(i);
+        const gainOf = (i: number) => { const row = (mixerOf()?.strips as Record<string, number[]> | undefined)?.[String(i)]; return Array.isArray(row) ? Number(row[6]) : NaN; };
+        const wait = async (pred: () => boolean) => { for (let t = 0; t < 40 && !pred(); t++) await new Promise((res) => setTimeout(res, 50)); return pred(); };
+        r.mixerStripsLive = await wait(() => activeHas(0) && activeHas(sampleIdx) && activeHas(CLICK_STRIP) && (bassIdx < 0 || activeHas(bassIdx)));
+        r.mixerSources = await wait(() => Number(mixerOf()?.clickStrip) === CLICK_STRIP && (bassIdx < 0 || Number(mixerOf()?.bassStrip) === bassIdx));
+        r.mixerStripCount = ((mixerOf()?.active as number[] | undefined) ?? []).length;
+        r.mixerRejected = Number(mixerOf()?.rejected ?? -1);
+        r.mixerOrderValid = mixerOf()?.orderValid === true;
+        const ch = mx.getChannel('sample');
+        const wasDb = ch.faderDb, wasMuted = ch.muted;
+        ch.setFaderDb(-60);
+        r.mixerFaderDown = await wait(() => gainOf(sampleIdx) === 0);
+        ch.setFaderDb(0);
+        r.mixerFaderUp = await wait(() => gainOf(sampleIdx) === 1);
+        ch.setFaderDb(wasDb);
+        ch.setMuted(true); mx.applySolo();
+        r.mixerMuteOn = await wait(() => silentHas(sampleIdx));
+        ch.setMuted(wasMuted); mx.applySolo();
+        r.mixerMuteOff = wasMuted ? true : await wait(() => !silentHas(sampleIdx));
+        // every bound pad sums into the strip of its route ('sample' for main chops, 'sampleN' for a pad source)
+        const bound = this.last.map((d, i) => ({ d, i })).filter((x) => x.d);
+        r.mixerPadStrips = bound.map((x) => ({ pad: x.i, strip: x.d!.strip, route: this.engine.padRoute(x.i) }));
+        r.mixerPadStrip = bound.length ? bound.every((x) => x.d!.strip >= 1 && x.d!.strip === ms.stripFor(this.engine.padRoute(x.i)) && activeHas(x.d!.strip)) : null;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false;
+      } else r.mixerPageOk = null;
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true) && (this.engine.liveClockHook ? r.liveRecOk === true : true)) : true);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true) && (this.engine.liveClockHook ? r.liveRecOk === true : true) && (this.mixerShadow ? r.mixerPageOk === true : true)) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;

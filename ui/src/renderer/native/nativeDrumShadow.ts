@@ -33,6 +33,8 @@ const GROUP_ID_BASE = 1000;        // drum mute groups live in their own choke-g
 /** What the pad shadow lends the drum shadow: its commands, its SampleStore uploads (refcounted) and its clock. */
 export interface DrumShadowHost {
   cmd(c: AnyRecord): Promise<boolean>;
+  /** 4.1: the mixer strip a lane's pad sums into (the lane key → its mixer channel); −1 / absent = the direct path. */
+  stripForDrumTrack?(key: TrackKey): number;
   ensure(buf: AudioBuffer, keyHint: string): { key: string; ready: Promise<boolean>; failed: boolean };
   retain(buf: AudioBuffer): void;
   unretain(buf: AudioBuffer): void;
@@ -57,6 +59,7 @@ interface LaneDesc {
   volume: number;
   audible: boolean;
   group: number;
+  strip: number; // the mixer strip (4.1), −1 = direct
 }
 
 export class NativeDrumShadow {
@@ -139,6 +142,7 @@ export class NativeDrumShadow {
       volume: Math.max(0, Math.min(1, t.volume)),
       audible: anySolo ? !!t.solo : !t.muted,
       group: t.muteGroup && t.muteGroup > 0 ? Math.floor(t.muteGroup) : 0,
+      strip: this.host.stripForDrumTrack?.(track) ?? -1,
     };
   }
   private syncLane(track: TrackKey, s: DrumState): void {
@@ -147,7 +151,7 @@ export class NativeDrumShadow {
     if (lane < 0) return;
     const d = this.describe(track, s);
     const prev = this.last[lane];
-    if (prev && d && prev.buf === d.buf && prev.attack === d.attack && prev.volume === d.volume && prev.audible === d.audible && prev.group === d.group) return;
+    if (prev && d && prev.buf === d.buf && prev.attack === d.attack && prev.volume === d.volume && prev.audible === d.audible && prev.group === d.group && prev.strip === d.strip) return;
     this.last[lane] = d;
     if (d?.buf && (!prev || prev.buf !== d.buf)) this.host.retain(d.buf);
     if (prev?.buf && (!d || prev.buf !== d.buf)) this.host.unretain(prev.buf);
@@ -174,8 +178,8 @@ export class NativeDrumShadow {
       await this.host.cmd({ type: 'setPadSample', pad });
       this.lastKey[lane] = null;
     }
-    if (!prev || prev.attack !== d.attack || prev.group !== d.group || (d.buf && prev.buf !== d.buf)) {
-      await this.host.cmd({ type: 'setPadParams', pad, pitch: 0, fine: 0, attack: d.attack, release: 0, fadeOut: 0, gain: 1, outputPair: 0, mode: 'oneshot', gate: false, reverse: false, chokeGroup: d.group > 0 ? GROUP_ID_BASE + d.group : -1, interpolation: 'hermite', pan: 0, chokeFade: DRUM_CHOKE_FADE });
+    if (!prev || prev.attack !== d.attack || prev.group !== d.group || prev.strip !== d.strip || (d.buf && prev.buf !== d.buf)) {
+      await this.host.cmd({ type: 'setPadParams', pad, pitch: 0, fine: 0, attack: d.attack, release: 0, fadeOut: 0, gain: 1, outputPair: 0, mode: 'oneshot', gate: false, reverse: false, chokeGroup: d.group > 0 ? GROUP_ID_BASE + d.group : -1, interpolation: 'hermite', pan: 0, chokeFade: DRUM_CHOKE_FADE, strip: d.strip });
     }
     if (!prev || prev.volume !== d.volume || prev.audible !== d.audible || prev.group !== d.group) {
       await this.host.cmd({ type: 'setDrumLane', lane, volume: d.volume, audible: d.audible, group: d.group });

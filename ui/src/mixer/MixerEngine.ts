@@ -57,6 +57,21 @@ function trimLeadingSilence(buffer: AudioBuffer, threshold = 0.00001): AudioBuff
  *  by MixerEngine.addChannel(). */
 export type ChannelName = string;
 
+/** Terminator 3.0 — the native shell's mirror (src/renderer/native/nativeMixerShadow.ts sets it): every strip
+ *  setter reports here so the C++ mixer (engine/core/Mixer.h, Phase 4.1) follows the page's strips — the Web Audio
+ *  graph below keeps running for the UI (faders, meters until 4.3) while the engine is what is heard. Null in
+ *  Electron / the browser (no-op). */
+export interface MixerNativeSink {
+  channel(name: ChannelName, kind: 'channel' | 'send', present: boolean): void;
+  fader(name: ChannelName | 'master', db: number): void;
+  pan(name: ChannelName, pan: number): void;
+  send(name: ChannelName, index: number, db: number): void;
+  mute(name: ChannelName, on: boolean): void;
+  solo(name: ChannelName, on: boolean): void;
+}
+let nativeSink: MixerNativeSink | null = null;
+export function setMixerNativeSink(sink: MixerNativeSink | null): void { nativeSink = sink; }
+
 export const DEFAULT_REGULAR_CHANNELS: ChannelName[] = ['sample', 'kick', 'snare', 'hat', 'openhat', 'perc'];
 /** Mutable: addChannel() appends here so every consumer that iterates the
  *  mixer (render, metering, presets, exports) picks new strips up for free. */
@@ -274,18 +289,21 @@ class ChannelStrip {
   setFaderDb(db: number): void {
     this.faderDb = clamp(db, FADER_MIN_DB, FADER_MAX_DB);
     this.faderGain.gain.setTargetAtTime(faderToGain(this.faderDb), this.ctx.currentTime, 0.008);
+    nativeSink?.fader(this.name, this.faderDb);
   }
   setPan(p: number): void {
     this.pan = clamp(p, -1, 1);
     this.panner.pan.setTargetAtTime(this.pan, this.ctx.currentTime, 0.008);
+    nativeSink?.pan(this.name, this.pan);
   }
   setSend(i: number, db: number): void {
     if (i < 0 || i >= this.sendGains.length) return;
     this.sendDbs[i] = clamp(db, SEND_MIN_DB, FADER_MAX_DB);
     this.sendGains[i].gain.setTargetAtTime(faderToGain(this.sendDbs[i]), this.ctx.currentTime, 0.008);
+    nativeSink?.send(this.name, i, this.sendDbs[i]);
   }
-  setMuted(b: boolean): void { this.muted = b; }
-  setSoloed(b: boolean): void { this.soloed = b; }
+  setMuted(b: boolean): void { this.muted = b; nativeSink?.mute(this.name, b); }
+  setSoloed(b: boolean): void { this.soloed = b; nativeSink?.solo(this.name, b); }
 
   // ── CONSOLE stage ──────────────────────────────────────────────────
   /** Put the desk's channel stage in (settings.on) or take it out. Seeded by
@@ -698,6 +716,7 @@ class MasterStrip {
   setFaderDb(db: number): void {
     this.faderDb = clamp(db, FADER_MIN_DB, FADER_MAX_DB);
     this.faderGain.gain.setTargetAtTime(faderToGain(this.faderDb), this.ctx.currentTime, 0.008);
+    nativeSink?.fader('master', this.faderDb);
   }
 
   /** See ChannelStrip.setConsole — the master carries the BUS stage. */
@@ -990,6 +1009,7 @@ export class MixerEngine {
     strip.setGainMatch(this.gainMatchOn);   // inherit the current match setting
     strip.setConsole(this.console);          // …and the desk stage, if it's on
     this.channels.set(name, strip);
+    nativeSink?.channel(name, 'channel', true);
     if (!REGULAR_CHANNELS.includes(name)) {
       // Optional placement (a SAMPLE n strip sits right after the last SAMPLE
       // strip, not at the far end); default = append.
@@ -1019,6 +1039,7 @@ export class MixerEngine {
     strip.dispose();
     this.channels.delete(name);
     this.channelMeta.delete(name);
+    nativeSink?.channel(name, 'channel', false);
     const i = REGULAR_CHANNELS.indexOf(name);
     if (i >= 0) REGULAR_CHANNELS.splice(i, 1);
     // Any SC COMP keyed from this lane goes quiet (its wire is dropped) and the
