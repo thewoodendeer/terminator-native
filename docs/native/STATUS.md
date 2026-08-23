@@ -876,13 +876,52 @@ stopped) click too. COUNT-IN: REC with the transport stopped — 4 clicks, the "
 would have been (the loop starts ON it, drums and bass with it); the same from the DRUMS LIVE REC and the BASS REC;
 cancel mid-count (click REC again). ARP has no UI yet — nothing to test there (MIDI + ARP on would arp natively).
 
+## Phase 3 — 3.7 DONE (LIVE RECORD LANDS ON THE ENGINE CLOCK), 2026-08-23 ninth session
+**What changed (page, the engine grid as the truth):** a live-recorded hit's MUSICAL TIME and its LANDED LINE are now
+measured on the ENGINE's clock, not the WebView's AudioContext. `ChopperEngine.liveClockHook` (set by the shadow):
+`hitElapsedSec(eventTimestamp)` = seconds from the audible loop start (the engine's own `seqLoopStartSample`) to the
+hit's HEARD instant — the input's performance stamp (a native MIDI note's driver stamp mapped by the 3.5 router, a DOM
+event's `timeStamp` for the mouse/keys; clamped to the TS 50 ms handler-lag window) → `NativeClock.sampleHeardAtPerfMs`
+(the NATIVE device's output latency, not the ctx's); `sampleAt(elapsed)` = the absolute engine sample of a point on
+the loop; `outputLatencySec()` = the native device's output latency. `_doTrigger`'s live-record branch uses them:
+`hitTime = seqCurrentLoopStart + nativeElapsed` (the ctx math `now − lag − hwLatency` only when the native transport is
+not running), the landing (`liveLanding` — INPUT Q, stride, the TS rules, unchanged) gives the line, and the audible
+hit is booked as that line's ENGINE sample (`triggerPadAt(... {atSample})` → `voiceSink.start(..., atSample)` → the
+shadow sends `triggerPad{atSample}` as-is — no second ctx → sample mapping; a past line = the engine fires at once).
+`hwLatencySec()` / `hwLatencyMeasured()` read the native device's latency when the hook is set — the LATENCY readout
+and the playhead compensation follow what is actually heard. The DRUMS the same way: `DrumSink.hitElapsedSec?` /
+`sampleAt?` + `hit(..., atSample?)`; `DrumEngine.liveHit` takes the intent from the engine clock (`recordLiveHitAt`
+straight with the musical time; the quantized audible instant as an engine sample through `playLive(..., atSample)`
+→ `playHit(..., atSample)` → the sink). Why: WebKit's `ctx.currentTime` is render-quantum coarse (128 samples ≈ 2.9 ms
+at 44.1 k) and `ctxPair` re-reads it per mapping — every chop/drum live hit carried up to ±3 ms of that plus the wrong
+(WebView) output latency. **Engine:** the snapshot publishes `lastLiveHitPad` / `lastLiveHitSample` (the last live
+trigger — command / booked / MIDI direct — and the sample it fired or was booked at; `Engine::noteLiveHit`) so the
+page and the probe can assert the landed sample; one `[engine]` case (booked 1 s ahead → its booking; a direct trigger
+→ its block offset; a MIDI note → its offset; the booked hit's re-stamp when it fires).
+**Gates:** ctest 189/189 (188 + 1), RTSan, universal lipo `x86_64 arm64` (see the evidence line), ui gate (tsc
+baseline 5); the probe asserts **`liveRecOk`** (part 7: the chop seq plays a cleared 1-bar/16 pattern at 240, REC arms
+while playing, `triggerPad(62, 1, performance.now())` → the page wrote step k AND `lastLiveHitSample − seqLoopStart
+(mod the loop) == k × stepSamples` — **0 samples**; the drums: `liveHit(0, now)` while live-recording → the kick row
+got step 36 and `lastLiveHitSample` sits on `drumLoopStart + 36 × 459.375` — **1 sample** (the fractional step
+length rounds)). Evidence (ninth session): mac-debug 0 warnings + ctest 189/189 · RTSan 190/190 · universal lipo `x86_64 arm64` on the
+app + terminator-render + ctest 189 (0 warnings) · ui gate green · probe OK `liveRecOffsetSamples: 0`,
+`drumLiveRec.offsetSamples: 1`.
+**Honest boundary after 3.7:** the landing MATH (INPUT Q, the stride, the storage refit, the early-hit window) stays on
+the page — it is pattern-data logic and the page owns the patterns; what moved is the TIME BASE and the booked sample.
+The bass records at PPQ-96 ticks through its own (already native) clock and was left alone. The count-in's early hits
+(before the loop runs) still use the ctx hit time for the write (no engine loop start yet — the write only). The
+Electron app is untouched (the hook is null there; the `atSample` parameter is dead weight there).
+**Victor's pass (3.7):** live-record chops on a playing 90 BPM pattern from a controller and from the pads — what you
+hear IS what the next loop plays (no early/late drift between the take and the playback); INPUT Q 0 → your feel
+recorded; the same on the drum LIVE surface; the LATENCY pill reads the interface's output latency (not ~16 ms
+"browser").
+
 ### Next session (in order) — updated at the end of the ninth session
-0. `gh run list` — CI for the 3.6 commits (4 jobs; the universal probe now also asserts `metroPageOk`).
-1. 3.7 live-record landing on the native clock + the one-owner rule already in C++ — the last page-side timing
-   logic (the hit time from the driver stamp / NativeClock, `liveLanding` → a booked `triggerPad{atSample}` it
-   already is; move the landing + INPUT Q storage refit decision next to the engine's grid). Then Phase 4 (read
-   TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" first) — routes pads / drum lanes / the bass / the CLICK
-   into their strips; MIDI note OUT per strip rides the 3.5 pump.
+0. `gh run list` — CI for the 3.6 + 3.7 commits (4 jobs; the universal probe now also asserts `metroPageOk` +
+   `liveRecOk`).
+1. **Phase 4** (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" first) — 4.1 strips / master / sends / the
+   free routing graph, 64-bit summing; routes pads / drum lanes / the bass / the CLICK into their strips; MIDI note
+   OUT per strip rides the 3.5 pump. Phase 3 is COMPLETE (3.1–3.7).
 2. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
 
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)

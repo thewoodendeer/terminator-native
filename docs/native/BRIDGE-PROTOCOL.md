@@ -230,6 +230,9 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
   "countInBeat": -1, "countInPending": false, "countInDownbeatSample": 0,
   "arpEnabled": false, "arpHoldPad": -1, "arpStep": 0, "arpLastPad": -1, "arpHits": 0 }
 ```
+`lastLiveHitPad` / `lastLiveHitSample` (3.7): the last LIVE trigger (a `triggerPad` — at its block offset or, with
+`atSample`, the booked sample — or a MIDI note on the direct path) — the page's live-record probe compares it to
+the grid line it landed the hit on (0 samples at INPUT Q 100).
 `metronome*` / `countIn*` / `arp*` (3.6): `metronomeBeat` = the last beat click's index in its bar (0..3), `metronomeClicks`
 lifetime (beats + count-in), `metronomeLastClickSample` / `…Accent` = the last click; `countInBeat` = the TS countdown
 (N..1 while counting, −1 idle), `countInPending` = between `countIn` and its downbeat, `countInDownbeatSample` = the

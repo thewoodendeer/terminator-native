@@ -97,6 +97,14 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `syncMetroArp` (METRO/sound + ARP settings + `pads.length` diffed from the state), `anchorSampleFor` (PLAY on a
   count-in downbeat sends the engine's downbeat SAMPLE — also to the drum/bass shadows via `host.anchorSample`), the
   probe part 6 (`metroPageOk`); `nativeDrumShadow.ts` / `nativeBassShadow.ts` — the optional `anchorSample` host hook.
+- **Live record on the engine clock (3.7, 2026-08-23):** `src/renderer/chopper/ChopperEngine.ts` — the `liveClockHook`
+  field (`hitElapsedSec(eventTimestamp)` / `sampleAt(elapsedSec)` / `outputLatencySec()`); `_doTrigger`'s live-record
+  branch takes the hit's musical time from it when set and books the landed line as `atSample` (`triggerPadAt` opts +
+  `startVoice` + `voiceSink.start(..., atSample?)`); `hwLatencySec()` / `hwLatencyMeasured()` prefer the native device's
+  latency. `src/renderer/drums/DrumEngine.ts` — `DrumSink.hitElapsedSec?` / `sampleAt?` + `hit(..., atSample?)`;
+  `liveHit` takes the intent from the engine clock, `playLive(..., atSample?)` → `playHit(..., atSample?)`.
+  `native/nativeEngineShadow.ts` — the hook, `onStart(..., atSampleExact)`, probe part 7 (`liveRecOk`);
+  `native/nativeDrumShadow.ts` — `hitElapsedSec` / `loopSampleAt`, `hit(..., atSampleExact)`.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 
