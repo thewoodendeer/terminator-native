@@ -1112,8 +1112,19 @@ class NativeEngineShadow {
         mark('p8g'); r.mixerFxAdded = slot >= 0 && (await wait(() => fxCountOf(sampleIdx) === fxBefore + 1));
         if (slot >= 0) { ch.setFxParam(slot, 'LOW', 6); ch.toggleBypass(slot); ch.toggleBypass(slot); ch.removeFx(slot); }
         mark('p8h'); r.mixerFxRemoved = await wait(() => fxCountOf(sampleIdx) === fxBefore);
+        // 4.2b: the heavy devices round-trip too — an SC COMP keyed from 'kick' (its SOURCE is a channel NAME on the
+        // page, the key strip's index natively), a DELAY, a REVERB (its IR builds on the audio thread) — and no
+        // command errors on the way (a SOURCE string leaking through would be one)
+        const cmdErrBefore = this.stats.commandErrors;
+        const s2 = ch.addFx('sccomp'); if (s2 >= 0) ch.setFxParam(s2, 'SOURCE', 'kick');
+        const s3 = ch.addFx('delay'); if (s3 >= 0) ch.setFxParam(s3, 'TIME', 250);
+        const s4 = ch.addFx('reverb'); if (s4 >= 0) ch.setFxParam(s4, 'DECAY', 1.5);
+        mark('p8i'); r.mixerFxHeavyAdded = s2 >= 0 && s3 >= 0 && s4 >= 0 && (await wait(() => fxCountOf(sampleIdx) === fxBefore + 3));
+        for (const sl of [s4, s3, s2]) if (sl >= 0) ch.removeFx(sl);
+        mark('p8j'); r.mixerFxHeavyRemoved = await wait(() => fxCountOf(sampleIdx) === fxBefore);
+        r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxRejected === 0;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
       } else r.mixerPageOk = null;
       mark('p8mixer');
       this.engine.removePadBuffer(62);

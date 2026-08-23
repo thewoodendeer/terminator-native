@@ -18,6 +18,7 @@
  *    rmsPost, gain]` / `rejected` / `orderValid` / `mainOut` / `bassStrip` / `clickStrip`) — `levels(name)` serves the
  *    meters (the UI binding is 4.3); the probe (part 8, `mixerPageOk`) asserts the round trips.
  *  • The INSERT CHAINS (4.2): `fxAdd` / `fxRemove` / `fxBypass` / `fxParam` / `fxReorder` / `fxClear` from the sink →
+ *    (4.2b: every page device is real natively; the SC COMP's SOURCE channel NAME becomes the key strip's INDEX here) →
  *    `mixerAddFx {strip, fx}` (+ every current param, immediate) / `mixerRemoveFx` / `mixerSetFxBypass` /
  *    `mixerSetFxParam {strip, index, fx, key, value}` / `mixerReorderFx` / `mixerClearFx`; the master's chain is strip 0.
  *    Devices the engine has not ported yet (4.2a ports utility / eq / filter / wide / mseq / pan) take their slot as a
@@ -66,7 +67,7 @@ export class NativeMixerShadow {
       fxAdd: (name, index, id, params) => this.fxAdd(name, index, id, params),
       fxRemove: (name, index) => this.queue({ type: 'mixerRemoveFx', strip: this.idxOf(name), index }),
       fxBypass: (name, index, on) => this.queue({ type: 'mixerSetFxBypass', strip: this.idxOf(name), index, on }),
-      fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value }),
+      fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value: this.fxValue(id, key, value) }),
       fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
       fxClear: (name) => this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) }),
     });
@@ -158,7 +159,14 @@ export class NativeMixerShadow {
     const strip = this.idxOf(name);
     if (strip < 0) return;
     this.queue({ type: 'mixerAddFx', strip, fx: id });
-    for (const [key, value] of Object.entries(params)) this.queue({ type: 'mixerSetFxParam', strip, index, fx: id, key, value, immediate: true });
+    for (const [key, value] of Object.entries(params)) this.queue({ type: 'mixerSetFxParam', strip, index, fx: id, key, value: this.fxValue(id, key, value), immediate: true });
+  }
+  /** A page param value as the engine takes it. Enum strings go through as-is (the shell maps them by the device's
+   *  option table); the SC COMP's SOURCE is a page channel NAME here and the key strip's INDEX natively (−1 = NONE). */
+  private fxValue(id: FxId, key: string, value: number | string): number | string {
+    if (id !== 'sccomp' || key !== 'SOURCE') return value;
+    if (typeof value !== 'string' || value === 'NONE' || value === '') return typeof value === 'number' ? value : -1;
+    return this.names.get(value) ?? this.stripFor(value as ChannelName);
   }
   private idxOf(name: ChannelName | 'master'): number { return name === 'master' ? 0 : this.stripFor(name); }
   private channel(name: ChannelName, kind: 'channel' | 'send', present: boolean): void {
