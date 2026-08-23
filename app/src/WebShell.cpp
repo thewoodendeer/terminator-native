@@ -57,8 +57,10 @@ namespace
 {
 constexpr int kSnapshotHz = 20;
 constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
-constexpr int kProbeDelayTicksReact = 140; // 7 s — the React UI: fonts + first render + engines constructing
-constexpr int kProbeAsyncLeadTicks = 60;   // the shim round-trip checks start 3 s before the final read
+constexpr int kProbeDelayTicksReact = 220; // 11 s — the React UI: fonts + first render + engines constructing, then
+                                           // the async checks (start at kProbeAsyncLeadTicks = 7 s before the read)
+constexpr int kProbeAsyncLeadTicks = 140;  // the shim round-trip checks start 7 s before the final read (the shadow's
+                                           // self-test alone runs ~4 s since Phase 3.2 drives the native sequencer)
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -532,6 +534,13 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
     if (type == "setPadLoop")
         return registry_.setPadLoop(json);
     // the chop sequencer (Phase 3.1): a whole pattern → SeqPattern (grid bit masks + per-cell velocity), by pointer
+    if (type == "queueSequence" && static_cast<bool>(json.getProperty("cancel", false)))
+    {
+        // the UI re-selected the playing pattern: drop the pending switch (no-op when stopped)
+        if (!engine_.commands().push(Command::seqQueuePattern(nullptr)))
+            return ok(false, "command queue full");
+        return ok(true);
+    }
     if (type == "setSequence" || type == "queueSequence")
     {
         auto pat = std::make_shared<SeqPattern>();
@@ -597,10 +606,22 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
     else if (type == "panic")
         c = Command::panic();
     else if (type == "triggerPad")
-        c = Command::triggerPad(static_cast<std::uint16_t>(static_cast<int>(json["pad"])),
-                                static_cast<float>(static_cast<double>(json.getProperty("velocity", 1.0))));
+    {
+        // atSample > 0 = an ENGINE SAMPLE position (the page's NativeClock maps ctx time → samples): inside the
+        // current block it fires at that offset, past it the engine books it and fires it sample-exact (quantized
+        // live-record hits — "quantize what I hear" with no timer jitter)
+        const auto at = static_cast<juce::int64>(json.getProperty("atSample", 0));
+        const auto pad = static_cast<std::uint16_t>(static_cast<int>(json["pad"]));
+        const auto vel = static_cast<float>(static_cast<double>(json.getProperty("velocity", 1.0)));
+        c = at > 0 ? Command::triggerPadAtSample(pad, vel, static_cast<std::uint64_t>(at))
+                   : Command::triggerPad(pad, vel);
+    }
     else if (type == "releasePad")
-        c = Command::releasePad(static_cast<std::uint16_t>(static_cast<int>(json["pad"])));
+    {
+        const auto at = static_cast<juce::int64>(json.getProperty("atSample", 0));
+        const auto pad = static_cast<std::uint16_t>(static_cast<int>(json["pad"]));
+        c = at > 0 ? Command::releasePadAtSample(pad, static_cast<std::uint64_t>(at)) : Command::releasePad(pad);
+    }
     else if (type == "stopPad")
         c = Command::stopPad(static_cast<std::uint16_t>(static_cast<int>(json["pad"])));
     else if (type == "setNoteMap")
@@ -656,6 +677,22 @@ void WebShell::persistAudioSetup()
 juce::var WebShell::handleAudio(const juce::var& req)
 {
     const auto verb = req.isObject() ? req["verb"].toString() : juce::String("list");
+    if (verb == "clock")
+    {
+        // the page's NativeClock calibrates host time ↔ performance.now() by round trip (keeps the best-RTT sample)
+        const auto& s = engine_.snapshot();
+        auto* o = new juce::DynamicObject();
+        o->setProperty("ok", true);
+        o->setProperty("hostNs", static_cast<juce::int64>(AudioIO::hostTimeNowNs()));
+        o->setProperty("clockHostNs", static_cast<juce::int64>(s.clock.hostNs));
+        o->setProperty("clockSample", static_cast<juce::int64>(s.clock.samplePosition));
+        o->setProperty("sampleRate", s.sampleRate);
+        o->setProperty("prepared", static_cast<bool>(s.prepared));
+        const auto dev = audioIO_.currentDevice();
+        o->setProperty("outputLatencyMs",
+                       dev.sampleRate > 0 ? dev.outputLatencySamples * 1000.0 / dev.sampleRate : 0.0);
+        return juce::var(o);
+    }
     if (verb == "list" || verb == "apply" || verb == "enableAll" || verb == "default")
     {
         juce::String err;
@@ -1055,6 +1092,14 @@ void WebShell::timerCallback()
     obj->setProperty("playing", static_cast<bool>(s.playing));
     obj->setProperty("playheadSamples", static_cast<juce::int64>(s.playheadSamples));
     obj->setProperty("blocksProcessed", static_cast<juce::int64>(s.blocksProcessed));
+    obj->setProperty("samplesProcessed", static_cast<juce::int64>(s.samplesProcessed));
+    // the host-clock ↔ sample anchor of the last block + the host time of THIS emit: the page's NativeClock maps
+    // engine samples ↔ performance.now() ↔ AudioContext time with it (the chop-seq cursor, the drums/bass
+    // re-anchor, quantized live hits). hostNs = juce::Time::getHighResolutionTicks() in ns (monotonic).
+    obj->setProperty("clockHostNs", static_cast<juce::int64>(s.clock.hostNs));
+    obj->setProperty("clockSample", static_cast<juce::int64>(s.clock.samplePosition));
+    obj->setProperty("clockBlockSize", static_cast<int>(s.clock.blockSize));
+    obj->setProperty("emitHostNs", static_cast<juce::int64>(AudioIO::hostTimeNowNs()));
     obj->setProperty("masterGain", static_cast<double>(s.masterGain));
     obj->setProperty("testToneEnabled", static_cast<bool>(s.testToneEnabled));
     obj->setProperty("testToneFrequencyHz", static_cast<double>(s.testToneFrequencyHz));
@@ -1092,6 +1137,7 @@ void WebShell::timerCallback()
     obj->setProperty("seqBpm", s.seqBpm);
     obj->setProperty("seqLoopStartSample", static_cast<juce::int64>(s.seqLoopStartSample));
     obj->setProperty("seqHitsFired", static_cast<juce::int64>(s.seqHitsFired));
+    obj->setProperty("seqHitsSkipped", static_cast<juce::int64>(s.seqHitsSkipped));
     obj->setProperty("calibrationState", static_cast<int>(s.calibrationState));
     obj->setProperty("calibrationSamples", calibrationResultSamples_);
     obj->setProperty("calibrationMs", calibrationResultMs_);

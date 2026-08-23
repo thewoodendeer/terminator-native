@@ -66,6 +66,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     grep -Eq '"seqAdvances": ?true' "$OUT" || { echo "::error::the native chop sequencer did not run (setSequence + seqPlay → seqPlaying/step/hits)"; exit 1; }
     grep -Eq '"seqStopped": ?true' "$OUT" || { echo "::error::seqStop did not stop the native chop sequencer"; exit 1; }
     echo "native chop sequencer OK (bridge: setSequence → seqPlay → steps + hits → seqStop)"
+    # Phase 3.2: the PAGE's transport (engine.playSeq / stopSeq) drives the native sequencer — pattern pushed, hits
+    # fire, the TS cursor tracks the native step through NativeClock, stop lands natively
+    grep -Eq '"seqPageOk": ?true' "$OUT" || { echo "::error::the page transport did not drive the native chop sequencer (seqPageOk false — see seqPage* fields: native playing / pattern index / hits / cursor tracking / stopped)"; exit 1; }
+    echo "page transport → native chop sequencer OK: $(grep -Eo '"seqPageCursor": ?\{[^}]*\}' "$OUT") drift=$(grep -Eo '"seqPageDriftMs": ?[-0-9.e]+' "$OUT") clock rtt=$(grep -Eo '"clockRttMs": ?[-0-9.e]+' "$OUT" | head -1)"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

@@ -13,13 +13,21 @@
  *   • every live hit / stop / note-off the TS engine performs (`voiceSink`) becomes `triggerPad` / `stopPad` /
  *     `releasePad`, and the TS engine's live-hit voices are routed into a silent bus (`mutePadVoices`) — so the
  *     native engine is what you hear while the UI keeps working unchanged.
- * Not mirrored yet (honest list, also in STATUS.md): the chop SEQUENCER's scheduled voices + drums + bass (still
- * Web Audio — Phase 3 transport), mixer strips / master FX (Phase 4), time-STRETCH (plays dry natively), live
- * re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered LOOP. MIDI reaching the page does not exist in the WebView (no Web MIDI): native MIDI hits the C++
- * engine directly (MidiHub, note−36) — the UI does not light them yet.
+ *   • Phase 3.2 — the CHOP SEQUENCER runs natively: `ChopperEngine.seqSink` (PLAY/STOP/PAUSE/RESUME → seqPlay/
+ *     seqStop/seqPause/seqResume), the playing pattern / a queued switch / BPM / swing diffed from the state →
+ *     setSequence / queueSequence / setBpm, and the native position pushed back at 20 Hz (nativeSeqUpdate) through
+ *     NativeClock (engine samples ↔ host ns ↔ performance.now ↔ AudioContext, at the ear) so the TS cursor,
+ *     live-record landing and metronome read the native anchor; quantized live hits go out as `triggerPad{atSample}`
+ *     (sample-exact); the measured native-vs-ctx drift nudges the drums/bass/MIDI-clock grids (phase-preserving).
+ * Not mirrored yet (honest list, also in STATUS.md): drums + bass + metronome (still Web Audio on the page's
+ * AudioContext — Phase 3.3/3.4/3.6; kept phase-locked by the nudge, the ear-alignment is as good as the clock
+ * mapping ≈ 1 ms + the two devices' latency reports), mixer strips / master FX (Phase 4), time-STRETCH (plays
+ * dry natively), live re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered
+ * LOOP. Native MIDI hits the C++ engine directly (MidiHub, note−36) and is mirrored to the page (2.5e).
  */
-import type { ChopperEngine, ChopperState } from '../chopper/ChopperEngine';
+import { SEQ_MAX_STEPS, type ChopperEngine, type ChopperState, type SeqPattern } from '../chopper/ChopperEngine';
 import { isNative, native, onNativeEvent } from './juceBridge';
+import { NativeClock, ctxPair, ctxHeardLatencySec } from './nativeClock';
 
 type AnyRecord = Record<string, any>;
 
@@ -92,6 +100,12 @@ export interface NativeShadowStats {
   padsBound: number;
   triggers: number;
   midiNotes: number;
+  /** Phase 3.2 — the native transport binding */
+  seqCommands: number;
+  seqNudges: number;
+  clockReady: boolean;
+  clockRttMs: number;
+  driftMs: number; // the last measured native-vs-ctx drift (ms, + = native later) — what the nudge corrects
   lastError: string | null;
 }
 
@@ -109,7 +123,19 @@ class NativeEngineShadow {
   private masterGainSent = -1;
   private detached = false;
   latestSnapshot: AnyRecord | null = null;
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, lastError: null };
+  // ── Phase 3.2: the native transport ──
+  readonly clock = new NativeClock();
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
+  private seqChain: Promise<void> = Promise.resolve();            // transport commands + pattern pushes, in order
+  private sentPatterns = new Map<number, { bars: number; resolution: number; json: string }>(); // what the engine holds per index
+  private lastQueued: { idx: number; json: string } | null = null;
+  private lastBpmSent = -1;
+  private driftFilt = NaN;       // low-passed drift (performance.now is 1 ms-coarse in WebKit — single reads jitter)
+  private playAnchorCtx = NaN;   // the ctx time we asked the native seq to start at
+  private playAckAt = Infinity;  // performance.now() when the seqPlay command was accepted
+  private playStartSample = NaN; // the engine sample the run started at (its first loop start)
+  private nudgeApplied = 0;      // seconds of satellite nudge applied this run
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, driftMs: 0, lastError: null };
 
   constructor(private engine: ChopperEngine) {}
 
@@ -120,8 +146,18 @@ class NativeEngineShadow {
       stop: (pad) => this.onStop(pad),
       release: (pad) => this.onRelease(pad),
     };
+    // the native transport (Phase 3.2): the TS engine's PLAY/STOP/PAUSE/RESUME drive the C++ ChopSequencer
+    this.engine.seqSink = {
+      play: (anchor) => this.seqPlay(anchor),
+      stop: () => this.queueSeq(() => this.cmd({ type: 'seqStop' })),
+      pause: () => this.queueSeq(() => this.cmd({ type: 'seqPause' })),
+      resume: () => this.queueSeq(() => this.cmd({ type: 'seqResume' })),
+      leadSec: () => this.playLeadSec(),
+    };
+    void this.calibrateClock(8);
+    this.clockTimer = setInterval(() => { void this.calibrateClock(1); }, 4000);
     this.unsubscribe = this.engine.subscribe((s) => this.sync(s));
-    this.unsubSnapshot = onNativeEvent('terminator.snapshot', (snap) => { this.latestSnapshot = snap; });
+    this.unsubSnapshot = onNativeEvent('terminator.snapshot', (snap) => { this.latestSnapshot = snap; this.onSnapshot(snap); });
     // MIDI from the devices: the engine already played the note on the direct MidiHub → engine path; the page
     // runs the same hit through the TS engine (LEDs, playhead, chokes, step/live record) marked nativeOwned so
     // the shadow does not trigger it twice. Note → pad = the engine's default map (note − 36).
@@ -146,6 +182,8 @@ class NativeEngineShadow {
     this.unsubMidi?.(); this.unsubMidi = null;
     this.engine.voiceSink = null;
     this.engine.mutePadVoices = false;
+    if (this.clockTimer) { clearInterval(this.clockTimer); this.clockTimer = null; }
+    if (this.engine.seqSink) { this.engine.seqSink = null; if (this.engine.isSeqPlaying()) void this.cmd({ type: 'seqStop' }); }
     for (let i = 0; i < MAX_PADS; i++) {
       if (this.last[i]) { void this.cmd({ type: 'setPadSample', pad: i }); void this.cmd({ type: 'setPadLoop', pad: i, clear: true }); }
       this.last[i] = null; this.lastKey[i] = null;
@@ -274,6 +312,135 @@ class NativeEngineShadow {
     const vol = Math.max(0, Math.min(1, s.master.volume));
     if (vol !== this.masterGainSent) { this.masterGainSent = vol; void this.cmd({ type: 'setMasterGain', gain: vol }); }
     for (let i = 0; i < MAX_PADS; i++) this.syncPad(i, s); // describe() is a cheap null for pads past the grid
+    this.syncTransport(s);
+  }
+
+  // ── Phase 3.2: the native transport ──
+  private queueSeq(fn: () => Promise<unknown>): void {
+    this.stats.seqCommands++;
+    this.seqChain = this.seqChain.then(fn).then(() => {}).catch(() => {});
+  }
+  /** The engine's `SeqPattern` → the bridge's setSequence/queueSequence payload (stored steps, aligned velocities). */
+  private patternPayload(idx: number, p: SeqPattern, swing: number): AnyRecord {
+    const stepCount = Math.min(SEQ_MAX_STEPS, p.bars * p.resolution);
+    const grid: number[][] = [], velGrid: number[][] = [];
+    for (let st = 0; st < stepCount; st++) {
+      const row = p.grid[st];
+      if (!row || row.length === 0) { grid.push([]); velGrid.push([]); continue; }
+      const vr = p.velGrid?.[st];
+      grid.push([...row]);
+      velGrid.push(row.map((_, k) => Math.max(0.05, Math.min(1, Number(vr?.[k] ?? 1) || 1))));
+    }
+    return { index: idx, bars: p.bars, resolution: p.resolution, loop: p.loop, swing: Math.max(0, Math.min(1, swing)), grid, velGrid };
+  }
+  /** Push pattern `idx` (live replace or queued switch); the same bytes already held natively are not re-sent. */
+  private async sendPattern(idx: number, p: SeqPattern | null, swing: number, type: 'setSequence' | 'queueSequence'): Promise<boolean> {
+    if (!p) return false;
+    const payload = this.patternPayload(idx, p, swing);
+    const json = JSON.stringify(payload);
+    if (type === 'setSequence') {
+      const held = this.sentPatterns.get(idx);
+      const nativeIdx = Number(this.latestSnapshot?.seqPatternIndex ?? -1);
+      if (held && held.json === json && nativeIdx === idx) return true; // unchanged and already the audible one
+    } else if (this.lastQueued && this.lastQueued.idx === idx && this.lastQueued.json === json) return true;
+    const ok = await this.cmd({ type, ...payload });
+    if (ok) {
+      this.sentPatterns.set(idx, { bars: payload.bars, resolution: payload.resolution, json });
+      if (type === 'queueSequence') this.lastQueued = { idx, json };
+    }
+    return ok;
+  }
+  /** The lead PLAY needs so the native engine RENDERS the anchor's sample in time: its device's output latency (the
+   *  anchor is a heard time) + 1.5 blocks (command → block boundary) + the bridge, minus what the context's own
+   *  heard-pair already puts between a scheduling time and its output; never under the TS 20 ms. */
+  private playLeadSec(): number {
+    if (!this.clock.ready) return 0.02;
+    const sr = this.clock.sampleRate || 48000;
+    const blockSec = (Number(this.latestSnapshot?.clockBlockSize) || 512) / sr;
+    const ctxLat = ctxHeardLatencySec(this.engine.ctx, ctxPair(this.engine.ctx)); // the ctx output latency the pair knows
+    return Math.max(0.02, this.clock.outputLatencyMs / 1000 + 1.5 * blockSec + 0.004 - ctxLat);
+  }
+  private seqPlay(anchorCtx: number): void {
+    this.playAnchorCtx = anchorCtx; this.playAckAt = Infinity; this.playStartSample = NaN; this.nudgeApplied = 0; this.driftFilt = NaN;
+    this.lastQueued = null;
+    const idx = this.engine.getPlayingSeqIdx();
+    const p = this.engine.peekSequence(idx);
+    const swing = this.engine.getSeqSwing();
+    const bpm = this.engine.getMasterBpm();
+    this.queueSeq(async () => {
+      if (bpm !== this.lastBpmSent) { this.lastBpmSent = bpm; await this.cmd({ type: 'setBpm', bpm }); }
+      await this.sendPattern(idx, p, swing, 'setSequence');
+      // the anchor the satellites start at, as an engine sample heard at the same instant (0 = next block when the
+      // clock is not calibrated yet — the first ~100 ms after attach; the drift nudge then pulls the drums in)
+      const atSample = this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(anchorCtx, ctxPair(this.engine.ctx))) : 0;
+      await this.cmd({ type: 'seqPlay', atSample: atSample > 0 ? atSample : 0 });
+      this.playAckAt = performance.now();
+    });
+  }
+  /** State → the native sequencer: the audible pattern (live edits), a queued switch, BPM, swing. */
+  private syncTransport(s: ChopperState): void {
+    if (!this.engine.seqSink) return;
+    const bpm = this.engine.getMasterBpm();
+    if (bpm !== this.lastBpmSent) { this.lastBpmSent = bpm; this.queueSeq(() => this.cmd({ type: 'setBpm', bpm })); }
+    if (!s.seqPlaying) { this.lastQueued = null; return; }
+    const idx = s.playingSeqIdx;
+    const p = s.sequences[idx] ?? null; // the state's deep copy — free to keep
+    if (p) this.queueSeq(() => this.sendPattern(idx, p, s.seqSwing, 'setSequence'));
+    const q = s.queuedSeqIdx;
+    if (q === null) {
+      if (this.lastQueued) { this.lastQueued = null; this.queueSeq(() => this.cmd({ type: 'queueSequence', cancel: true })); }
+    } else if (q !== idx) {
+      const qp = s.sequences[q] ?? null;
+      if (qp) this.queueSeq(() => this.sendPattern(q, qp, s.seqSwing, 'queueSequence'));
+    }
+  }
+  /** Snapshot → clock anchor, the engine's position push, the satellite drift nudge. */
+  private onSnapshot(s: AnyRecord): void {
+    const recv = performance.now();
+    if (s && typeof s.clockHostNs === 'number' && s.clockHostNs > 0) {
+      this.clock.onSnapshot({ clockHostNs: s.clockHostNs, clockSample: Number(s.clockSample), sampleRate: Number(s.sampleRate), emitHostNs: Number(s.emitHostNs) }, recv);
+    }
+    this.stats.clockReady = this.clock.ready;
+    if (!s || this.detached || !this.engine.seqSink || typeof s.seqPlaying !== 'boolean') return;
+    const idx = Number(s.seqPatternIndex);
+    const held = this.sentPatterns.get(idx);
+    const bpm = Number(s.seqBpm) > 0 ? Number(s.seqBpm) : 120;
+    const res = held?.resolution ?? 16;
+    const stepDur = (60 / bpm) * (4 / res);
+    const pair = this.clock.ready ? ctxPair(this.engine.ctx) : null;
+    const loopStartSample = Number(s.seqLoopStartSample);
+    const loopStartCtx = pair && loopStartSample > 0 ? this.clock.ctxTimeAtSample(loopStartSample, pair) : NaN;
+    const step = Number(s.seqStep);
+    const pausedElapsed = step >= 0 ? (step + (Number(s.seqStepPhase) || 0)) * stepDur : 0;
+    this.engine.nativeSeqUpdate({ playing: !!s.seqPlaying, paused: !!s.seqPaused, loopStartCtx, stepDur, playingIdx: idx, pausedElapsed, receivedAt: recv });
+    // drift: where the native grid is heard vs where the ctx-clocked satellites (started at playAnchorCtx) expect it
+    if (!s.seqPlaying) { this.playStartSample = NaN; return; }
+    if (!pair || s.seqPaused || !Number.isFinite(this.playAnchorCtx) || recv < this.playAckAt + 60) return;
+    if (!Number.isFinite(this.playStartSample)) { if (loopStartSample > 0) { this.playStartSample = loopStartSample; this.nudgeApplied = 0; } return; }
+    const sNow = Number(s.clockSample);
+    if (!(sNow > 0) || this.clock.sampleRate <= 0) return;
+    const drift = this.clock.ctxTimeAtSample(sNow, pair) - (this.playAnchorCtx + (sNow - this.playStartSample) / this.clock.sampleRate);
+    this.stats.driftMs = drift * 1000;
+    // the first reading seeds (a real start offset is corrected at once); later ones are low-passed (1 ms clock
+    // granularity) and corrected with 2 ms hysteresis — musical drift is 0.6–3 ms/min, so a nudge every minute or so
+    this.driftFilt = Number.isFinite(this.driftFilt) ? this.driftFilt * 0.7 + drift * 0.3 : drift;
+    const c = this.driftFilt - this.nudgeApplied;
+    if (Math.abs(c) > 0.002 && Math.abs(c) < 0.5) { this.nudgeApplied += c; this.stats.seqNudges++; this.engine.nudgeSatellites(c); }
+  }
+  /** host ↔ performance.now() by round trip (best RTT wins); also refreshes the sample anchor + output latency. */
+  private async calibrateClock(rounds: number): Promise<void> {
+    for (let i = 0; i < rounds && !this.detached; i++) {
+      const t0 = performance.now();
+      let r: AnyRecord | null = null;
+      try { r = await native.audio({ verb: 'clock' }); } catch { return; }
+      const t1 = performance.now();
+      if (!r || typeof r.hostNs !== 'number' || !(r.hostNs > 0)) return;
+      this.clock.addRoundTrip(t0, r.hostNs, t1);
+      if (typeof r.outputLatencyMs === 'number' && r.outputLatencyMs >= 0) this.clock.outputLatencyMs = r.outputLatencyMs;
+      if (Number(r.clockHostNs) > 0 && Number(r.sampleRate) > 0) this.clock.onSnapshot({ clockHostNs: Number(r.clockHostNs), clockSample: Number(r.clockSample), sampleRate: Number(r.sampleRate) }, t1);
+    }
+    this.stats.clockRttMs = this.clock.rttMs;
+    this.stats.clockReady = this.clock.ready;
   }
 
   /** Diff one pad against what was last sent; queue the apply (per-pad ordered). */
@@ -323,15 +490,18 @@ class NativeEngineShadow {
     // cadence is rAF-coalesced; the hit is now)
     try { this.syncPad(pad, this.engine.getState()); } catch { /* */ }
     if (nativeOwned) return; // the engine played it already (direct MIDI path) — only the bookkeeping above
+    // a hit booked AHEAD (the live-record quantize, triggerPadAt): with the clock calibrated it goes out as an engine
+    // sample (sample-exact, the engine books it — no timer jitter); otherwise the old timer path
+    const atSample = when !== undefined && this.clock.ready ? Math.round(this.clock.sampleAtCtxTime(when, ctxPair(this.engine.ctx))) : 0;
     const fire = async () => {
       const d = this.last[pad];
       const flip = reverseOverride !== undefined && d !== null && d.mode !== 'loop' && reverseOverride !== d.reverse;
       if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'hermite' });
       this.stats.triggers++;
-      await this.cmd({ type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)) });
+      await this.cmd(atSample > 0 ? { type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)), atSample } : { type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)) });
       if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'hermite' });
     };
-    const delayMs = when !== undefined ? (when - this.engine.ctx.currentTime) * 1000 : 0;
+    const delayMs = when !== undefined && atSample <= 0 ? (when - this.engine.ctx.currentTime) * 1000 : 0;
     const go = () => { this.chain[pad] = this.chain[pad].then(fire).catch(() => {}); };
     if (delayMs > 2) setTimeout(go, delayMs); else go();
   }
@@ -383,7 +553,8 @@ class NativeEngineShadow {
       r.seqHits = Number(s2?.seqHitsFired ?? 0);
       r.seqAdvances = r.seqPlaying && r.seqStepCount === 16 && r.seqHits >= 8 && r.seqStepB !== r.seqStepA;
       r.seqStop = await this.cmd({ type: 'seqStop' });
-      await new Promise((res) => setTimeout(res, 150));
+      // the snapshot is 20 Hz and a loaded CI runner can starve the timer — poll (up to 2 s) instead of one fixed wait
+      for (let t = 0; t < 40 && this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
       r.seqStopped = !this.latestSnapshot?.seqPlaying;
       r.unbind = await this.cmd({ type: 'setPadSample', pad: 63 });
       const rel = await native.samples({ verb: 'release', key: rec.key });
@@ -416,10 +587,43 @@ class NativeEngineShadow {
       r.midiNoDoubleTrigger = this.stats.triggers === trig2;
       r.midiNativeHit = this.latestSnapshot?.lastTriggeredPad === 62;
       await native.midi({ verb: 'inject', note: 62 + 36, velocity: 0, on: false });
+      // part 3 — Phase 3.2: the PAGE's transport drives the NATIVE chop sequencer. The current sequence becomes a
+      // 1-bar/16-step pattern hitting pad 62 on steps 0/4/8/12 at 240 BPM (a hit every 250 ms); engine.playSeq()
+      // → native seqPlaying with the page's pattern index, hits fire, the TS cursor (read from the native anchor
+      // through NativeClock) tracks the native step; engine.stopSeq() stops it natively.
+      r.clockReady = this.clock.ready; r.clockRttMs = this.clock.rttMs; r.clockOutLatencyMs = this.clock.outputLatencyMs;
+      { const pr = ctxPair(this.engine.ctx); r.ctxPairDeltaMs = (this.engine.ctx.currentTime - pr.contextTime) * 1000; r.ctxHeardLatencyMs = ctxHeardLatencySec(this.engine.ctx, pr) * 1000; r.ctxOutputLatencyMs = (this.engine.ctx.outputLatency || 0) * 1000; r.ctxBaseLatencyMs = (this.engine.ctx.baseLatency || 0) * 1000; r.seqPageLeadMs = this.playLeadSec() * 1000; }
+      if (this.engine.seqSink && this.latestSnapshot?.prepared) {
+        this.engine.setSeqBars(1); this.engine.setSeqResolution(16);
+        for (const step of [0, 4, 8, 12]) if (!(this.engine.getState().seqGrid[step] ?? []).includes(62)) this.engine.toggleSeqStep(step, 62);
+        this.engine.setMetronomeBpm(240);
+        const hits0 = Number(this.latestSnapshot?.seqHitsFired ?? 0);
+        this.engine.playSeq();
+        await new Promise((res) => setTimeout(res, 500));
+        const sp1 = this.latestSnapshot;
+        r.seqPageNativePlaying = !!sp1?.seqPlaying;
+        r.seqPagePatternIndex = sp1?.seqPatternIndex ?? -9;
+        r.seqPagePlayingIdx = this.engine.getPlayingSeqIdx();
+        r.seqPageStepCount = sp1?.seqStepCount ?? 0;
+        const cur1 = this.engine.getSeqCursorStep(), nat1 = Number(sp1?.seqStep);
+        await new Promise((res) => setTimeout(res, 300));
+        const sp2 = this.latestSnapshot;
+        const cur2 = this.engine.getSeqCursorStep(), nat2 = Number(sp2?.seqStep);
+        const close = (a: number, b: number) => { const d = Math.abs(a - b); return Math.min(d, 16 - d) <= 1; };
+        r.seqPageCursor = { cur1, nat1, cur2, nat2 };
+        r.seqPageCursorTracks = close(cur1, nat1) && close(cur2, nat2);
+        r.seqPageHits = Number(sp2?.seqHitsFired ?? 0) - hits0; // ≥ 3 over 800 ms
+        r.seqPageDriftMs = this.stats.driftMs; r.seqPageNudges = this.stats.seqNudges;
+        this.engine.stopSeq();
+        for (let t = 0; t < 40 && this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+        r.seqPageStopped = !this.latestSnapshot?.seqPlaying && !this.engine.isSeqPlaying();
+        r.seqPageOk = r.seqPageNativePlaying && r.seqPagePatternIndex === r.seqPagePlayingIdx && r.seqPageStepCount === 16
+          && r.seqPageHits >= 2 && (this.clock.ready ? r.seqPageCursorTracks : true) && r.seqPageStopped;
+      } else r.seqPageOk = null; // no audio device → the engine is not prepared: the transport cannot be observed
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped) : true);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;

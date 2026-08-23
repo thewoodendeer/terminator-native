@@ -86,6 +86,11 @@ export class MidiClockSender {
     this.pump();
     this.timer = startClock(() => this.pump(), CLOCK_PUMP_MS);
   }
+  /** NATIVE TRANSPORT (Phase 3.2): shift the tick grid by `deltaSec` (+ = later) — see DrumEngine.nudge. */
+  nudge(deltaSec: number): void {
+    if (!this.running || !Number.isFinite(deltaSec) || deltaSec === 0) return;
+    this.nextTickTime += deltaSec;
+  }
   /** STOP now. Ticks already booked past now still go out (a few ms) — gear
    *  ignores ticks after STOP, and a hard cut would need a port flush Web
    *  MIDI does not offer (MIDIOutput.clear() is not implemented anywhere). */

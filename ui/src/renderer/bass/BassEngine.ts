@@ -770,6 +770,12 @@ export class BassEngine {
       this.emit();
     } finally { this.startClaim = false; }
   }
+  /** NATIVE TRANSPORT (Phase 3.2): shift the running tick grid by `deltaSec` (+ = later) — see DrumEngine.nudge. */
+  nudge(deltaSec: number): void {
+    if (this.timer === null || !Number.isFinite(deltaSec) || deltaSec === 0) return;
+    this.startTime += deltaSec;
+    this.nextTickTime += deltaSec;
+  }
   stop(): void {
     if (this.timer !== null) { this.timer.stop(); this.timer = null; }
     this.node?.port.postMessage({ type: 'clear', tag: 'seq', release: true });

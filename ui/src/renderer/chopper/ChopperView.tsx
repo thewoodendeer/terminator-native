@@ -800,6 +800,9 @@ export function ChopperView() {
     engine.setTransportHooks?.(
       (at: number) => { void drumEngine.start(at); void bassEngine.start(at); midiClockRef.current?.start(at); },
       (restart: boolean) => { drumEngine.stop({ keepRec: restart }); bassEngine.stop(); midiClockRef.current?.stop(); },
+      // native transport (Terminator 3.0): the chop seq runs on the engine's clock — its measured drift vs this
+      // context nudges the satellites' grids (phase-preserving, no restart)
+      (d: number) => { drumEngine.nudge(d); bassEngine.nudge(d); midiClockRef.current?.nudge(d); },
     );
   }, [engine, drumEngine, bassEngine]);
 

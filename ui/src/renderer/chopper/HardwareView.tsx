@@ -723,6 +723,7 @@ export function HardwareView() {
     engine.setTransportHooks?.(
       (at: number) => { void drumEngine.start(at); void bassEngine.start(at); },
       (restart: boolean) => { drumEngine.stop({ keepRec: restart }); bassEngine.stop(); },
+      (d: number) => { drumEngine.nudge(d); bassEngine.nudge(d); }, // native transport drift (see ChopperView)
     );
   }, [engine, drumEngine, bassEngine]);
 

@@ -1664,6 +1664,16 @@ export class DrumEngine {
    *  partway in — used to seek arranged playback so the drum loop lands on the
    *  right step at the seek point (Phase 3A.6). playStartTime is back-dated so
    *  getStep stays accurate. */
+  /** NATIVE TRANSPORT (Terminator 3.0, Phase 3.2): shift the running grid by `deltaSec` (+ = later). The chop
+   *  sequencer runs on the native engine's clock; the shadow measures its drift against this context and nudges the
+   *  satellites so the drums stay phase-locked WITHOUT a restart — already-booked hits keep their times, the next
+   *  bookings land on the corrected grid. No-op when stopped. */
+  nudge(deltaSec: number): void {
+    if (!this.state.playing || !Number.isFinite(deltaSec) || deltaSec === 0) return;
+    this.nextStepTime += deltaSec;
+    this.playStartTime += deltaSec;
+  }
+
   async start(atTime?: number, stepOffset = 0): Promise<void> {
     if (this.state.playing) return;
     // Claim the transport SYNCHRONOUSLY, before the async resume below. The

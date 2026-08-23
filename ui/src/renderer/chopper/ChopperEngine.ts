@@ -709,6 +709,16 @@ export class ChopperEngine {
   voiceSink: { start(padIdx: number, velocity: number, when: number | undefined, reverseOverride: boolean | undefined, nativeOwned: boolean): void; stop(padIdx: number): void; release(padIdx: number): void } | null = null;
   /** Route live-hit voices into a silent bus (the native engine sounds instead). Set with voiceSink. */
   mutePadVoices = false;
+  /** NATIVE TRANSPORT (Terminator 3.0, Phase 3.2 — nativeEngineShadow.ts): when set, the chop sequencer RUNS IN THE
+   *  C++ ENGINE on its sample clock: PLAY/STOP/PAUSE/RESUME go through this sink, the TS look-ahead scheduler does
+   *  not run (no Web Audio sequencer voices), and the shadow pushes the native position back at 20 Hz
+   *  (nativeSeqUpdate) so the cursor, the live-record landing, the metronome and the pattern-switch bookkeeping keep
+   *  reading the same fields as before (seqCurrentLoopStart / seqStepDuration / playingSeqIdx). Null (Electron /
+   *  web) = the Web Audio scheduler below, unchanged. */
+  seqSink: { play(anchorCtxTime: number): void; stop(): void; pause(): void; resume(): void; leadSec?(): number } | null = null;
+  private nativeSeqCmdAt = 0; // performance.now() of the last play/pause/resume sent — older snapshots are ignored
+  /** Satellite phase nudge (drums/bass/MIDI clock): the shadow measures native-vs-ctx drift (setTransportHooks). */
+  private seqNudgeHook: ((deltaSec: number) => void) | null = null;
   private mutedBus: GainNode | null = null;
   /** Where a LIVE-HIT voice's gain connects: the pad's bus, or the silent bus under the native shadow. */
   private padVoiceOut(padIdx: number): AudioNode {
@@ -4284,7 +4294,9 @@ export class ChopperEngine {
         // chop short. One owner per hit; the reverse case (ours plays, the
         // scheduler's copy is skipped) is covered by lastLivePadHit below.
         const { wasOn } = this.writeLiveStep(padIdx, landStep, velocity);
-        const booked = wasOn && lineT <= this.seqScheduledUpTo;
+        // NATIVE transport: the C++ sequencer fires the pattern's copy itself and its one-owner rule (a live hit
+        // within 120 ms of the step owns it) lives in RT code — a pad already on the step is always "booked".
+        const booked = wasOn && (this.seqSink ? true : lineT <= this.seqScheduledUpTo);
         if (!booked) {
           if (lineT > this.ctx.currentTime + 0.002) {
             this.triggerPadAt(padIdx, lineT, velocity, opts);
@@ -5926,7 +5938,10 @@ export class ChopperEngine {
     // sit a hair in the future — 20 ms covers the prime + Web Audio's "start
     // time must not be in the past". The old 60 ms was audible as a lag on
     // PLAY (his report 2026-08-22); the drums and bass take this same anchor.
-    this.seqPlayStart = this.ctx.currentTime + ChopperEngine.TRANSPORT_LEAD_S;
+    // NATIVE: the sink may ask for more lead — the engine must RENDER the anchor's sample before it is heard (its
+    // device's output latency + a block + the bridge); the satellites take the same anchor, so nothing is out of phase
+    const lead = Math.max(ChopperEngine.TRANSPORT_LEAD_S, this.seqSink?.leadSec?.() ?? 0);
+    this.seqPlayStart = this.ctx.currentTime + lead;
     this.seqCurrentLoopStart = this.seqPlayStart;
     this.seqScheduledUpTo = this.seqPlayStart;
     this.seqScheduleStep = 0;
@@ -5949,10 +5964,16 @@ export class ChopperEngine {
       this.nextBeatTime = this.seqPlayStart;
       this.startMetronomeTimer();
     }
-    // Prime the scheduler immediately (no initial-latency gap), then keep it
-    // filling the look-ahead horizon on a 25ms interval.
-    this.seqSchedulerTick();
-    this.startSeqScheduler();
+    if (this.seqSink) {
+      // NATIVE: the C++ ChopSequencer runs from this anchor (the shadow maps it to an engine sample) — no TS voices.
+      this.nativeSeqCmdAt = performance.now();
+      this.seqSink.play(this.seqPlayStart);
+    } else {
+      // Prime the scheduler immediately (no initial-latency gap), then keep it
+      // filling the look-ahead horizon on a 25ms interval.
+      this.seqSchedulerTick();
+      this.startSeqScheduler();
+    }
     // Start the synced satellite (drums) at the SAME anchor so they're phase-locked.
     this.seqStartHook?.(this.seqPlayStart);
     this.emit();
@@ -5960,9 +5981,10 @@ export class ChopperEngine {
 
   /** Register start/stop hooks so a satellite engine (the drum sequencer) runs in
    *  lock-step with the chop sequencer. onStart receives the exact ctx anchor. */
-  setTransportHooks(onStart: (atTime: number) => void, onStop: (restart: boolean) => void): void {
+  setTransportHooks(onStart: (atTime: number) => void, onStop: (restart: boolean) => void, onNudge?: (deltaSec: number) => void): void {
     this.seqStartHook = onStart;
     this.seqStopHook = onStop;
+    this.seqNudgeHook = onNudge ?? null;
   }
 
   togglePlaySeq(): void {
@@ -5999,6 +6021,7 @@ export class ChopperEngine {
     this.seqBoundaries = [];
     this.seqStopAt = 0;
     this.seqPaused = true;
+    if (this.seqSink) { this.nativeSeqCmdAt = performance.now(); this.seqSink.pause(); }
     this.emit();
   }
 
@@ -6050,8 +6073,8 @@ export class ChopperEngine {
     } else {
       this.seqScheduleStep = 0;
     }
-    this.seqSchedulerTick();
-    this.startSeqScheduler();
+    if (this.seqSink) { this.nativeSeqCmdAt = performance.now(); this.seqSink.resume(); }
+    else { this.seqSchedulerTick(); this.startSeqScheduler(); }
     this.emit();
   }
 
@@ -6330,6 +6353,7 @@ export class ChopperEngine {
     this.seqScheduledUpTo = 0;
     this.seqScheduleStep = 0;
     this.seqStopAt = 0;
+    this.seqSink?.stop();
     // Stop the synced satellite (drums) together with the chop sequencer.
     this.seqStopHook?.(this.seqRestarting);
     // Clicks are gated on the transport — stop them with it, but keep the METRO
@@ -6387,6 +6411,55 @@ export class ChopperEngine {
     // false at the loop end, which hides the cursor before it parks here.
     return Math.min(raw, stepCount);
   }
+
+  // ── NATIVE TRANSPORT (Phase 3.2) ───────────────────────────────────────────
+
+  /** The shadow's 20 Hz position push (engine snapshot → ctx time through NativeClock). Re-anchors the audible loop
+   *  start, the step duration, the audible pattern and the paused phase — the fields every cursor getter above,
+   *  the live-record landing and the metronome already read — and ends a non-loop run when the engine stopped
+   *  itself. Snapshots that predate the last play/pause/resume command (+400 ms) are ignored when they disagree
+   *  (the engine has not applied it yet). */
+  nativeSeqUpdate(u: { playing: boolean; paused: boolean; loopStartCtx: number; stepDur: number; playingIdx: number; pausedElapsed: number; receivedAt: number }): void {
+    if (!this.seqSink || !this.seqPlaying) return;
+    const settling = u.receivedAt < this.nativeSeqCmdAt + 400;
+    if (u.paused !== this.seqPaused) return;           // transient (a pause/resume in flight)
+    if (!u.playing) {
+      if (settling || this.seqPaused) return;
+      // the engine stopped itself (loop off → ran through the last slot): the TS non-loop end
+      this.seqPlaying = false;
+      this.seqStep = -1;
+      this.stopMetronomeTimer();
+      this.emit();
+      return;
+    }
+    let changed = false;
+    if (u.playingIdx >= 0 && u.playingIdx < this.sequences.length && u.playingIdx !== this.playingSeqIdx) {
+      this.playingSeqIdx = u.playingIdx;
+      if (this.queuedSeqIdx === u.playingIdx) this.queuedSeqIdx = null; // the queued switch happened (step 0)
+      changed = true;
+    }
+    if (u.stepDur > 0 && Number.isFinite(u.stepDur)) this.seqStepDuration = u.stepDur;
+    if (u.paused) {
+      if (Number.isFinite(u.pausedElapsed) && u.pausedElapsed >= 0) this.seqPausedElapsed = u.pausedElapsed;
+    } else if (Number.isFinite(u.loopStartCtx)) {
+      this.seqCurrentLoopStart = u.loopStartCtx;
+    }
+    if (changed) this.emit();
+  }
+  /** The shadow measured the native grid `deltaSec` later (+) / earlier (−) than the ctx-clocked satellites
+   *  expect — shift the metronome's next click and the satellites (drums/bass/MIDI clock) by it. Phase-preserving:
+   *  nothing restarts, already-booked hits keep their times, the next bookings land on the corrected grid. */
+  nudgeSatellites(deltaSec: number): void {
+    if (!Number.isFinite(deltaSec) || deltaSec === 0) return;
+    this.nextBeatTime += deltaSec;
+    this.seqNudgeHook?.(deltaSec);
+  }
+  /** The stored pattern `idx` as the engine holds it (the live object after a sync of the edited one — read only). */
+  peekSequence(idx: number): SeqPattern | null { this.syncCurrentToArray(); return this.sequences[idx] ?? null; }
+  getPlayingSeqIdx(): number { return this.playingSeqIdx; }
+  getQueuedSeqIdx(): number | null { return this.queuedSeqIdx; }
+  isSeqPlaying(): boolean { return this.seqPlaying; }
+  isSeqPaused(): boolean { return this.seqPaused; }
 
   // ── Master FX ──────────────────────────────────────────────────────────────
 
