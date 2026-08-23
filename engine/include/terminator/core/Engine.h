@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "terminator/core/Arp.h"
 #include "terminator/core/BassSequencer.h"
 #include "terminator/core/BassSynth.h"
 #include "terminator/core/ChopSequencer.h"
@@ -14,6 +15,7 @@
 #include "terminator/core/DrumSequencer.h"
 #include "terminator/core/CommandQueue.h"
 #include "terminator/core/HostClock.h"
+#include "terminator/core/Metronome.h"
 #include "terminator/core/MidiClock.h"
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/Sampler.h"
@@ -148,6 +150,9 @@ class Engine
     BassSequencer bassSeq_; // its pattern player on the same clock
     MidiClockOut clockOut_; // MIDI clock OUT from the transport (Phase 3.5) — anchored with seqPlay / drumPlay
     MidiClockOut::Event clockEvents_[MidiClockOut::kMaxEventsPerBlock] = {};
+    Metronome metro_; // the click + count-in (Phase 3.6) — beats on the driving sequencer's grid
+    Arp arp_;         // the arp (Phase 3.6) — steps on the sample clock
+    GridStep gridLog_[kMaxGridLog] = {};
     bool midiNotesToPads_ = true; // setMidiRouting: MIDI notes play pads on the direct path (off while the page
                                   // routes notes elsewhere — bass MIDI IN, DRUM PADS mode, MIDI OFF, learn)
 

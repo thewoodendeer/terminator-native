@@ -18,6 +18,8 @@ add_library(terminator_engine STATIC
     include/terminator/core/BassSynth.h
     include/terminator/core/BassSequencer.h
     include/terminator/core/MidiClock.h
+    include/terminator/core/Metronome.h
+    include/terminator/core/Arp.h
     include/terminator/core/planners/JsMath.h
     include/terminator/core/planners/StemMask.h
     include/terminator/core/planners/Trims.h
@@ -50,6 +52,8 @@ add_library(terminator_engine STATIC
     src/core/BassSynth.cpp
     src/core/BassSequencer.cpp
     src/core/MidiClock.cpp
+    src/core/Metronome.cpp
+    src/core/Arp.cpp
     src/io/AudioIO.cpp
     src/io/MidiHub.cpp
     src/io/SampleLoader.cpp

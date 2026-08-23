@@ -77,6 +77,15 @@ enum class CommandType : std::uint32_t
                      // running = STOP now); the ticks go to io/MidiHub's pump through Engine::midiOut()
     setMidiRouting,  // midi.flag — 1 = MIDI notes play pads on the direct path (default); 0 = the page owns the notes
                      // (bass MIDI IN / DRUM PADS mode / MIDI OFF / pad learn) — the engine only mirrors them
+    // ---- metronome + count-in + arp (Phase 3.6, core/Metronome.h + core/Arp.h) ----
+    setMetronome,  // metro.enabled + metro.sound — METRO on/off (off drops the booked beat clicks) + the click sound
+    countIn,       // metro.beats + metro.atSample (0 = the next block) — book the count-in clicks; the downbeat follows
+                   // the last one by a beat (snapshot countInDownbeatSample); replaces a pending count-in
+    cancelCountIn, // — drop a pending count-in
+    setArp,        // arp.enabled / rate / down / random / padCount — the page's ARP settings (off stops a held arp)
+    arpHold,       // arp.pad + arp.velocity + arp.atSample (0 = the next block) — hold: the arp steps from there; with
+                   // the arp off it is a plain trigger
+    arpRelease,    // arp.pad — release: stops the arp when it is the held pad (−1 = whatever is held)
 };
 
 enum class PadMode : std::uint8_t
@@ -226,6 +235,26 @@ struct Command
         {
             std::uint8_t flag;
         } midi;
+
+        struct Metro
+        {
+            std::uint64_t atSample; // countIn: an ENGINE sample (0 = the next block)
+            std::int32_t beats;     // countIn: 1..16
+            std::uint8_t enabled;   // setMetronome
+            std::uint8_t sound;     // setMetronome: ClickSound (0 click · 1 hihat · 2 rimshot · 3 kick · 4 clap)
+        } metro;
+
+        struct ArpCmd
+        {
+            std::uint64_t atSample; // arpHold: an ENGINE sample (0 = the next block)
+            float velocity;         // arpHold
+            std::int16_t pad;       // arpHold / arpRelease (−1 = any)
+            std::uint16_t padCount; // setArp: the pad bank size the arp walks (0 = the whole grid)
+            std::uint8_t enabled;   // setArp
+            std::uint8_t rate;      // setArp: 1 = quarters, 2 = 8ths, 4 = 16ths, 8 = 32nds
+            std::uint8_t down;      // setArp: direction DOWN (else UP)
+            std::uint8_t random;    // setArp
+        } arp;
 
         struct Calibration
         {
@@ -596,6 +625,70 @@ struct Command
         Command c;
         c.type = CommandType::setMidiRouting;
         c.payload.midi.flag = notesToPads ? 1 : 0;
+        return c;
+    }
+    // ---- metronome + count-in + arp (Phase 3.6) ----
+    static Command metroCmd(CommandType t) noexcept
+    {
+        Command c;
+        c.type = t;
+        c.payload.metro.atSample = 0;
+        c.payload.metro.beats = 4;
+        c.payload.metro.enabled = 0;
+        c.payload.metro.sound = 0;
+        return c;
+    }
+    static Command setMetronome(bool enabled, std::uint8_t sound) noexcept
+    {
+        Command c = metroCmd(CommandType::setMetronome);
+        c.payload.metro.enabled = enabled ? 1 : 0;
+        c.payload.metro.sound = sound;
+        return c;
+    }
+    static Command countIn(int beats, std::uint64_t atSample = 0) noexcept
+    {
+        Command c = metroCmd(CommandType::countIn);
+        c.payload.metro.beats = beats;
+        c.payload.metro.atSample = atSample;
+        return c;
+    }
+    static Command cancelCountIn() noexcept { return metroCmd(CommandType::cancelCountIn); }
+    static Command arpCmd(CommandType t) noexcept
+    {
+        Command c;
+        c.type = t;
+        c.payload.arp.atSample = 0;
+        c.payload.arp.velocity = 1.0f;
+        c.payload.arp.pad = -1;
+        c.payload.arp.padCount = 0;
+        c.payload.arp.enabled = 0;
+        c.payload.arp.rate = 4;
+        c.payload.arp.down = 0;
+        c.payload.arp.random = 0;
+        return c;
+    }
+    static Command setArp(bool enabled, int rate, bool down, bool random, int padCount) noexcept
+    {
+        Command c = arpCmd(CommandType::setArp);
+        c.payload.arp.enabled = enabled ? 1 : 0;
+        c.payload.arp.rate = static_cast<std::uint8_t>(rate < 1 ? 1 : (rate > 255 ? 255 : rate));
+        c.payload.arp.down = down ? 1 : 0;
+        c.payload.arp.random = random ? 1 : 0;
+        c.payload.arp.padCount = static_cast<std::uint16_t>(padCount < 0 ? 0 : padCount);
+        return c;
+    }
+    static Command arpHold(std::uint16_t pad, float velocity, std::uint64_t atSample = 0) noexcept
+    {
+        Command c = arpCmd(CommandType::arpHold);
+        c.payload.arp.pad = static_cast<std::int16_t>(pad);
+        c.payload.arp.velocity = velocity;
+        c.payload.arp.atSample = atSample;
+        return c;
+    }
+    static Command arpRelease(std::int16_t pad) noexcept
+    {
+        Command c = arpCmd(CommandType::arpRelease);
+        c.payload.arp.pad = pad;
         return c;
     }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,

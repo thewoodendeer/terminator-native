@@ -137,6 +137,61 @@ TEST_CASE("RT: the MIDI clock OUT on the callback allocates nothing (enable, pla
     REQUIRE(n > 0);
 }
 
+TEST_CASE("RT: the metronome + count-in + arp on the callback allocate nothing (enable, play, count-in, hold, tempo "
+          "change, release, stop)",
+          "[rt]")
+{
+    Engine e;
+    e.prepare({48000.0, 64, 2});
+    std::vector<float> l(64), r(64);
+    float* outs[2] = {l.data(), r.data()};
+    auto pat = std::make_shared<SeqPattern>();
+    pat->clear();
+    pat->bars = 1;
+    pat->resolution = 16;
+    pat->stepCount = 16;
+    for (int s = 0; s < 16; ++s)
+        pat->grid[s] |= 1ull << (s % 4);
+    e.commands().push(Command::seqSetBpm(240.0));
+    e.commands().push(Command::seqSetPattern(pat.get()));
+    e.commands().push(Command::setMetronome(true, 4)); // the clap (3 elements per click)
+    e.commands().push(Command::countIn(4, 0));
+    e.commands().push(Command::setArp(true, 8, false, true, 16));
+    e.commands().push(Command::arpHold(2, 0.9f, 0));
+    REQUIRE(test::allocationsDuring(
+                [&]
+                {
+                    for (int i = 0; i < 1200; ++i)
+                    {
+                        if (i == 100)
+                            e.commands().push(Command::seqPlay(0));
+                        if (i == 300)
+                            e.commands().push(Command::seqSetBpm(90.0));
+                        if (i == 400)
+                            e.commands().push(Command::setMetronome(true, 3));
+                        if (i == 500)
+                            e.commands().push(Command::arpRelease(2));
+                        if (i == 600)
+                            e.commands().push(Command::drumPlay(0, 0));
+                        if (i == 700)
+                            e.commands().push(Command::seqPause());
+                        if (i == 800)
+                            e.commands().push(Command::seqResume());
+                        if (i == 900)
+                            e.commands().push(Command::countIn(2, 0));
+                        if (i == 950)
+                            e.commands().push(Command::cancelCountIn());
+                        if (i == 1000)
+                            e.commands().push(Command::seqStop());
+                        if (i == 1100)
+                            e.commands().push(Command::panic());
+                        e.process(outs, 2, 64);
+                    }
+                }) == 0);
+    REQUIRE(e.snapshot().metronomeClicks > 4);
+    REQUIRE(e.snapshot().arpHits > 4);
+}
+
 TEST_CASE("RT: process before prepare and after release allocates nothing", "[rt]")
 {
     Engine e;

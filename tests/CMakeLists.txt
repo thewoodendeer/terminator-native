@@ -29,7 +29,9 @@ add_executable(terminator-tests
     engine/test_drum_sequencer.cpp
     engine/test_bass_synth.cpp
     engine/test_bass_sequencer.cpp
-    engine/test_midi_clock.cpp)
+    engine/test_midi_clock.cpp
+    engine/test_metronome.cpp
+    engine/test_arp.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

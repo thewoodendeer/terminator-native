@@ -18,6 +18,7 @@
 // sequencer only reads. Everything here is RT: no allocation, no locks (see RT-RULES.md).
 #include <cstdint>
 
+#include "terminator/core/Metronome.h"
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/Sampler.h"
 
@@ -103,6 +104,9 @@ class ChopSequencer
     }
     std::uint64_t hitsFired() const noexcept { return hitsFired_; }
     std::uint64_t hitsSkippedLiveOwned() const noexcept { return hitsSkipped_; }
+    /// The steps scheduled since the last take (their straight grid time, duration, index, resolution) — the
+    /// metronome places its beats on them (Phase 3.6). Drains the log; returns the count written (≤ maxOut).
+    int takeGridLog(GridStep* out, int maxOut) noexcept TERMINATOR_NONBLOCKING;
 
   private:
     /// A hit or a note end waiting for its block. One ring for both so they fire in TIME order (a note end and a
@@ -141,6 +145,8 @@ class ChopSequencer
     std::uint64_t hitsFired_ = 0;
     std::uint64_t hitsSkipped_ = 0; // pattern hits skipped because a live hit owned them
     double stopAfter_ = -1.0;       // loop off: the transport stops once this sample passed
+    GridStep gridLog_[kMaxGridLog] = {};
+    int gridLogCount_ = 0;
 };
 
 } // namespace terminator

@@ -28,6 +28,16 @@ void DrumSequencer::reset() noexcept
     currentPhase_ = 0.0;
     for (auto& h : pending_)
         h.used = false;
+    gridLogCount_ = 0;
+}
+
+int DrumSequencer::takeGridLog(GridStep* out, int maxOut) noexcept TERMINATOR_NONBLOCKING
+{
+    const int n = std::min(gridLogCount_, maxOut);
+    for (int i = 0; i < n; ++i)
+        out[i] = gridLog_[i];
+    gridLogCount_ = 0;
+    return n;
 }
 
 void DrumSequencer::setPattern(const DrumPattern* p) noexcept TERMINATOR_NONBLOCKING
@@ -144,6 +154,7 @@ void DrumSequencer::stop(Sampler& sampler) noexcept TERMINATOR_NONBLOCKING
         h.used = false;
     for (auto& s : swaps_)
         s.used = false; // TS stop(): the arranged timeline is dropped
+    gridLogCount_ = 0;
     sampler.stopPadRange(static_cast<std::uint16_t>(kDrumPadBase), static_cast<std::uint16_t>(kDrumLanes));
 }
 
@@ -258,6 +269,10 @@ void DrumSequencer::process(std::uint64_t blockStart, int numSamples, Sampler& s
         const DrumPattern* p = patternAt(nextStepSample_ + stepDur * 0.5);
         if (p != nullptr && nextStep_ < p->stepCount)
             scheduleStep(*p, nextStep_, nextStepSample_, sampler);
+        if (gridLogCount_ < kMaxGridLog)
+            gridLog_[gridLogCount_++] =
+                GridStep{nextStepSample_, stepDur, nextStep_,
+                         (live != nullptr && live->stepsPerBar > 0) ? live->stepsPerBar : kDrumStepsPerBar};
         nextStepSample_ += stepDur;
         ++nextStep_;
     }

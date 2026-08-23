@@ -102,6 +102,22 @@ struct StateSnapshot
     std::uint64_t midiClockPosition = 0; // ticks since the last START (the song position × 6)
     std::uint64_t midiOutDropped = 0;    // out-queue refusals (the pump fell behind — should stay 0)
     std::uint32_t midiNotesToPads = 1;   // setMidiRouting
+
+    // metronome + count-in + arp (Phase 3.6, core/Metronome.h + core/Arp.h)
+    std::uint32_t metronomeEnabled = 0;
+    std::uint32_t metronomeSound = 0;  // ClickSound
+    std::int32_t metronomeBeat = -1;   // the last beat click's index in its bar 0..3 (−1 = none yet)
+    std::uint64_t metronomeClicks = 0; // lifetime clicks fired (beats + count-in)
+    std::uint64_t metronomeLastClickSample = 0;
+    std::uint32_t metronomeLastClickAccent = 0;
+    std::int32_t countInBeat = -1;           // −1 idle; N..1 while a count-in runs (the TS countInBeat)
+    std::uint32_t countInPending = 0;        // between the countIn command and its downbeat
+    std::uint64_t countInDownbeatSample = 0; // the sample the transport should start at (the last count-in's)
+    std::uint32_t arpEnabled = 0;
+    std::int32_t arpHoldPad = -1; // the pad held (−1 = nothing)
+    std::int32_t arpStep = 0;     // steps fired since the hold
+    std::int32_t arpLastPad = -1; // the pad the last step fired
+    std::uint64_t arpHits = 0;    // lifetime arp steps fired
 };
 static_assert(std::is_trivially_copyable_v<StateSnapshot>, "StateSnapshot must be trivially copyable");
 

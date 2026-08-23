@@ -26,6 +26,16 @@ void ChopSequencer::reset() noexcept
     stopAfter_ = -1.0;
     for (auto& h : pending_)
         h.used = false;
+    gridLogCount_ = 0;
+}
+
+int ChopSequencer::takeGridLog(GridStep* out, int maxOut) noexcept TERMINATOR_NONBLOCKING
+{
+    const int n = std::min(gridLogCount_, maxOut);
+    for (int i = 0; i < n; ++i)
+        out[i] = gridLog_[i];
+    gridLogCount_ = 0;
+    return n;
 }
 
 void ChopSequencer::setPattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING
@@ -93,6 +103,7 @@ void ChopSequencer::stop() noexcept TERMINATOR_NONBLOCKING
     currentStep_ = -1;
     for (auto& h : pending_)
         h.used = false;
+    gridLogCount_ = 0;
 }
 
 void ChopSequencer::pause(std::uint64_t blockStart, Sampler& sampler) noexcept TERMINATOR_NONBLOCKING
@@ -244,6 +255,8 @@ void ChopSequencer::process(std::uint64_t blockStart, int numSamples, Sampler& s
         }
         const double stepDur = stepDurSamples(*p);
         scheduleStep(*p, nextStep_, nextStepSample_, sampler);
+        if (gridLogCount_ < kMaxGridLog)
+            gridLog_[gridLogCount_++] = GridStep{nextStepSample_, stepDur, nextStep_, p->resolution};
         currentStep_ = nextStep_;
         currentStepStart_ = nextStepSample_;
         currentStepDur_ = stepDur;

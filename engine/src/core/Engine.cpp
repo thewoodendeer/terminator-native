@@ -68,6 +68,8 @@ void Engine::prepare(const Config& config)
     bass_.prepare(config_.sampleRate);
     bassSeq_.prepare(config_.sampleRate);
     clockOut_.prepare(config_.sampleRate);
+    metro_.prepare(config_.sampleRate);
+    arp_.prepare(config_.sampleRate);
     for (auto& t : liveHitSample_)
         t = -1.0e12;
     for (auto& t : pendingTrig_)
@@ -86,6 +88,8 @@ void Engine::release()
     bass_.reset();
     bassSeq_.reset();
     clockOut_.reset();
+    metro_.reset();
+    arp_.reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -147,6 +151,9 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         bassSeq_.stop(bass_);
         bass_.panic();
         clockOut_.stop(samplesProcessed_);
+        metro_.transportStopped();
+        metro_.cancelCountIn();
+        arp_.stop();
         for (auto& t : pendingTrig_)
             t.used = false;
         break;
@@ -203,15 +210,18 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         // the MIDI clock rides the SAME anchor (the TS seqStartHook → MidiClockSender.start(at)); a restart re-sends
         // STOP + SPP 0 + START
         clockOut_.start(c.payload.seq.atSample != 0 ? c.payload.seq.atSample : samplesProcessed_, samplesProcessed_);
+        metro_.transportStopped(); // a (re)start: the booked beats go; the new run's steps re-book them
         break;
     case CommandType::seqStop:
         seq_.stop();
         playing_ = false;
         clockOut_.stop(samplesProcessed_);
+        metro_.transportStopped();
         break;
     case CommandType::seqPause:
         seq_.pause(samplesProcessed_, sampler_);
         clockOut_.pause(samplesProcessed_);
+        metro_.transportStopped(); // no clicks while paused (the TS gate)
         break;
     case CommandType::seqResume:
         seq_.resume(samplesProcessed_);
@@ -222,6 +232,8 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         drums_.setBpm(c.payload.seq.value); // one BPM for every sequencer (getMasterBpm)
         bassSeq_.setBpm(c.payload.seq.value);
         clockOut_.setBpm(c.payload.seq.value); // the tick spacing follows at the next tick
+        metro_.setBpm(c.payload.seq.value);    // the count-in beat (the beats themselves ride the sequencer grid)
+        arp_.setBpm(c.payload.seq.value);      // the arp interval follows at the next step
         break;
     case CommandType::seqSetLoop:
         seq_.setLoop(c.payload.seq.value != 0.0);
@@ -253,11 +265,16 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         if (!clockOut_.running())
             clockOut_.start(c.payload.drum.atSample != 0 ? c.payload.drum.atSample : samplesProcessed_,
                             samplesProcessed_);
+        if (!seq_.playing())
+            metro_.transportStopped(); // the drums drive the clicks alone: a restart drops the booked beats
         break;
     case CommandType::drumStop:
         drums_.stop(sampler_);
         if (!seq_.playing())
+        {
             clockOut_.stop(samplesProcessed_);
+            metro_.transportStopped();
+        }
         break;
     case CommandType::bassSetPatch:
         bass_.setPatch(static_cast<const BassPatch*>(c.payload.bass.ptr));
@@ -314,6 +331,38 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::setMidiRouting:
         midiNotesToPads_ = c.payload.midi.flag != 0;
+        break;
+    case CommandType::setMetronome:
+        metro_.setEnabled(c.payload.metro.enabled != 0);
+        metro_.setSound(static_cast<ClickSound>(c.payload.metro.sound > 4 ? 0 : c.payload.metro.sound));
+        break;
+    case CommandType::countIn:
+        metro_.countIn(c.payload.metro.beats, c.payload.metro.atSample, samplesProcessed_);
+        break;
+    case CommandType::cancelCountIn:
+        metro_.cancelCountIn();
+        break;
+    case CommandType::setArp:
+        arp_.setParams(c.payload.arp.enabled != 0, c.payload.arp.rate, c.payload.arp.down != 0,
+                       c.payload.arp.random != 0, c.payload.arp.padCount);
+        break;
+    case CommandType::arpHold:
+    {
+        const int pad = c.payload.arp.pad;
+        if (pad < 0 || pad >= kChopPads)
+            break;
+        if (arp_.enabled())
+            arp_.hold(pad, c.payload.arp.velocity, c.payload.arp.atSample, samplesProcessed_);
+        else
+        {
+            // the arp is off: a plain hit (the page never sends this then — harmless)
+            bookTrigger(static_cast<std::uint16_t>(pad), c.payload.arp.velocity,
+                        c.payload.arp.atSample != 0 ? c.payload.arp.atSample : samplesProcessed_, false, numSamples);
+        }
+        break;
+    }
+    case CommandType::arpRelease:
+        arp_.release(c.payload.arp.pad);
         break;
     case CommandType::startCalibration:
     {
@@ -430,12 +479,24 @@ void Engine::drainMidi(int numSamples) noexcept TERMINATOR_NONBLOCKING
             if (status == 0x90 && vel > 0)
             {
                 const auto off = offsetForHostTime(e.hostTimeNs, numSamples);
+                if (arp_.enabled() && pad < kChopPads)
+                {
+                    // ARP on: holding the note steps through the bank (TS triggerPad → startArp); the arp stamps the
+                    // live-hit times itself
+                    arp_.hold(pad, static_cast<float>(vel) / 127.0f,
+                              samplesProcessed_ + static_cast<std::uint64_t>(off), samplesProcessed_);
+                    continue;
+                }
                 sampler_.trigger(static_cast<std::uint16_t>(pad), static_cast<float>(vel) / 127.0f, off);
                 noteLiveHit(static_cast<std::uint16_t>(pad),
                             static_cast<double>(samplesProcessed_) + static_cast<double>(off));
             }
             else if (status == 0x80 || (status == 0x90 && vel == 0))
+            {
+                if (arp_.enabled())
+                    arp_.release(pad); // TS releasePad: the held pad's note-off stops the arp
                 sampler_.release(static_cast<std::uint16_t>(pad));
+            }
         }
     }
 }
@@ -511,6 +572,20 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.midiClockPosition = clockOut_.tickCount();
     s.midiOutDropped = midiOut_->droppedCount();
     s.midiNotesToPads = midiNotesToPads_ ? 1u : 0u;
+    s.metronomeEnabled = metro_.enabled() ? 1u : 0u;
+    s.metronomeSound = static_cast<std::uint32_t>(metro_.sound());
+    s.metronomeBeat = metro_.beat();
+    s.metronomeClicks = metro_.clicks();
+    s.metronomeLastClickSample = metro_.lastClickSample();
+    s.metronomeLastClickAccent = metro_.lastClickAccent() ? 1u : 0u;
+    s.countInBeat = metro_.countInBeat();
+    s.countInPending = metro_.countInPending() ? 1u : 0u;
+    s.countInDownbeatSample = metro_.countInDownbeatSample();
+    s.arpEnabled = arp_.enabled() ? 1u : 0u;
+    s.arpHoldPad = arp_.holdPad();
+    s.arpStep = arp_.step();
+    s.arpLastPad = arp_.lastPad();
+    s.arpHits = arp_.hits();
     snapshot_.publish(s);
 }
 
@@ -533,9 +608,27 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     drainCommands(numSamples);
     drainMidi(numSamples);
     firePendingTriggers(numSamples); // live hits booked ahead (quantized live record) land at their exact sample
+    arp_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_);   // the held arp's steps (live hits)
     seq_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_);   // this block's sequenced hits + note ends
     drums_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_); // this block's drum hits / rolls / ends
     bassSeq_.process(samplesProcessed_, numSamples, bass_);                  // this block's bass ticks / timeline
+    // the metronome's beats ride the DRIVING sequencer's grid (3.6): the chop sequencer while it plays (paused = no
+    // steps = no clicks), else the drums alone; the other log is drained and dropped
+    {
+        const int n1 = seq_.takeGridLog(gridLog_, kMaxGridLog);
+        if (seq_.playing() || n1 > 0)
+        {
+            for (int i = 0; i < n1; ++i)
+                metro_.onGridStep(gridLog_[i]);
+            (void)drums_.takeGridLog(gridLog_, kMaxGridLog);
+        }
+        else
+        {
+            const int n2 = drums_.takeGridLog(gridLog_, kMaxGridLog);
+            for (int i = 0; i < n2; ++i)
+                metro_.onGridStep(gridLog_[i]);
+        }
+    }
     if (playing_ && !seq_.playing() && !drums_.playing() && (seqWasPlaying_ || drumsWasPlaying_))
         playing_ = false; // the sequencers stopped themselves (loop off): the transport follows
     if (clockOut_.running() && !seq_.playing() && !drums_.playing())
@@ -658,6 +751,18 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
             outputPeak_[ch] = pk;
     }
     masterGainCurrent_ = gainEnd;
+
+    // the metronome + count-in clicks (3.6): synthesised at their samples, added AFTER the master gain — the TS clicks
+    // went straight to the destination past the mixer; Phase 4 routes them to the mixer's CLICK bus
+    {
+        float* l = numOut > 0 ? outputs[0] : nullptr;
+        float* r = numOut > 1 ? outputs[1] : nullptr;
+        const float pk = metro_.process(samplesProcessed_, numSamples, l, r);
+        if (pk > outputPeak_[0])
+            outputPeak_[0] = pk;
+        if (numOut > 1 && pk > outputPeak_[1])
+            outputPeak_[1] = pk;
+    }
 
     if (playing_)
         playheadSamples_ += static_cast<std::uint64_t>(numSamples);

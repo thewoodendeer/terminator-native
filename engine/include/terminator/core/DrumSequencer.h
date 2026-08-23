@@ -22,6 +22,7 @@
 #include <cstdint>
 
 #include "terminator/core/RtAssert.h"
+#include "terminator/core/Metronome.h"
 #include "terminator/core/Sampler.h"
 
 namespace terminator
@@ -117,6 +118,9 @@ class DrumSequencer
     std::uint64_t hitsFired() const noexcept { return hitsFired_; }
     std::uint64_t hitsSkippedLiveOwned() const noexcept { return hitsSkipped_; }
     int laneGroup(int lane) const noexcept { return lane >= 0 && lane < kDrumLanes ? lanes_[lane].group : 0; }
+    /// The steps scheduled since the last take (straight grid time, duration, index, steps per bar) — the metronome
+    /// places its beats on them when the drums drive the transport alone (Phase 3.6). Drains; returns the count.
+    int takeGridLog(GridStep* out, int maxOut) noexcept TERMINATOR_NONBLOCKING;
 
   private:
     struct Lane
@@ -167,6 +171,8 @@ class DrumSequencer
     PendingEvent pending_[kMaxPending] = {};
     std::uint64_t hitsFired_ = 0;
     std::uint64_t hitsSkipped_ = 0;
+    GridStep gridLog_[kMaxGridLog] = {};
+    int gridLogCount_ = 0;
 };
 
 } // namespace terminator
