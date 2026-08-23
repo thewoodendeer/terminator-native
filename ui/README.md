@@ -127,6 +127,12 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   (reported by `applyConsole`); `native/nativeMixerShadow.ts` — `fnv1a()` (the worklet's seed), every strip activation
   carries `seed: fnv1a(name)`, `mixerSetConsole` on attach + on change, `mixerSetLimiter on` at attach; `native/
   nativeEngineShadow.ts` — probe part 8 toggles CONSOLE (`mixerConsoleOn/Off`) and asserts the limiter is in.
+- **The meters are native (4.3, 2026-08-23):** `src/mixer/MixerEngine.ts` — `MixerNativeMeters` + `setMixerNativeMeters`;
+  `ChannelStrip.levels()` / `MasterStrip.levels()` / `updateLoudness()` / `resetIntegrated()` read it first;
+  `native/nativeMixerShadow.ts` — `installMeters()` from the snapshot (`mixer.strips` rows, `mixer.loudness`,
+  `mixer.fxGr`), `onSnapshot` keeps every SC COMP's `gainReductionDb` at the engine's number, `loudnessReset`;
+  `native/nativeEngineShadow.ts` — probe part 8 asserts the loudness object + `fxGr` ride the snapshot and the page's
+  `updateLoudness()` is the engine's (`mixerLoudnessOk`).
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

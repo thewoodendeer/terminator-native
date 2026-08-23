@@ -1212,16 +1212,65 @@ sends → master → [bus console] → inserts → fader → limiter → out.
 **Victor's pass (4.2c):** CONSOLE on / flavour / amount on the desktop mixer — what you HEAR is the native desk stage
 (every strip its own tilt, the master's bus glue); the master limiter is native (a hot mix is held at ~0 dBFS).
 
+## Phase 4 — 4.3 DONE (THE METERS ARE ON THE BRIDGE: STRIP PEAKS, BS.1770-4 LOUDNESS, GAIN REDUCTION), 2026-08-23 eleventh session (third part)
+**Engine — `core/LoudnessMeter.h/.cpp`:** the page's loudness-meter worklet 1:1, RT with everything preallocated:
+K-weighting designed from the spec's analogue prototypes at the running rate (high shelf f0 1681.97 Hz Q 0.7071752
++3.99984 dB with Vb = Vh^0.4996667741545416, RLB HP 38.13547 Hz Q 0.5003270 — the spec's 48 k table to 6 decimals,
+right at 44.1/88.2/96 k); 100 ms hops; MOMENTARY = the last 4 hops, SHORT-TERM = the last 30; INTEGRATED = every 400 ms
+block above −70 LUFS then −10 LU below the gated mean, recomputed each hop (the block LUFS stored alongside so the gate
+compares, never recomputes a log; a 2-hour ring); LRA = short-term −70 abs / −20 rel, 10th → 95th percentile (an
+in-place heapsort — the STL sort is not nonblocking); sample peak + TRUE PEAK (4 phases × 12 taps of a Kaiser β 8 sinc,
+each phase unity at DC) per hop; L/R correlation; the holds + maxM/maxS since reset. **Mixer:** fed with the master's
+output post limiter, always on (cheap); `resetLoudness`; `fxGainReductionDb(strip, slot)` through a new
+`Effect::gainReductionDb()` (COMP = Blink's `reduction` metering, SC COMP = the block's deepest GR); the master
+limiter's GR. **Snapshot:** `stripFxGr[64][8]`, `masterLimiterGr`, `lufsM/S/I`, `lra`, `loudPeakL/R`, `loudTpL/R`,
+`loudCorr`, `loudHoldPeak/Tp`, `loudMaxM/S`, `loudHops`; command `loudnessReset`.
+**Shell + page:** the snapshot `mixer.loudness {…}`, `mixer.fxGr {"<strip>": [per slot]}` (live strips with a chain),
+`mixer.limiterGr`; `loudnessReset`. `src/mixer/MixerEngine.ts`: `MixerNativeMeters` / `setMixerNativeMeters` —
+`ChannelStrip.levels()` / `MasterStrip.levels()` (+ true peak from the loudness reading) / `updateLoudness()` /
+`resetIntegrated()` read the engine first (MixerSection / the LoudnessPopup are unchanged — they call the same
+methods); `nativeMixerShadow.installMeters()` from the snapshot (strip peaks from the rows, the loudness object with
+−1000 → −∞, the GR rows), `onSnapshot` keeps every SC COMP device's `gainReductionDb` at the engine's number (its
+panel reads that field). Probe part 8 asserts the loudness object + `fxGr` ride the snapshot and
+`master.updateLoudness().worklet` (`mixerLoudnessOk`).
+**Tests — `tests/engine/test_loudness.cpp` (4 cases):** the BS.1770 reference points (a 0 dBFS 997 Hz sine in one
+channel = −3.01 LKFS, both channels at −20 dBFS = −20.0 ± 0.05 on M / S / I; an empty channel's correlation = 1 as the
+page's; anti-phase = −1; maxM; reset clears); true peak between the samples (an fs/4 sine at phase π/4: sample peak
+0.354, true peak 0.490 — the 12-tap design's own −0.17 dB droop at fs/4, the page's number — hold ≥ the hop); LRA
+between 12 s at −20 and 12 s at −30 = 10 ± 2 LU, I between; the integrated gate ignores silence (hops 0, I = −∞; after
+the signal −20 within 0.2 — the one onset block the −10 LU relative gate lets through); on the bridge: a −20 dBFS
+sine through a bare Mixer with the limiter reads −20 + 0.57 (the limiter's makeup), a hot signal through a COMP
+reports its slot's GR < −1 dB and 0 on the EQ / an empty slot, the snapshot's fields move + reset on command
+(Blink's start-up dip shows as −21 dB of "reduction" on the first block — the page's node too — then its 325 ms
+metering release lets go).
+**Gates (4.3):** mac-debug 0 warnings + ctest **230/230** (226 + 4) · RTSan 231/231 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 230/230 · ui gate (tsc baseline 5) · probe OK on debug AND universal (`mixerPageOk` incl.
+`mixerLoudnessOk`, 9.0–9.2 s).
+**Honest boundary after 4.3:** the strip peak meters, the master's loudness popup numbers (M/S/I/LRA/TP/corr/holds) and
+the SC COMP GR meters read the engine. NOT in: the popup's SPECTRUM (the page's 8192-bin analyser still reads the
+Web Audio master — a future `mixer.spectrum` as ~96 log bands from an audio-thread FFT, or a spectrum pull verb), the
+per-strip RMS for the gain-match trim (the page's `matchGain` is live-only and not ported — it would read
+`rmsPre/rmsPost` from the rows, already there), the clip-latch / peak-hold logic (page-side, unchanged, fed by the
+native peaks). The SnapshotPublisher copies ~2 KB more per block (the GR table) — negligible.
+**Victor's pass (4.3):** the mixer's meters move with what you HEAR (pull a fader — the post meter follows; the
+pre meter does not); the LOUDNESS popup's LUFS / TP / LRA / correlation are the engine's (RESET works); an SC COMP
+panel's GR meter ducks with the kick.
+
 ### Next session (in order) — updated at the end of the eleventh session
 0. Push (Victor) → `gh run list` → the 4 jobs (Windows: the stack fix + the ASCII names; the universal probe asserts
    `mixerPageOk` incl. the heavy round trip, CONSOLE on/off, the limiter).
-1. **Phase 4.2c part 2** — the B4 premium devices (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF"). The CONSOLE
-   stage + the master limiter landed (4.2c part 1); the legacy chopper chain is an export-time concern (4.5).
-2. 4.3 meters on the bridge (`levels(name)` is ready; add the SC COMP / COMP GR), 4.4 PDC + offline parity (the chain
-   latencies are plumbed and exact: 55 / 288 / 295), 4.5 exports.
+1. **Phase 4.4** — PDC: the two-tier integer plan (channel: maxChan − own; bus: maxBus − own, toMaster = maxBus; the
+   master's limiter look-ahead head-trim for exports) on the chain latencies already plumbed + exact (55 / 288 / 295,
+   the limiter 264/288) — a per-strip `pdcDelay` line before the fader, `mixerSetPdc {on}`, the snapshot's plan; gates:
+   SAT-on-kick both channels the same sample, COMP-on-send a single impulse, master impulse == stem impulse sample.
+   Then **4.5** the export pipeline (the offline renderer through the same Mixer: stems per strip post-send, master
+   head-trim, the legacy chopper chain for the single-chop bake, TPDF dither bit-identity).
+2. The B4 premium devices (TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF") AFTER the parity floor is complete
+   — each needs its page UI (FX_REGISTRY entry + panel) as well as the device.
 3. Decide the flagged page quirks (STATUS "4.2b DONE — page quirks"): fix the Electron DELAY merger downmix / PHASER
    quantum feedback / FLANGER cycle clamp to match the native (recommended), and whether COMP keeps Blink's start-up dip.
 4. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
+5. The popup's spectrum on the bridge (see "4.3 DONE — honest boundary").
 
 ### Next session (in order) — updated at the end of the tenth session (superseded — kept for the record)
 ### Next session (in order) — updated at the end of the ninth session (superseded — kept for the record)
