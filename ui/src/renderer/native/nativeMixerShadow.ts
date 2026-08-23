@@ -17,10 +17,16 @@
  *  • Read-back: the snapshot's `mixer` object (`active` / `silent` / `strips[idx] = [preL, preR, postL, postR, rmsPre,
  *    rmsPost, gain]` / `rejected` / `orderValid` / `mainOut` / `bassStrip` / `clickStrip`) — `levels(name)` serves the
  *    meters (the UI binding is 4.3); the probe (part 8, `mixerPageOk`) asserts the round trips.
- *  Honest boundary (4.1): inserts / the console stage / PDC are still the page's Web Audio graph — which is NOT what
- *  is heard natively (the sources are in the engine). Phase 4.2 ports the FX; until then the native mix is dry.
+ *  • The INSERT CHAINS (4.2): `fxAdd` / `fxRemove` / `fxBypass` / `fxParam` / `fxReorder` / `fxClear` from the sink →
+ *    `mixerAddFx {strip, fx}` (+ every current param, immediate) / `mixerRemoveFx` / `mixerSetFxBypass` /
+ *    `mixerSetFxParam {strip, index, fx, key, value}` / `mixerReorderFx` / `mixerClearFx`; the master's chain is strip 0.
+ *    Devices the engine has not ported yet (4.2a ports utility / eq / filter / wide / mseq / pan) take their slot as a
+ *    PASS-THROUGH placeholder natively (the slot indices stay aligned; the device does nothing until its port lands).
+ *  Honest boundary (4.2a): the console stage / PDC / the master limiter are still the page's Web Audio graph — which is
+ *  NOT what is heard natively (the sources are in the engine).
  */
 import { MixerEngine, ChannelName, setMixerNativeSink, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
+import type { FxId } from '../../mixer/fx';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -57,10 +63,17 @@ export class NativeMixerShadow {
       send: (name, index, db) => this.send(name, index, db),
       mute: (name, on) => this.queue({ type: 'mixerSetMute', strip: this.stripFor(name), on }),
       solo: (name, on) => this.queue({ type: 'mixerSetSolo', strip: this.stripFor(name), on }),
+      fxAdd: (name, index, id, params) => this.fxAdd(name, index, id, params),
+      fxRemove: (name, index) => this.queue({ type: 'mixerRemoveFx', strip: this.idxOf(name), index }),
+      fxBypass: (name, index, on) => this.queue({ type: 'mixerSetFxBypass', strip: this.idxOf(name), index, on }),
+      fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value }),
+      fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
+      fxClear: (name) => this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) }),
     });
     // the whole page mixer, as it stands: every strip + the master + the CLICK strip + the sources
     for (const [name, strip] of this.mixer.channels) this.mirror(name, strip.isSend ? 'send' : 'channel');
     this.queue({ type: 'mixerSetFader', strip: 0, db: this.mixer.master.faderDb });
+    this.mirrorChain('master');
     this.activate(CLICK_STRIP, 'channel');
     this.queue({ type: 'mixerSetFader', strip: CLICK_STRIP, db: 0 });
     this.queue({ type: 'setSourceStrip', source: 'click', strip: CLICK_STRIP });
@@ -126,7 +139,28 @@ export class NativeMixerShadow {
     this.queue({ type: 'mixerSetMute', strip: idx, on: strip.muted });
     this.queue({ type: 'mixerSetSolo', strip: idx, on: strip.soloed });
     if (!strip.isSend) for (let i = 0; i < SEND_CHANNELS.length; i++) this.send(name, i, strip.sendDbs[i] ?? FADER_MIN_DB);
+    this.mirrorChain(name);
   }
+  /** The strip's whole insert chain, as it stands (attach / a channel re-created): clear natively, then add + params
+   *  + bypass per slot (an unported type becomes a pass-through placeholder natively, so the indices line up). */
+  private mirrorChain(name: ChannelName | 'master'): void {
+    const strip = name === 'master' ? this.mixer.master : this.mixer.channels.get(name);
+    if (!strip) return;
+    const idx = this.idxOf(name);
+    if (idx < 0) return;
+    this.queue({ type: 'mixerClearFx', strip: idx });
+    for (let i = 0; i < strip.fx.length; i++) {
+      this.fxAdd(name, i, strip.fxIds[i], strip.fx[i].params);
+      if (strip.fxBypassed[i]) this.queue({ type: 'mixerSetFxBypass', strip: idx, index: i, on: true });
+    }
+  }
+  private fxAdd(name: ChannelName | 'master', index: number, id: FxId, params: Record<string, number | string>): void {
+    const strip = this.idxOf(name);
+    if (strip < 0) return;
+    this.queue({ type: 'mixerAddFx', strip, fx: id });
+    for (const [key, value] of Object.entries(params)) this.queue({ type: 'mixerSetFxParam', strip, index, fx: id, key, value, immediate: true });
+  }
+  private idxOf(name: ChannelName | 'master'): number { return name === 'master' ? 0 : this.stripFor(name); }
   private channel(name: ChannelName, kind: 'channel' | 'send', present: boolean): void {
     if (this.detached) return;
     if (present) { this.mirror(name, kind); return; }

@@ -58,11 +58,12 @@ namespace
 {
 constexpr int kSnapshotHz = 20;
 constexpr int kProbeDelayTicks = 50;       // 2.5 s at 20 Hz — enough for info() + a few snapshots
-constexpr int kProbeDelayTicksReact = 420; // 21 s — the React UI: fonts + first render + engines constructing, then
-                                           // the async checks (start at kProbeAsyncLeadTicks = 17 s before the read)
-constexpr int kProbeAsyncLeadTicks = 340;  // the shim round-trip checks start 17 s before the final read (the shadow's
-                                           // self-test alone runs ~11 s since 3.2–3.7 drive the native sequencers, the
-                                           // count-in, the arp and the live-record landing)
+constexpr int kProbeDelayTicksReact = 600; // 30 s — the React UI: fonts + first render + engines constructing, then
+                                           // the async checks (start at kProbeAsyncLeadTicks = 26 s before the read)
+constexpr int kProbeAsyncLeadTicks = 520;  // the shim round-trip checks start 26 s before the final read (the shadow's
+                                           // self-test alone runs ~15 s since 3.2–4.2 drive the native sequencers, the
+                                           // count-in, the arp, the live-record landing and the mixer round trips; the
+                                           // self-test reports its per-part `timing`)
 
 juce::var arrayVar(const juce::StringArray& a)
 {
@@ -1189,6 +1190,48 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
     }
     else if (type == "mixerSetMainOut")
         c = Command::mixerSetMainOut(std::clamp(static_cast<int>(json.getProperty("pair", 0)), 0, 63));
+    // the insert chain (Phase 4.2, core/fx/Effect.h) — devices by the page's FxId, params by the page's key
+    else if (type == "mixerAddFx")
+    {
+        const auto id = json.getProperty("fx", "").toString();
+        const FxType t = fxTypeFromId(id.toRawUTF8());
+        if (t == FxType::none)
+            return ok(false, "unknown fx '" + id + "'");
+        c = Command::mixerAddFx(stripOf(json), static_cast<std::uint8_t>(t));
+    }
+    else if (type == "mixerRemoveFx")
+        c = Command::mixerRemoveFx(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7));
+    else if (type == "mixerSetFxBypass")
+        c = Command::mixerSetFxBypass(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7),
+                                      static_cast<bool>(json.getProperty("on", false)));
+    else if (type == "mixerSetFxParam")
+    {
+        // the page names the device type so the key → index / option → index lookup is exact
+        const auto id = json.getProperty("fx", "").toString();
+        const FxType t = fxTypeFromId(id.toRawUTF8());
+        const auto key = json.getProperty("key", "").toString();
+        const int param = fxParamIndex(t, key.toRawUTF8());
+        if (t == FxType::none || param < 0)
+            return ok(false, "unknown fx param '" + id + "." + key + "'");
+        const auto& v = json.getProperty("value", 0.0);
+        float value;
+        if (v.isString())
+        {
+            const int opt = fxOptionIndex(t, param, v.toString().toRawUTF8());
+            if (opt < 0)
+                return ok(false, "unknown option '" + v.toString() + "' for " + id + "." + key);
+            value = static_cast<float>(opt);
+        }
+        else
+            value = static_cast<float>(static_cast<double>(v));
+        c = Command::mixerSetFxParam(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7),
+                                     param, value, static_cast<bool>(json.getProperty("immediate", false)));
+    }
+    else if (type == "mixerReorderFx")
+        c = Command::mixerReorderFx(stripOf(json), std::clamp(static_cast<int>(json.getProperty("from", 0)), 0, 7),
+                                    std::clamp(static_cast<int>(json.getProperty("to", 0)), 0, 7));
+    else if (type == "mixerClearFx")
+        c = Command::mixerClearFx(stripOf(json));
     else if (type == "setSourceStrip")
     {
         const auto src = json.getProperty("source", "bass").toString();
@@ -1832,12 +1875,14 @@ void WebShell::timerCallback()
             m.add(static_cast<double>(s.stripRmsPre[i]));
             m.add(static_cast<double>(s.stripRmsPost[i]));
             m.add(static_cast<double>(s.stripGain[i]));
+            m.add(static_cast<int>(s.stripFxCount[i]));
             strips->setProperty(juce::String(i), juce::var(m));
         }
         mx->setProperty("active", juce::var(active));
         mx->setProperty("silent", juce::var(silent));
         mx->setProperty("strips", juce::var(strips)); // "<index>": [preL, preR, postL, postR, rmsPre, rmsPost, gain]
         mx->setProperty("rejected", static_cast<int>(s.mixerRoutesRejected));
+        mx->setProperty("fxRejected", static_cast<int>(s.mixerFxRejected));
         mx->setProperty("orderValid", static_cast<bool>(s.mixerOrderValid));
         mx->setProperty("mainOut", s.mixerMainOut);
         mx->setProperty("bassStrip", s.bassStrip);

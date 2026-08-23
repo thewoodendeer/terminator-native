@@ -28,6 +28,8 @@ type AnyRecord = Record<string, any>;
 
 /** What the pad shadow lends the bass shadow: its commands, its clock and the snapshot. */
 export interface BassShadowHost {
+  /** A self-test poll step: the next native snapshot or ~50 ms, whichever first (optional). */
+  tick?(ms?: number): Promise<void>;
   cmd(c: AnyRecord): Promise<boolean>;
   clock: NativeClock;
   ctx: AudioContext;
@@ -235,7 +237,7 @@ export class NativeBassShadow {
       r.level = Math.max(r.level, Number(sp2?.bassLevel ?? 0));
       r.eventsDropped = Number(sp2?.bassEventsDropped ?? 0);
       this.bass.stop();
-      for (let t = 0; t < 40 && this.host.latestSnapshot()?.bassPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+      for (let t = 0; t < 40 && this.host.latestSnapshot()?.bassPlaying; t++) await (this.host.tick ? this.host.tick() : new Promise((res) => setTimeout(res, 50)));
       r.stopped = !this.host.latestSnapshot()?.bassPlaying && !this.bass.getState().playing;
       r.bassPageOk = r.nativePlaying && r.loopTicks === 384 && r.notesFired >= 2 && r.level > 0.001 && r.cursorTracks && r.stopped && r.eventsDropped === 0;
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.bassPageOk = false; }

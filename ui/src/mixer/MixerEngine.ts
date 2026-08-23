@@ -68,6 +68,14 @@ export interface MixerNativeSink {
   send(name: ChannelName, index: number, db: number): void;
   mute(name: ChannelName, on: boolean): void;
   solo(name: ChannelName, on: boolean): void;
+  /** The insert chain (4.2): a device appended (with its current params) / removed / bypassed / a param / reordered /
+   *  the chain cleared. `name` = 'master' for the master strip. */
+  fxAdd(name: ChannelName | 'master', index: number, id: FxId, params: Record<string, number | string>): void;
+  fxRemove(name: ChannelName | 'master', index: number): void;
+  fxBypass(name: ChannelName | 'master', index: number, on: boolean): void;
+  fxParam(name: ChannelName | 'master', index: number, id: FxId, key: string, value: number | string): void;
+  fxReorder(name: ChannelName | 'master', from: number, to: number): void;
+  fxClear(name: ChannelName | 'master'): void;
 }
 let nativeSink: MixerNativeSink | null = null;
 export function setMixerNativeSink(sink: MixerNativeSink | null): void { nativeSink = sink; }
@@ -362,6 +370,7 @@ class ChannelStrip {
     this.fx.push(fx); this.fxIds.push(id); this.fxBypassed.push(false);
     this.rebuildChain();
     this.onChainChanged?.();
+    nativeSink?.fxAdd(this.name, this.fx.length - 1, id, { ...fx.params });
     // A measured latency / a worklet arriving later changes the PDC picture.
     fx.ready?.then(() => { if (this.fx.includes(fx)) this.onChainChanged?.(); }).catch(() => {});
     return this.fx.length - 1;
@@ -375,17 +384,20 @@ class ChannelStrip {
     this.rebuildChain();
     rm.dispose();
     this.onChainChanged?.();
+    nativeSink?.fxRemove(this.name, i);
   }
   toggleBypass(i: number): void {
     if (i < 0 || i >= this.fx.length) return;
     this.fxBypassed[i] = !this.fxBypassed[i];
     this.fx[i].bypass(this.fxBypassed[i]);
     this.onChainChanged?.();
+    nativeSink?.fxBypass(this.name, i, this.fxBypassed[i]);
   }
   setFxParam(i: number, key: string, value: number | string): void {
     if (i < 0 || i >= this.fx.length) return;
     this.fx[i].setParam(key, value);
     if (key === 'SOURCE') this.onChainChanged?.();
+    nativeSink?.fxParam(this.name, i, this.fxIds[i], key, value);
   }
   private clearFx(): void {
     this.tearDownEdges();
@@ -393,6 +405,7 @@ class ChannelStrip {
     this.fx = []; this.fxIds = []; this.fxBypassed = [];
     this.rebuildChain();
     this.onChainChanged?.();
+    nativeSink?.fxClear(this.name);
   }
   /** Latency of the insert chain (non-bypassed effects), seconds. */
   chainLatencySec(): number {
@@ -423,6 +436,7 @@ class ChannelStrip {
     this.fxIds.splice(to, 0, id);
     this.fxBypassed.splice(to, 0, byp);
     this.rebuildChain();
+    nativeSink?.fxReorder(this.name, from, to);
   }
 
   // ── auto gain match ────────────────────────────────────────────────
@@ -760,6 +774,7 @@ class MasterStrip {
     this.fx.push(fx); this.fxIds.push(id); this.fxBypassed.push(false);
     this.rebuildChain();
     this.onChainChanged?.();
+    nativeSink?.fxAdd('master', this.fx.length - 1, id, { ...fx.params });
     fx.ready?.then(() => { if (this.fx.includes(fx)) this.onChainChanged?.(); }).catch(() => {});
     return this.fx.length - 1;
   }
@@ -770,16 +785,19 @@ class MasterStrip {
     this.fxIds.splice(i, 1); this.fxBypassed.splice(i, 1);
     this.rebuildChain(); rm.dispose();
     this.onChainChanged?.();
+    nativeSink?.fxRemove('master', i);
   }
   toggleBypass(i: number): void {
     if (i < 0 || i >= this.fx.length) return;
     this.fxBypassed[i] = !this.fxBypassed[i];
     this.fx[i].bypass(this.fxBypassed[i]);
     this.onChainChanged?.();
+    nativeSink?.fxBypass('master', i, this.fxBypassed[i]);
   }
   setFxParam(i: number, key: string, value: number | string): void {
     if (i >= 0 && i < this.fx.length) this.fx[i].setParam(key, value);
     if (key === 'SOURCE') this.onChainChanged?.();
+    if (i >= 0 && i < this.fx.length) nativeSink?.fxParam('master', i, this.fxIds[i], key, value);
   }
   private clearFx(): void {
     this.tearDownEdges();
@@ -799,6 +817,7 @@ class MasterStrip {
     this.fxIds.splice(to, 0, id);
     this.fxBypassed.splice(to, 0, byp);
     this.rebuildChain();
+    nativeSink?.fxReorder('master', from, to);
   }
 
   levels(): StripLevels & { truePeak: number } {

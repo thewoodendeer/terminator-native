@@ -32,6 +32,8 @@ const GROUP_ID_BASE = 1000;        // drum mute groups live in their own choke-g
 
 /** What the pad shadow lends the drum shadow: its commands, its SampleStore uploads (refcounted) and its clock. */
 export interface DrumShadowHost {
+  /** A self-test poll step: the next native snapshot or ~50 ms, whichever first (optional). */
+  tick?(ms?: number): Promise<void>;
   cmd(c: AnyRecord): Promise<boolean>;
   /** 4.1: the mixer strip a lane's pad sums into (the lane key → its mixer channel); −1 / absent = the direct path. */
   stripForDrumTrack?(key: TrackKey): number;
@@ -326,7 +328,7 @@ export class NativeDrumShadow {
       const d = buf.getChannelData(0);
       for (let i = 0; i < frames; i++) d[i] = Math.sin(2 * Math.PI * 200 * i / sr) * 0.5;
       this.drums.primeBuffer(track, buf);
-      for (let t = 0; t < 60 && this.lastKey[lane] === null; t++) await new Promise((res) => setTimeout(res, 50));
+      for (let t = 0; t < 60 && this.lastKey[lane] === null; t++) await (this.host.tick ? this.host.tick() : new Promise((res) => setTimeout(res, 50)));
       r.laneBound = this.lastKey[lane] !== null;
       r.laneKey = this.lastKey[lane];
       // the pattern: 4 hits per bar on the first lane (every 24th internal step), 1 bar
@@ -355,7 +357,7 @@ export class NativeDrumShadow {
       r.cursorTracks = close(cur1, nat1, tol1) && close(cur2, nat2, tol2);
       r.hits = Number(sp2?.drumHitsFired ?? 0) - hits0;
       this.drums.stop();
-      for (let t = 0; t < 40 && this.host.latestSnapshot()?.drumPlaying; t++) await new Promise((res) => setTimeout(res, 50));
+      for (let t = 0; t < 40 && this.host.latestSnapshot()?.drumPlaying; t++) await (this.host.tick ? this.host.tick() : new Promise((res) => setTimeout(res, 50)));
       r.stopped = !this.host.latestSnapshot()?.drumPlaying && !this.drums.getState().playing;
       r.drumPageOk = r.laneBound && r.nativePlaying && r.stepCount === spb && r.hits >= 2 && r.cursorTracks && r.stopped;
       this.drums.setPattern({ [track]: Array.from({ length: spb }, () => false) }, 1, false);
