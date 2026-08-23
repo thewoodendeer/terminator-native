@@ -23,6 +23,11 @@ add_library(terminator_engine STATIC
     include/terminator/core/Mixer.h
     include/terminator/core/fx/Effect.h
     include/terminator/core/fx/BasicFx.h
+    include/terminator/core/fx/FxDsp.h
+    include/terminator/core/fx/ShaperFx.h
+    include/terminator/core/fx/ModFx.h
+    include/terminator/core/fx/DynamicsFx.h
+    include/terminator/core/fx/ReverbFx.h
     include/terminator/core/fx/FxPool.h
     include/terminator/core/planners/JsMath.h
     include/terminator/core/planners/StemMask.h
@@ -59,6 +64,11 @@ add_library(terminator_engine STATIC
     src/core/Metronome.cpp
     src/core/Mixer.cpp
     src/core/fx/BasicFx.cpp
+    src/core/fx/FxDsp.cpp
+    src/core/fx/ShaperFx.cpp
+    src/core/fx/ModFx.cpp
+    src/core/fx/DynamicsFx.cpp
+    src/core/fx/ReverbFx.cpp
     src/core/fx/FxPool.cpp
     src/core/Arp.cpp
     src/io/AudioIO.cpp

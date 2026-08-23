@@ -234,6 +234,21 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
     e.commands().push(Command::mixerAddFx(2, static_cast<std::uint8_t>(FxType::pan)));
     e.commands().push(Command::mixerAddFx(3, static_cast<std::uint8_t>(FxType::mseq)));
     e.commands().push(Command::mixerAddFx(7, static_cast<std::uint8_t>(FxType::wide)));
+    // 4.2b: the heavy devices too — the shapers' oversamplers, the delays, the Blink kernel, the sc-comp keyed from
+    // strip 2, and the REVERB whose IR is generated + transformed on the callback (its build runs inside the loop
+    // below and its first IR is promoted there)
+    e.commands().push(Command::mixerAddFx(2, static_cast<std::uint8_t>(FxType::clip)));
+    e.commands().push(Command::mixerAddFx(2, static_cast<std::uint8_t>(FxType::mbsat)));
+    e.commands().push(Command::mixerAddFx(3, static_cast<std::uint8_t>(FxType::delay)));
+    e.commands().push(Command::mixerAddFx(3, static_cast<std::uint8_t>(FxType::phaser)));
+    e.commands().push(Command::mixerAddFx(7, static_cast<std::uint8_t>(FxType::flanger)));
+    e.commands().push(Command::mixerAddFx(7, static_cast<std::uint8_t>(FxType::vinyl)));
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::comp)));
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::sccomp)));
+    e.commands().push(Command::mixerSetFxParam(1, 4, 0, 2.0f, true)); // SOURCE = strip 2
+    e.commands().push(Command::mixerAddFx(8, static_cast<std::uint8_t>(FxType::reverb)));
+    e.commands().push(Command::mixerAddFx(8, static_cast<std::uint8_t>(FxType::wave)));
+    e.commands().push(Command::mixerAddFx(8, static_cast<std::uint8_t>(FxType::sat)));
     REQUIRE(test::allocationsDuring(
                 [&]
                 {
@@ -249,6 +264,9 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
                             e.commands().push(Command::mixerRemoveFx(1, 1));
                             e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::wide)));
                             e.commands().push(Command::mixerClearFx(3));
+                            e.commands().push(Command::mixerSetFxParam(8, 0, 2, 0.8f));  // REVERB DECAY → a rebuild
+                            e.commands().push(Command::mixerSetFxParam(2, 1, 0, 60.0f)); // MB SAT LOW
+                            e.commands().push(Command::mixerSetFxParam(1, 2, 0, 3.0f));  // COMP STYLE NY-PARALLEL
                             e.commands().push(Command::mixerSetFader(1, -12.0f));
                             e.commands().push(Command::mixerSetPan(1, 0.5f));
                             e.commands().push(Command::mixerSetWidth(7, 0.5f));
@@ -261,7 +279,7 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
                 }) == 0);
     REQUIRE(e.snapshot().mixerRoutesRejected == 1u);
     REQUIRE(e.snapshot().mixerOrderValid == 1u);
-    REQUIRE(e.snapshot().stripFxCount[1] == 3);
+    REQUIRE(e.snapshot().stripFxCount[1] == 5);
     REQUIRE(e.snapshot().mixerFxRejected == 0u);
 }
 

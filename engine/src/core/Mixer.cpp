@@ -96,6 +96,8 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
     outL_.assign(n, 0.0);
     outR_.assign(n, 0.0);
     wetL_.assign(n, 0.0);
+    keys_.assign(static_cast<std::size_t>(kMaxStrips) * 2 * n, 0.0);
+    silence_.assign(n, 0.0);
     wetR_.assign(n, 0.0);
     inputPtrs_.assign(static_cast<std::size_t>(kMaxStrips) * 2, nullptr);
     if (!prepared_)
@@ -331,6 +333,7 @@ bool Mixer::addFx(int strip, FxType type) noexcept TERMINATOR_NONBLOCKING
     s.fx[s.fxCount] = e;
     s.fxBypass[s.fxCount] = false;
     ++s.fxCount;
+    rebuildKeyMask();
     return true;
 }
 
@@ -351,7 +354,22 @@ bool Mixer::removeFx(int strip, int index) noexcept TERMINATOR_NONBLOCKING
     --s.fxCount;
     s.fx[s.fxCount] = nullptr;
     s.fxBypass[s.fxCount] = false;
+    rebuildKeyMask();
     return true;
+}
+
+void Mixer::rebuildKeyMask() noexcept TERMINATOR_NONBLOCKING
+{
+    std::uint64_t m = 0;
+    for (const auto& s : strips_)
+        for (int k = 0; k < s.fxCount; ++k)
+            if (s.fx[k] != nullptr)
+            {
+                const int src = s.fx[k]->sidechainSource();
+                if (src >= 0 && src < kMaxStrips)
+                    m |= std::uint64_t{1} << src;
+            }
+    keyMask_ = m;
 }
 
 void Mixer::setFxBypass(int strip, int index, bool on) noexcept TERMINATOR_NONBLOCKING
@@ -374,6 +392,8 @@ void Mixer::setFxParam(int strip, int index, int param, float value, bool immedi
     if (param < 0 || param >= s.fx[index]->numParams())
         return;
     s.fx[index]->setParam(param, value, immediate);
+    if (s.fx[index]->type() == FxType::sccomp)
+        rebuildKeyMask();
 }
 
 bool Mixer::reorderFx(int strip, int from, int to) noexcept TERMINATOR_NONBLOCKING
@@ -417,6 +437,7 @@ void Mixer::clearFx(int strip) noexcept TERMINATOR_NONBLOCKING
         s.fxBypass[k] = false;
     }
     s.fxCount = 0;
+    rebuildKeyMask();
 }
 
 FxType Mixer::fxType(int strip, int index) const noexcept
@@ -613,12 +634,14 @@ void Mixer::process(float* const* outputs, int numOut, int numSamples) noexcept 
     if (!prepared_ || numSamples <= 0)
         return;
     const int n = std::min(numSamples, maxBlock_);
+    processedMask_ = 0;
     for (int k = 0; k < orderCount_; ++k)
     {
         const int idx = order_[k];
         if (strips_[idx].set.kind == StripKind::off)
             continue;
         processStrip(idx, outputs, numOut, n);
+        processedMask_ |= std::uint64_t{1} << idx;
     }
 }
 
@@ -640,6 +663,14 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         const float e = target + (cur - target) * a;
         return (e - target <= 1e-6f && target - e <= 1e-6f) ? target : e;
     };
+
+    // ---- the sidechain key: a strip some SC COMP listens to keeps a copy of its input BEFORE its own inserts ----
+    if ((keyMask_ >> idx) & 1u)
+    {
+        std::copy_n(inL, n, keys_.data() + static_cast<std::size_t>(idx) * 2 * static_cast<std::size_t>(maxBlock_));
+        std::copy_n(inR, n,
+                    keys_.data() + (static_cast<std::size_t>(idx) * 2 + 1) * static_cast<std::size_t>(maxBlock_));
+    }
 
     // ---- pre meter (the strip's input, what the sources summed) ----
     {
@@ -663,6 +694,24 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         Effect* e = s.fx[k];
         if (e == nullptr || s.fxBypass[k])
             continue;
+        const int src = e->sidechainSource();
+        if (src >= 0)
+        {
+            // the key = the source strip's pre-insert input: the copy if that strip already ran this block (or is
+            // this one — its input is being mutated right here), its live accumulator otherwise; a dead source =
+            // silence
+            const bool liveSrc = src < kMaxStrips && strips_[src].set.kind != StripKind::off;
+            const bool copied = src == idx || ((processedMask_ >> src) & 1u);
+            const double* kl =
+                !liveSrc ? silence_.data()
+                : copied ? keys_.data() + static_cast<std::size_t>(src) * 2 * static_cast<std::size_t>(maxBlock_)
+                         : inputPtrs_[static_cast<std::size_t>(src) * 2];
+            const double* kr =
+                !liveSrc ? silence_.data()
+                : copied ? keys_.data() + (static_cast<std::size_t>(src) * 2 + 1) * static_cast<std::size_t>(maxBlock_)
+                         : inputPtrs_[static_cast<std::size_t>(src) * 2 + 1];
+            e->setSidechainKey(kl, kr);
+        }
         const float mix = e->wetMix();
         if (mix >= 1.0f)
         {

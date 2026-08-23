@@ -128,6 +128,9 @@ class Mixer
     std::uint32_t fxRejected() const noexcept { return fxRejected_; }
     /// Σ latencySamples of the strip's non-bypassed inserts (the PDC plan, 4.4).
     int chainLatencySamples(int strip) const noexcept;
+    /// The strips some SC COMP keys from (their pre-insert input is copied aside each block — the key is the input
+    /// BEFORE that strip's own inserts run in place on it).
+    std::uint64_t sidechainKeyMask() const noexcept { return keyMask_; }
 
     // --- sources (audio thread, before process()) -----------------------------------------------
     /// Zero every active strip's accumulator for this block — call first.
@@ -198,6 +201,7 @@ class Mixer
     static float dbToGain(float db) noexcept;
     void rebuildOrder() noexcept TERMINATOR_NONBLOCKING;
     void updateSilence() noexcept TERMINATOR_NONBLOCKING;
+    void rebuildKeyMask() noexcept TERMINATOR_NONBLOCKING;
     void processStrip(int idx, float* const* outputs, int numOut, int numSamples) noexcept TERMINATOR_NONBLOCKING;
 
     double sampleRate_ = 48000.0;
@@ -212,6 +216,8 @@ class Mixer
     std::uint32_t rejected_ = 0;
     std::uint32_t fxRejected_ = 0;
     FxPool* pool_ = nullptr;
+    std::uint64_t keyMask_ = 0;       // strips that key an SC COMP somewhere (their input is copied to keys_)
+    std::uint64_t processedMask_ = 0; // strips already processed this block (their input has been mutated)
     int mainOut_ = 0;
     // buffers (prepare)
     std::vector<double> inputs_;      // kMaxStrips × 2 × maxBlock
@@ -219,6 +225,8 @@ class Mixer
     std::vector<double*> inputPtrs_;  // 2 × kMaxStrips
     std::vector<double> outL_, outR_; // the strip being processed
     std::vector<double> wetL_, wetR_; // an insert's wet path when it crossfades (WET < 100)
+    std::vector<double> keys_;        // kMaxStrips × 2 × maxBlock: the sidechain keys (pre-insert inputs)
+    std::vector<double> silence_;     // maxBlock zeros (a key with no live source)
 };
 
 } // namespace terminator

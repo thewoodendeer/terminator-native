@@ -6,7 +6,8 @@
 // INDEX. Numeric params glide with the TS constant (FX τ 10 ms, `setParam(… 0.01)`) unless the effect documents
 // otherwise (a WIDTH gain set instantly stays instant). process() is the WET path in place; the chain applies the
 // WET/dry crossfade (a true crossfade: dry 1−mix, wet mix) when the effect has a WET param, and bypass = dry.
-// latencySamples() is the effect's own group delay in samples (the PDC plan, 4.4) — 0 for every 4.2a device.
+// latencySamples() is the effect's own group delay in samples (the PDC plan, 4.4): the 4× shapers' oversampler, COMP's
+// look-ahead, VINYL's base delays; 0 for the rest.
 #include <cmath>
 #include <cstdint>
 
@@ -58,7 +59,8 @@ struct FxTypeInfo
     const char* id; // the page's FxId string
     const FxParamDef* params;
     int numParams;
-    int wetParam; // index of the WET (0..100) param, −1 = always fully wet
+    int wetParam; // the WET (0..100) param the CHAIN crossfades; −1 = the chain runs the device fully wet (no WET
+                  // param, or the device blends internally with a latency-matched dry leg: MB SAT, COMP)
 };
 
 /// The type table (core/fx/FxPool.cpp): the params of every type, by FxType; `id` → FxType; "KEY" → index.
@@ -149,6 +151,10 @@ class Effect
     /// The param's TARGET value.
     virtual float param(int index) const noexcept TERMINATOR_NONBLOCKING = 0;
     virtual int latencySamples() const noexcept TERMINATOR_NONBLOCKING { return 0; }
+    /// The strip whose pre-insert INPUT keys this device (SC COMP), −1 = none. When ≥ 0 the chain hands the key in
+    /// through setSidechainKey (the block's L / R, or nullptr for silence) right before process().
+    virtual int sidechainSource() const noexcept TERMINATOR_NONBLOCKING { return -1; }
+    virtual void setSidechainKey(const double* /*l*/, const double* /*r*/) noexcept TERMINATOR_NONBLOCKING {}
     /// RT: the wet path, in place.
     virtual void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING = 0;
 

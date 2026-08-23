@@ -103,7 +103,7 @@ struct Rig
 };
 } // namespace
 
-TEST_CASE("fx: the type table — the page's ids, keys, ranges, defaults, enum options", "[fx]")
+TEST_CASE("fx: the type table - the page's ids, keys, ranges, defaults, enum options", "[fx]")
 {
     REQUIRE(fxTypeFromId("utility") == FxType::utility);
     REQUIRE(fxTypeFromId("eq") == FxType::eq);
@@ -127,11 +127,13 @@ TEST_CASE("fx: the type table — the page's ids, keys, ranges, defaults, enum o
     REQUIRE(fxTypeInfo(FxType::mseq).params[2].def == 4000.0f);
     REQUIRE(fxTypeInfo(FxType::pan).params[1].def == 50.0f);
     REQUIRE(fxTypeInfo(FxType::eq).wetParam == -1);
-    // unported types have no params yet (the pool refuses them)
-    REQUIRE(fxTypeInfo(FxType::reverb).numParams == 0);
+    // 4.2b: every page device has its table (the 4.2b gate checks them one by one)
+    REQUIRE(fxTypeInfo(FxType::reverb).numParams == 4);
+    for (int t = 1; t < static_cast<int>(FxType::count); ++t)
+        REQUIRE(FxPool::isPorted(static_cast<FxType>(t)));
 }
 
-TEST_CASE("fx: UTILITY — gain, mono folds, phase", "[fx]")
+TEST_CASE("fx: UTILITY - gain, mono folds, phase", "[fx]")
 {
     UtilityFx u;
     u.prepare(kSr, kBlock);
@@ -180,7 +182,7 @@ TEST_CASE("fx: UTILITY — gain, mono folds, phase", "[fx]")
     REQUIRE(u.param(0) == Approx(-20.0f).margin(1e-4f));
 }
 
-TEST_CASE("fx: EQ — 0 dB is a bit-exact pass-through; the shelves sit at their gain at the band edges, the bell on "
+TEST_CASE("fx: EQ - 0 dB is a bit-exact pass-through; the shelves sit at their gain at the band edges, the bell on "
           "its centre",
           "[fx]")
 {
@@ -214,7 +216,7 @@ TEST_CASE("fx: EQ — 0 dB is a bit-exact pass-through; the shelves sit at their
     REQUIRE(20.0 * std::log10(b.magnitudeAt(23999.0, kSr)) == Approx(-12.0).margin(1e-2));
 }
 
-TEST_CASE("fx: FILTER — the Web Audio lowpass/highpass (Q in dB) / bandpass / notch", "[fx]")
+TEST_CASE("fx: FILTER - the Web Audio lowpass/highpass (Q in dB) / bandpass / notch", "[fx]")
 {
     FilterFx f;
     f.prepare(kSr, kBlock);
@@ -250,7 +252,7 @@ TEST_CASE("fx: FILTER — the Web Audio lowpass/highpass (Q in dB) / bandpass / 
     REQUIRE(b.magnitudeAt(1000.0, kSr) < 1e-9);
 }
 
-TEST_CASE("fx: WIDE and M/S EQ — the mid/side matrix", "[fx]")
+TEST_CASE("fx: WIDE and M/S EQ - the mid/side matrix", "[fx]")
 {
     WideFx w;
     w.prepare(kSr, kBlock);
@@ -284,7 +286,7 @@ TEST_CASE("fx: WIDE and M/S EQ — the mid/side matrix", "[fx]")
     REQUIRE(responseDb(m, 1000.0) == Approx(0.0).margin(0.05));
 }
 
-TEST_CASE("fx: PAN — the sine LFO sweeps the StereoPanner law; DEPTH 0 is the identity", "[fx]")
+TEST_CASE("fx: PAN - the sine LFO sweeps the StereoPanner law; DEPTH 0 is the identity", "[fx]")
 {
     PanFx p;
     p.prepare(kSr, kBlock);
@@ -324,7 +326,7 @@ TEST_CASE("fx: PAN — the sine LFO sweeps the StereoPanner law; DEPTH 0 is the 
     REQUIRE(r[7] == 0.25);
 }
 
-TEST_CASE("fx: the insert chain — add / bypass / param / reorder / remove / clear, the caps, the pool", "[fx]")
+TEST_CASE("fx: the insert chain - add / bypass / param / reorder / remove / clear, the caps, the pool", "[fx]")
 {
     Rig r;
     r.dcPad(0.5f, 0.25f);
@@ -381,17 +383,18 @@ TEST_CASE("fx: the insert chain — add / bypass / param / reorder / remove / cl
     r.settle();
     REQUIRE(r.engine.snapshot().stripFxCount[1] == 0);
     REQUIRE(r.out(0) == 0.5f);
-    // an UNPORTED type takes its slot as a pass-through placeholder (the page chain's indices stay aligned): it reports
-    // the type, passes audio bit-exact, a later device behind it is still slot 1
+    // a heavy device ahead of a light one (4.2b: every type is real now): the slots stay in order, a BYPASSED slot 0
+    // is dry bit-exact, the device behind it is still slot 1
     r.push(Command::mixerAddFx(1, Rig::id(FxType::reverb)));
     r.push(Command::mixerAddFx(1, Rig::id(FxType::utility)));
+    r.push(Command::mixerSetFxBypass(1, 0, true));
     r.push(Command::mixerSetFxParam(1, 1, 0, -6.0206f, true));
     r.settle();
     REQUIRE(r.engine.mixer().fxType(1, 0) == FxType::reverb);
     REQUIRE(r.engine.mixer().fxType(1, 1) == FxType::utility);
     REQUIRE(r.engine.snapshot().mixerFxRejected == rej0 + 2);
     REQUIRE(r.out(0) == Approx(0.25f).margin(2e-5f));
-    REQUIRE_FALSE(FxPool::isPorted(FxType::reverb));
+    REQUIRE(FxPool::isPorted(FxType::reverb));
     REQUIRE(FxPool::isPorted(FxType::utility));
     r.push(Command::mixerClearFx(1));
     r.settle();
@@ -415,6 +418,6 @@ TEST_CASE("fx: the insert chain — add / bypass / param / reorder / remove / cl
     r.push(Command::mixerSetStrip(3, static_cast<std::uint8_t>(StripKind::off)));
     r.run();
     REQUIRE(r.engine.snapshot().stripFxCount[3] == 0);
-    // the chain's latency: every 4.2a device is zero-latency
+    // the chain's latency: every 4.2a device is zero-latency (the 4.2b gate covers the shapers / COMP / VINYL)
     REQUIRE(r.engine.mixer().chainLatencySamples(1) == 0);
 }

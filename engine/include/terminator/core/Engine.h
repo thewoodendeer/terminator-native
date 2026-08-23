@@ -109,7 +109,7 @@ class Engine
     /// The bass synth (tests render it directly; the app only talks to it through commands).
     BassSynth& bassSynth() noexcept { return bass_; }
     /// The mixer's read-back (settings / meters / masks) — tests; the app reads the snapshot.
-    const Mixer& mixer() const noexcept { return mixer_; }
+    const Mixer& mixer() const noexcept { return *mixer_; }
 
     // --- RT ------------------------------------------------------------------------------------
     /// Renders numSamples into outputs[0..numOut). Always overwrites. inputs may be null / numIn 0. Safe to call
@@ -160,7 +160,8 @@ class Engine
     MidiClockOut::Event clockEvents_[MidiClockOut::kMaxEventsPerBlock] = {};
     Metronome metro_; // the click + count-in (Phase 3.6) — beats on the driving sequencer's grid
     Arp arp_;         // the arp (Phase 3.6) — steps on the sample clock
-    Mixer mixer_;     // the strips / sends / buses / master (Phase 4.1) — pads, drum lanes, the bass and the click
+    std::unique_ptr<Mixer> mixer_; // the strips / sends / buses / master (Phase 4.1) — pads, drum lanes, the bass and the click
+                      // (on the heap: 64 strips of meter rings are 177 KB — an Engine VALUE must fit a 1 MB Windows stack)
                       // with a strip sum into it in 64-bit; the direct paths (strip −1) stay as in Phase 3
     FxPool fxPool_;   // every insert device the chains can hold, built + prepared up front (Phase 4.2)
     std::vector<float> scratchL_, scratchR_; // a source's block on its way into a strip (prepare-sized)

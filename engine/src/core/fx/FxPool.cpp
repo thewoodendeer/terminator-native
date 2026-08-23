@@ -3,6 +3,10 @@
 #include <cstring>
 
 #include "terminator/core/fx/BasicFx.h"
+#include "terminator/core/fx/DynamicsFx.h"
+#include "terminator/core/fx/ModFx.h"
+#include "terminator/core/fx/ReverbFx.h"
+#include "terminator/core/fx/ShaperFx.h"
 
 namespace terminator
 {
@@ -14,7 +18,22 @@ namespace
 const char* const kUtilityModes[] = {"STEREO", "MONO", "MONO-L", "MONO-R"};
 const char* const kUtilityPhases[] = {"normal", "inverted"};
 const char* const kFilterTypes[] = {"lowpass", "highpass", "bandpass", "notch"};
+const char* const kPhaserStages[] = {"4", "6", "8", "12"};
+const char* const kCompStyles[] = {"OFF", "LIGHT", "PUNCHY", "NY-PARALLEL", "AGGRESSIVE"};
 
+const FxParamDef kClipParams[] = {
+    {"AMT", 0.0f, 100.0f, 0.0f},
+};
+const FxParamDef kWaveParams[] = {
+    {"DRIVE", 0.0f, 100.0f, 0.0f},
+};
+const FxParamDef kSatParams[] = {
+    {"DRIVE", 0.0f, 100.0f, 0.0f},
+};
+const FxParamDef kMbsatParams[] = {
+    {"LOW", 0.0f, 100.0f, 0.0f},      {"MID", 0.0f, 100.0f, 0.0f},         {"HIGH", 0.0f, 100.0f, 0.0f},
+    {"LO_X", 40.0f, 2000.0f, 200.0f}, {"HI_X", 500.0f, 16000.0f, 3000.0f}, {"WET", 0.0f, 100.0f, 100.0f},
+};
 const FxParamDef kUtilityParams[] = {
     {"GAIN", -20.0f, 20.0f, 0.0f},
     {"MODE", 0.0f, 3.0f, 0.0f, kUtilityModes, 4},
@@ -43,31 +62,75 @@ const FxParamDef kPanParams[] = {
     {"RATE", 0.1f, 10.0f, 1.0f},
     {"DEPTH", 0.0f, 100.0f, 50.0f},
 };
+const FxParamDef kPhaserParams[] = {
+    {"RATE", 0.02f, 10.0f, 0.4f},
+    {"DEPTH", 0.0f, 100.0f, 70.0f},
+    {"CENTER", 100.0f, 8000.0f, 900.0f},
+    {"FEEDBACK", 0.0f, 90.0f, 30.0f},
+    {"STAGES", 0.0f, 3.0f, 1.0f, kPhaserStages, 4},
+    {"WET", 0.0f, 100.0f, 50.0f},
+};
+const FxParamDef kFlangerParams[] = {
+    {"RATE", 0.02f, 8.0f, 0.25f},       {"DEPTH", 0.0f, 100.0f, 60.0f}, {"DELAY", 0.3f, 12.0f, 3.0f},
+    {"FEEDBACK", -95.0f, 95.0f, 40.0f}, {"WET", 0.0f, 100.0f, 50.0f},
+};
+const FxParamDef kVinylParams[] = {
+    {"WARMTH", 0.0f, 10.0f, 4.0f},  {"DRIVE", 0.0f, 10.0f, 2.0f}, {"WOW", 0.0f, 10.0f, 3.0f},
+    {"FLUTTER", 0.0f, 10.0f, 3.0f}, {"AGE", 0.0f, 10.0f, 3.0f},
+};
+const FxParamDef kCompParams[] = {
+    {"STYLE", 0.0f, 4.0f, 2.0f, kCompStyles, 5},
+    {"THRESHOLD", -60.0f, 0.0f, -20.0f},
+    {"RATIO", 1.0f, 20.0f, 4.0f},
+    {"ATTACK", 0.1f, 100.0f, 10.0f},
+    {"RELEASE", 10.0f, 1000.0f, 80.0f},
+    {"MAKEUP", 0.0f, 24.0f, 4.0f},
+};
+const FxParamDef kSccompParams[] = {
+    {"SOURCE", -1.0f, 63.0f, -1.0f}, // the key strip's index (−1 = NONE; the page maps its strip NAME to this)
+    {"THRESH", -60.0f, 0.0f, -24.0f},   {"RATIO", 1.0f, 20.0f, 4.0f}, {"ATTACK", 0.1f, 100.0f, 5.0f},
+    {"RELEASE", 5.0f, 1000.0f, 120.0f}, {"HOLD", 0.0f, 500.0f, 0.0f}, {"MAKEUP", 0.0f, 24.0f, 0.0f},
+    {"KEYHP", 20.0f, 500.0f, 20.0f},
+};
+const FxParamDef kDelayParams[] = {
+    {"TIME", 1.0f, 2000.0f, 300.0f},
+    {"FEEDBACK", 0.0f, 95.0f, 35.0f},
+    {"WET", 0.0f, 100.0f, 30.0f},
+    {"PINGPONG", 0.0f, 1.0f, 0.0f},
+};
+const FxParamDef kReverbParams[] = {
+    {"ROOM", 0.0f, 100.0f, 50.0f},
+    {"PREDELAY", 0.0f, 100.0f, 10.0f},
+    {"DECAY", 0.1f, 10.0f, 2.0f},
+    {"WET", 0.0f, 100.0f, 30.0f},
+};
 
+// wetParam: the WET the CHAIN crossfades (−1 = fully wet in the chain: no WET, or the device blends internally with
+// a latency-matched dry leg — MB SAT, COMP)
 const FxTypeInfo kTypes[] = {
     {FxType::none, "", nullptr, 0, -1},
-    {FxType::clip, "clip", nullptr, 0, -1},   // 4.2b
-    {FxType::wave, "wave", nullptr, 0, -1},   // 4.2b
-    {FxType::sat, "sat", nullptr, 0, -1},     // 4.2b
-    {FxType::mbsat, "mbsat", nullptr, 0, -1}, // 4.2b
+    {FxType::clip, "clip", kClipParams, 1, -1},
+    {FxType::wave, "wave", kWaveParams, 1, -1},
+    {FxType::sat, "sat", kSatParams, 1, -1},
+    {FxType::mbsat, "mbsat", kMbsatParams, 6, -1},
     {FxType::wide, "wide", kWideParams, 1, -1},
     {FxType::mseq, "mseq", kMseqParams, 4, -1},
     {FxType::pan, "pan", kPanParams, 2, -1},
-    {FxType::phaser, "phaser", nullptr, 0, -1},   // 4.2b
-    {FxType::flanger, "flanger", nullptr, 0, -1}, // 4.2b
-    {FxType::vinyl, "vinyl", nullptr, 0, -1},     // 4.2b
+    {FxType::phaser, "phaser", kPhaserParams, 6, 5},
+    {FxType::flanger, "flanger", kFlangerParams, 5, 4},
+    {FxType::vinyl, "vinyl", kVinylParams, 5, -1},
     {FxType::filter, "filter", kFilterParams, 3, -1},
     {FxType::eq, "eq", kEqParams, 3, -1},
-    {FxType::comp, "comp", nullptr, 0, -1},     // 4.2b
-    {FxType::sccomp, "sccomp", nullptr, 0, -1}, // 4.2b
-    {FxType::delay, "delay", nullptr, 0, -1},   // 4.2b
-    {FxType::reverb, "reverb", nullptr, 0, -1}, // 4.2b
+    {FxType::comp, "comp", kCompParams, 6, -1},
+    {FxType::sccomp, "sccomp", kSccompParams, 8, -1},
+    {FxType::delay, "delay", kDelayParams, 4, 2},
+    {FxType::reverb, "reverb", kReverbParams, 4, 3},
     {FxType::utility, "utility", kUtilityParams, 3, -1},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
-/// A pass-through standing in for a device type that is not ported yet: reports the type it stands for, has the
-/// type's (empty) param table, passes audio untouched.
+/// A pass-through standing in for a device type with no implementation (none left after 4.2b — kept so an unknown
+/// type still keeps a page chain's slot indices aligned): reports the type it stands for, passes audio untouched.
 class PassFx final : public Effect
 {
   public:
@@ -96,9 +159,22 @@ int capacityOf(FxType t) noexcept
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
+    case FxType::clip:
+    case FxType::wave:
+    case FxType::sat:
+    case FxType::comp:
+    case FxType::sccomp:
         return 32;
+    case FxType::mbsat:
+    case FxType::phaser:
+    case FxType::flanger:
+    case FxType::vinyl:
+    case FxType::delay:
+        return 16;
+    case FxType::reverb:
+        return 6; // ~27 MB each at 48 k (pre-sized for DECAY 10 s), untouched until used
     default:
-        return 0; // not ported yet
+        return 0;
     }
 }
 
@@ -118,6 +194,28 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<MseqFx>();
     case FxType::pan:
         return std::make_unique<PanFx>();
+    case FxType::clip:
+        return std::make_unique<ClipFx>();
+    case FxType::wave:
+        return std::make_unique<WaveFx>();
+    case FxType::sat:
+        return std::make_unique<SatFx>();
+    case FxType::mbsat:
+        return std::make_unique<MbSatFx>();
+    case FxType::phaser:
+        return std::make_unique<PhaserFx>();
+    case FxType::flanger:
+        return std::make_unique<FlangerFx>();
+    case FxType::vinyl:
+        return std::make_unique<VinylFx>();
+    case FxType::comp:
+        return std::make_unique<CompFx>();
+    case FxType::sccomp:
+        return std::make_unique<SidechainFx>();
+    case FxType::delay:
+        return std::make_unique<DelayFx>();
+    case FxType::reverb:
+        return std::make_unique<ReverbFx>();
     default:
         return nullptr;
     }

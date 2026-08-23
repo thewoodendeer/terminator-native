@@ -6,6 +6,12 @@
 namespace terminator
 {
 
+// An Engine VALUE lives on test / tool stacks (two at a time in the render-comparison gates) and Windows threads get
+// 1 MB by default: the big buffers are on the heap; this keeps anyone from growing it back (4.1's Mixer once did,
+// silently: 502 KB → 16 Windows tests died of stack overflow).
+static_assert(sizeof(Engine) <= 384 * 1024, "Engine must stay small enough for a 1 MB stack — heap the new member");
+
+
 namespace
 {
 constexpr double kPi = 3.14159265358979323846;
@@ -39,7 +45,7 @@ const float* Engine::calibrationClick() noexcept
 
 Engine::Engine()
     : commands_(std::make_unique<Commands>()), midiQueues_(kMaxMidiPorts), midiOut_(std::make_unique<MidiOutQueue>()),
-      calibCapture_(kCalibrationMaxFrames, 0.0f)
+      mixer_(std::make_unique<Mixer>()), calibCapture_(kCalibrationMaxFrames, 0.0f)
 {
     for (int n = 0; n < 128; ++n)
         noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kChopPads ? n - 36 : -1); // A01 = C1 (note 36)
@@ -71,8 +77,8 @@ void Engine::prepare(const Config& config)
     metro_.prepare(config_.sampleRate);
     arp_.prepare(config_.sampleRate);
     fxPool_.prepare(config_.sampleRate, config_.maxBlockSize);
-    mixer_.setPool(&fxPool_);
-    mixer_.prepare(config_.sampleRate, config_.maxBlockSize);
+    mixer_->setPool(&fxPool_);
+    mixer_->prepare(config_.sampleRate, config_.maxBlockSize);
     scratchL_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     scratchR_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     for (auto& t : liveHitSample_)
@@ -95,7 +101,7 @@ void Engine::release()
     clockOut_.reset();
     metro_.reset();
     arp_.reset();
-    mixer_.reset();
+    mixer_->reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -340,35 +346,35 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     // ---- the mixer (Phase 4.1) ----
     case CommandType::mixerSetStrip:
-        mixer_.setStripKind(c.payload.strip.strip,
+        mixer_->setStripKind(c.payload.strip.strip,
                             static_cast<StripKind>(c.payload.strip.kind > 4 ? 0 : c.payload.strip.kind));
         break;
     case CommandType::mixerSetFader:
-        mixer_.setFader(c.payload.strip.strip, c.payload.strip.value);
+        mixer_->setFader(c.payload.strip.strip, c.payload.strip.value);
         break;
     case CommandType::mixerSetPan:
-        mixer_.setPan(c.payload.strip.strip, c.payload.strip.value);
+        mixer_->setPan(c.payload.strip.strip, c.payload.strip.value);
         break;
     case CommandType::mixerSetWidth:
-        mixer_.setWidth(c.payload.strip.strip, c.payload.strip.value);
+        mixer_->setWidth(c.payload.strip.strip, c.payload.strip.value);
         break;
     case CommandType::mixerSetMute:
-        mixer_.setMute(c.payload.strip.strip, c.payload.strip.flag != 0);
+        mixer_->setMute(c.payload.strip.strip, c.payload.strip.flag != 0);
         break;
     case CommandType::mixerSetSolo:
-        mixer_.setSolo(c.payload.strip.strip, c.payload.strip.flag != 0);
+        mixer_->setSolo(c.payload.strip.strip, c.payload.strip.flag != 0);
         break;
     case CommandType::mixerSetSend:
-        (void)mixer_.setSend(c.payload.strip.strip, c.payload.strip.index, c.payload.strip.value,
+        (void)mixer_->setSend(c.payload.strip.strip, c.payload.strip.index, c.payload.strip.value,
                              c.payload.strip.target);
         break;
     case CommandType::mixerSetOutput:
-        (void)mixer_.setOutput(c.payload.strip.strip,
+        (void)mixer_->setOutput(c.payload.strip.strip,
                                static_cast<StripOutput>(c.payload.strip.kind > 3 ? 0 : c.payload.strip.kind),
                                c.payload.strip.index);
         break;
     case CommandType::mixerSetMainOut:
-        mixer_.setMainOut(c.payload.strip.index);
+        mixer_->setMainOut(c.payload.strip.index);
         break;
     case CommandType::setSourceStrip:
     {
@@ -382,23 +388,23 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     }
     // ---- the insert chain (Phase 4.2) ----
     case CommandType::mixerAddFx:
-        (void)mixer_.addFx(c.payload.fx.strip, static_cast<FxType>(c.payload.fx.type));
+        (void)mixer_->addFx(c.payload.fx.strip, static_cast<FxType>(c.payload.fx.type));
         break;
     case CommandType::mixerRemoveFx:
-        (void)mixer_.removeFx(c.payload.fx.strip, c.payload.fx.index);
+        (void)mixer_->removeFx(c.payload.fx.strip, c.payload.fx.index);
         break;
     case CommandType::mixerSetFxBypass:
-        mixer_.setFxBypass(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.flag != 0);
+        mixer_->setFxBypass(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.flag != 0);
         break;
     case CommandType::mixerSetFxParam:
-        mixer_.setFxParam(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.param, c.payload.fx.value,
+        mixer_->setFxParam(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.param, c.payload.fx.value,
                           c.payload.fx.flag != 0);
         break;
     case CommandType::mixerReorderFx:
-        (void)mixer_.reorderFx(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.to);
+        (void)mixer_->reorderFx(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.to);
         break;
     case CommandType::mixerClearFx:
-        mixer_.clearFx(c.payload.fx.strip);
+        mixer_->clearFx(c.payload.fx.strip);
         break;
     case CommandType::setMetronome:
         metro_.setEnabled(c.payload.metro.enabled != 0);
@@ -657,26 +663,26 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.arpLastPad = arp_.lastPad();
     s.arpHits = arp_.hits();
     // the mixer (4.1)
-    s.mixerActiveMask = mixer_.activeMask();
-    s.mixerSilentMask = mixer_.silentMask();
-    s.mixerRoutesRejected = mixer_.routesRejected();
-    s.mixerOrderValid = mixer_.orderValid() ? 1u : 0u;
-    s.mixerMainOut = mixer_.mainOut();
+    s.mixerActiveMask = mixer_->activeMask();
+    s.mixerSilentMask = mixer_->silentMask();
+    s.mixerRoutesRejected = mixer_->routesRejected();
+    s.mixerOrderValid = mixer_->orderValid() ? 1u : 0u;
+    s.mixerMainOut = mixer_->mainOut();
     s.bassStrip = bassStrip_;
     s.clickStrip = clickStrip_;
     for (int i = 0; i < kMaxStrips; ++i)
     {
-        const auto& m = mixer_.meter(i);
+        const auto& m = mixer_->meter(i);
         s.stripPeakPre[i][0] = m.peakPre[0];
         s.stripPeakPre[i][1] = m.peakPre[1];
         s.stripPeakPost[i][0] = m.peakPost[0];
         s.stripPeakPost[i][1] = m.peakPost[1];
         s.stripRmsPre[i] = m.rmsPre;
         s.stripRmsPost[i] = m.rmsPost;
-        s.stripGain[i] = mixer_.currentGain(i);
-        s.stripFxCount[i] = static_cast<std::uint8_t>(mixer_.fxCount(i));
+        s.stripGain[i] = mixer_->currentGain(i);
+        s.stripFxCount[i] = static_cast<std::uint8_t>(mixer_->fxCount(i));
     }
-    s.mixerFxRejected = mixer_.fxRejected();
+    s.mixerFxRejected = mixer_->fxRejected();
     snapshot_.publish(s);
 }
 
@@ -780,24 +786,24 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     // the mixer (4.1): pads / drum lanes with a strip sum into the strip's 64-bit accumulator (the sampler renders
     // them alone into a scratch first); the bass and the click follow their setSourceStrip; everything with strip −1
     // keeps the direct path (outputs[pair], dry)
-    mixer_.clearInputs(numSamples);
-    sampler_.render(outputs, numOut, numSamples, mixer_.inputs(), kMaxStrips);
-    if (bassStrip_ >= 0 && mixer_.isActive(bassStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
+    mixer_->clearInputs(numSamples);
+    sampler_.render(outputs, numOut, numSamples, mixer_->inputs(), kMaxStrips);
+    if (bassStrip_ >= 0 && mixer_->isActive(bassStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
     {
         std::fill_n(scratchL_.data(), numSamples, 0.0f);
         std::fill_n(scratchR_.data(), numSamples, 0.0f);
         bass_.render(scratchL_.data(), scratchR_.data(), numSamples, samplesProcessed_);
-        mixer_.addToStrip(bassStrip_, scratchL_.data(), scratchR_.data(), numSamples);
+        mixer_->addToStrip(bassStrip_, scratchL_.data(), scratchR_.data(), numSamples);
     }
     else
         bass_.render(outputs[0], numOut > 1 ? outputs[1] : nullptr, numSamples, samplesProcessed_); // dry, outs 1/2
     float clickPeak = -1.0f; // ≥ 0 = the click was rendered into its strip this block (not post-master below)
-    if (clickStrip_ >= 0 && mixer_.isActive(clickStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
+    if (clickStrip_ >= 0 && mixer_->isActive(clickStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
     {
         std::fill_n(scratchL_.data(), numSamples, 0.0f);
         std::fill_n(scratchR_.data(), numSamples, 0.0f);
         clickPeak = metro_.process(samplesProcessed_, numSamples, scratchL_.data(), scratchR_.data());
-        mixer_.addToStrip(clickStrip_, scratchL_.data(), scratchR_.data(), numSamples);
+        mixer_->addToStrip(clickStrip_, scratchL_.data(), scratchR_.data(), numSamples);
     }
 
     if (toneEnabled_)
@@ -837,7 +843,7 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     }
 
     // ---- the mixer: strips → sends → buses → master → the hardware outs (4.1) ----
-    mixer_.process(outputs, numOut, numSamples);
+    mixer_->process(outputs, numOut, numSamples);
 
     // ---- master gain (one-block ramp) + peaks ----
     const float gainStart = masterGainCurrent_;
