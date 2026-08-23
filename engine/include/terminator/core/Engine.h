@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 
+#include "terminator/core/BassSequencer.h"
+#include "terminator/core/BassSynth.h"
 #include "terminator/core/ChopSequencer.h"
 #include "terminator/core/Command.h"
 #include "terminator/core/DrumSequencer.h"
@@ -80,6 +82,8 @@ class Engine
 
     /// Pad read-back for the UI (message thread; pads only change via commands so this is stable enough to read).
     const Pad& pad(int i) const noexcept { return sampler_.pad(i); }
+    /// The bass synth (tests render it directly; the app only talks to it through commands).
+    BassSynth& bassSynth() noexcept { return bass_; }
 
     // --- RT ------------------------------------------------------------------------------------
     /// Renders numSamples into outputs[0..numOut). Always overwrites. inputs may be null / numIn 0. Safe to call
@@ -117,8 +121,10 @@ class Engine
     std::vector<MidiQueue> midiQueues_;
     SnapshotPublisher<StateSnapshot> snapshot_;
     Sampler sampler_;
-    ChopSequencer seq_;   // the chop sequencer on the sample clock (Phase 3.1)
-    DrumSequencer drums_; // the drum sequencer on the same clock (Phase 3.3) — lanes = pads kDrumPadBase..
+    ChopSequencer seq_;     // the chop sequencer on the sample clock (Phase 3.1)
+    DrumSequencer drums_;   // the drum sequencer on the same clock (Phase 3.3) — lanes = pads kDrumPadBase..
+    BassSynth bass_;        // the bass synth (Phase 3.4) — dry into outs 1/2 until Phase 4 routes it to its strip
+    BassSequencer bassSeq_; // its pattern player on the same clock
 
     // RT state (owned by the audio thread after prepare)
     float masterGainTarget_ = 1.0f;

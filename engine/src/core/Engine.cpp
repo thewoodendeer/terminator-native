@@ -64,6 +64,8 @@ void Engine::prepare(const Config& config)
     sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels);
     seq_.prepare(config_.sampleRate);
     drums_.prepare(config_.sampleRate);
+    bass_.prepare(config_.sampleRate);
+    bassSeq_.prepare(config_.sampleRate);
     for (auto& t : liveHitSample_)
         t = -1.0e12;
     for (auto& t : pendingTrig_)
@@ -79,6 +81,8 @@ void Engine::release()
     sampler_.reset();
     seq_.reset();
     drums_.reset();
+    bass_.reset();
+    bassSeq_.reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -137,6 +141,8 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         toneEnabled_ = false;
         drums_.stop(sampler_);
         sampler_.stopAll();
+        bassSeq_.stop(bass_);
+        bass_.panic();
         for (auto& t : pendingTrig_)
             t.used = false;
         break;
@@ -203,7 +209,8 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::seqSetBpm:
         seq_.setBpm(c.payload.seq.value);
-        drums_.setBpm(c.payload.seq.value); // one BPM for both sequencers (getMasterBpm)
+        drums_.setBpm(c.payload.seq.value); // one BPM for every sequencer (getMasterBpm)
+        bassSeq_.setBpm(c.payload.seq.value);
         break;
     case CommandType::seqSetLoop:
         seq_.setLoop(c.payload.seq.value != 0.0);
@@ -233,6 +240,56 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::drumStop:
         drums_.stop(sampler_);
+        break;
+    case CommandType::bassSetPatch:
+        bass_.setPatch(static_cast<const BassPatch*>(c.payload.bass.ptr));
+        break;
+    case CommandType::bassSetPattern:
+        bassSeq_.setPattern(static_cast<const BassPattern*>(c.payload.bass.ptr), bass_);
+        break;
+    case CommandType::bassSetTimeline:
+        bassSeq_.setTimeline(static_cast<const BassTimeline*>(c.payload.bass.ptr));
+        break;
+    case CommandType::bassClearTimeline:
+        bassSeq_.clearTimeline(bass_);
+        break;
+    case CommandType::bassArrangerDriven:
+        bassSeq_.setArrangerDriven(c.payload.bass.flag != 0);
+        break;
+    case CommandType::bassBendLane:
+        bassSeq_.setBendLane(c.payload.bass.flag != 0);
+        break;
+    case CommandType::bassPlay:
+        bassSeq_.play(c.payload.bass.atSample, c.payload.bass.offsetTicks, samplesProcessed_);
+        break;
+    case CommandType::bassStop:
+        bassSeq_.stop(bass_);
+        break;
+    case CommandType::bassNote:
+        bass_.pushEvent(c.payload.bass.flag != 0 ? BassSynth::EventKind::on : BassSynth::EventKind::off,
+                        c.payload.bass.atSample, c.payload.bass.note, c.payload.bass.vel, 0.0,
+                        static_cast<BassTag>(c.payload.bass.tag));
+        break;
+    case CommandType::bassSlide:
+        bass_.pushEvent(BassSynth::EventKind::slide, c.payload.bass.atSample, c.payload.bass.note, 0.0f,
+                        c.payload.bass.value, static_cast<BassTag>(c.payload.bass.tag));
+        break;
+    case CommandType::bassBend:
+        // the wheel (at 0 / the past) bends NOW; a future `at` is queued with the note events (a timed BEND lane)
+        if (c.payload.bass.atSample > samplesProcessed_)
+            bass_.pushEvent(BassSynth::EventKind::bend, c.payload.bass.atSample, 0, 0.0f, c.payload.bass.value,
+                            static_cast<BassTag>(c.payload.bass.tag));
+        else
+            bass_.setBendNow(c.payload.bass.value);
+        break;
+    case CommandType::bassMod:
+        bass_.setModWheel(c.payload.bass.value);
+        break;
+    case CommandType::bassClear:
+        bass_.clear(static_cast<BassTag>(c.payload.bass.tag), c.payload.bass.flag != 0);
+        break;
+    case CommandType::bassPanic:
+        bass_.panic();
         break;
     case CommandType::startCalibration:
     {
@@ -409,6 +466,18 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.drumLoopStartSample = drums_.loopStartSample();
     s.drumHitsFired = drums_.hitsFired();
     s.drumHitsSkipped = drums_.hitsSkippedLiveOwned();
+    s.bassPlaying = bassSeq_.playing() ? 1u : 0u;
+    s.bassArrangerDriven = bassSeq_.arrangerDriven() ? 1u : 0u;
+    s.bassTick = bassSeq_.currentTick();
+    s.bassLoopTicks = bassSeq_.loopTicks();
+    s.bassLoopStartSample = bassSeq_.loopStartSample();
+    s.bassVoices = bass_.activeVoices();
+    s.bassLevel = bass_.meterLevel();
+    bass_.activeNoteMask(s.bassNoteMask);
+    s.bassNotesFired = bass_.notesFired();
+    s.bassEventsDropped = bass_.eventsDropped();
+    s.bassTimelineFired = bassSeq_.timelineEventsFired();
+    s.bassBend = bass_.pitchBend();
     s.calibrationState = calibState_;
     s.calibrationId = calibId_;
     snapshot_.publish(s);
@@ -435,6 +504,7 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     firePendingTriggers(numSamples); // live hits booked ahead (quantized live record) land at their exact sample
     seq_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_);   // this block's sequenced hits + note ends
     drums_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_); // this block's drum hits / rolls / ends
+    bassSeq_.process(samplesProcessed_, numSamples, bass_);                  // this block's bass ticks / timeline
     if (playing_ && !seq_.playing() && !drums_.playing() && (seqWasPlaying_ || drumsWasPlaying_))
         playing_ = false; // the sequencers stopped themselves (loop off): the transport follows
     seqWasPlaying_ = seq_.playing();
@@ -469,6 +539,7 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
 
     // ---- sources ----
     sampler_.render(outputs, numOut, numSamples);
+    bass_.render(outputs[0], numOut > 1 ? outputs[1] : nullptr, numSamples, samplesProcessed_); // dry, outs 1/2
 
     if (toneEnabled_)
     {

@@ -76,6 +76,20 @@ struct StateSnapshot
     std::uint64_t drumHitsFired = 0;      // hits + note-repeat sub-hits dispatched to the sampler
     std::uint64_t drumHitsSkipped = 0;    // pattern hits skipped by the one-owner rule (a live hit owned the step)
 
+    // bass synth + sequencer (Phase 3.4, core/BassSynth.h + core/BassSequencer.h)
+    std::uint32_t bassPlaying = 0;
+    std::uint32_t bassArrangerDriven = 0;
+    std::int32_t bassTick = -1;     // the tick (0..loopTicks−1) the playhead is in at the block end (−1 = stopped)
+    std::int32_t bassLoopTicks = 0; // bars × 4 × 96 of the playing pattern
+    std::int64_t bassLoopStartSample = 0;   // engine sample of the current pass's tick 0 (signed)
+    std::uint32_t bassVoices = 0;           // voices sounding at the block end
+    float bassLevel = 0.0f;                 // the UI meter: peak over the last completed 1/30 s window
+    std::uint64_t bassNoteMask[2] = {0, 0}; // bit n = a voice sounds MIDI note n (word 0 = 0..63, word 1 = 64..127)
+    std::uint64_t bassNotesFired = 0;       // note-on events fired (seq + live + arr)
+    std::uint64_t bassEventsDropped = 0;    // events the 512-slot ring refused (should stay 0)
+    std::uint64_t bassTimelineFired = 0;    // arranger timeline events pushed
+    double bassBend = 0.0;                  // the current pitch bend (semitones)
+
     // calibration
     std::uint32_t calibrationState =
         0; // 0 idle · 1 running · 2 done (buffer readable) · 3 failed (channel out of range)

@@ -12,6 +12,9 @@ struct SampleBuffer;
 struct SeqPattern;
 struct DrumPattern;
 struct DrumGraphs;
+struct BassPatch;
+struct BassPattern;
+struct BassTimeline;
 
 enum class CommandType : std::uint32_t
 {
@@ -53,6 +56,22 @@ enum class CommandType : std::uint32_t
     drumSetParams, // drumParams — swing 0..1, master volume 0..1, ppq (the SHIFT snap grid)
     drumPlay,      // drum.atSample (0 = the start of the next block) + drum.stepOffset — start; restarts when playing
     drumStop,      // — stop scheduling; every drum-lane voice fades (its lane's choke fade)
+    // ---- the bass synth + its pattern sequencer (Phase 3.4, core/BassSynth.h + core/BassSequencer.h) ----
+    bassSetPatch,       // bass.ptr = BassPatch* (nullptr = defaults; pointer owned by the shell's ring)
+    bassSetPattern,     // bass.ptr = BassPattern* — live replace (sounding notes whose pitch changed / off vanished
+                        // are released; the next ticks read the new map)
+    bassSetTimeline,    // bass.ptr = BassTimeline* — the arranger's absolute-time events (nullptr = none)
+    bassClearTimeline,  // — drop the arr events, release what sounds, bend 0
+    bassArrangerDriven, // bass.flag — the pattern ticks stay quiet while the arranger drives
+    bassBendLane,       // bass.flag — 0 while the wheel records into the lane
+    bassPlay,           // bass.atSample (0 = next block) + bass.offsetTicks — start; restarts when playing
+    bassStop,           // — stop, release the seq notes, bend 0
+    bassNote,           // bass.atSample (0 = now), note, vel, flag = on(1)/off(0), tag — a live / preview note event
+    bassSlide,          // bass.atSample, note, value = duration seconds, tag — bend what sounds to `note`
+    bassBend,           // bass.atSample (0 = now), value = semitones, tag — the wheel (now) / a timed bend
+    bassMod,            // bass.value — the mod wheel 0..1
+    bassClear,          // bass.tag (0 = all) + bass.flag = release — drop pending events of a tag
+    bassPanic,          // — kill every bass voice, drop every event
 };
 
 enum class PadMode : std::uint8_t
@@ -185,6 +204,18 @@ struct Command
             float masterVolume; // 0..1
             std::uint16_t ppq;  // SHIFT snaps to 60/bpm/ppq (24..960)
         } drumParams;
+
+        struct Bass
+        {
+            const void* ptr;          // BassPatch* / BassPattern* / BassTimeline* (lifetime owned by the shell's ring)
+            std::uint64_t atSample;   // an ENGINE sample (0 = now / the next block)
+            double value;             // slide seconds · bend semitones · mod wheel
+            float vel;                // 0.05..1
+            std::int32_t offsetTicks; // bassPlay: the absolute tick landing on the anchor
+            std::uint8_t note;        // 0..127
+            std::uint8_t tag;         // BassTag
+            std::uint8_t flag;        // on/off · release · arranger-driven · bend lane
+        } bass;
 
         struct Calibration
         {
@@ -445,6 +476,103 @@ struct Command
         c.type = CommandType::drumStop;
         return c;
     }
+    // ---- bass (Phase 3.4) ----
+    static Command bassCmd(CommandType t) noexcept
+    {
+        Command c;
+        c.type = t;
+        c.payload.bass.ptr = nullptr;
+        c.payload.bass.atSample = 0;
+        c.payload.bass.value = 0.0;
+        c.payload.bass.vel = 1.0f;
+        c.payload.bass.offsetTicks = 0;
+        c.payload.bass.note = 0;
+        c.payload.bass.tag = 0;
+        c.payload.bass.flag = 0;
+        return c;
+    }
+    static Command bassSetPatch(const BassPatch* patch) noexcept
+    {
+        Command c = bassCmd(CommandType::bassSetPatch);
+        c.payload.bass.ptr = patch;
+        return c;
+    }
+    static Command bassSetPattern(const BassPattern* pattern) noexcept
+    {
+        Command c = bassCmd(CommandType::bassSetPattern);
+        c.payload.bass.ptr = pattern;
+        return c;
+    }
+    static Command bassSetTimeline(const BassTimeline* timeline) noexcept
+    {
+        Command c = bassCmd(CommandType::bassSetTimeline);
+        c.payload.bass.ptr = timeline;
+        return c;
+    }
+    static Command bassClearTimeline() noexcept { return bassCmd(CommandType::bassClearTimeline); }
+    static Command bassArrangerDriven(bool on) noexcept
+    {
+        Command c = bassCmd(CommandType::bassArrangerDriven);
+        c.payload.bass.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command bassBendLane(bool on) noexcept
+    {
+        Command c = bassCmd(CommandType::bassBendLane);
+        c.payload.bass.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command bassPlay(std::uint64_t atSample = 0, std::int32_t offsetTicks = 0) noexcept
+    {
+        Command c = bassCmd(CommandType::bassPlay);
+        c.payload.bass.atSample = atSample;
+        c.payload.bass.offsetTicks = offsetTicks;
+        return c;
+    }
+    static Command bassStop() noexcept { return bassCmd(CommandType::bassStop); }
+    static Command bassNote(bool on, std::uint8_t note, float velocity, std::uint64_t atSample = 0,
+                            std::uint8_t tag = 2) noexcept
+    {
+        Command c = bassCmd(CommandType::bassNote);
+        c.payload.bass.flag = on ? 1 : 0;
+        c.payload.bass.note = note;
+        c.payload.bass.vel = velocity;
+        c.payload.bass.atSample = atSample;
+        c.payload.bass.tag = tag;
+        return c;
+    }
+    static Command bassSlide(std::uint8_t note, double durationSec, std::uint64_t atSample = 0,
+                             std::uint8_t tag = 2) noexcept
+    {
+        Command c = bassCmd(CommandType::bassSlide);
+        c.payload.bass.note = note;
+        c.payload.bass.value = durationSec;
+        c.payload.bass.atSample = atSample;
+        c.payload.bass.tag = tag;
+        return c;
+    }
+    static Command bassBend(double semis, std::uint64_t atSample = 0, std::uint8_t tag = 2) noexcept
+    {
+        Command c = bassCmd(CommandType::bassBend);
+        c.payload.bass.value = semis;
+        c.payload.bass.atSample = atSample;
+        c.payload.bass.tag = tag;
+        return c;
+    }
+    static Command bassMod(double value) noexcept
+    {
+        Command c = bassCmd(CommandType::bassMod);
+        c.payload.bass.value = value;
+        return c;
+    }
+    static Command bassClear(std::uint8_t tag, bool release) noexcept
+    {
+        Command c = bassCmd(CommandType::bassClear);
+        c.payload.bass.tag = tag;
+        c.payload.bass.flag = release ? 1 : 0;
+        return c;
+    }
+    static Command bassPanic() noexcept { return bassCmd(CommandType::bassPanic); }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,
                                     std::uint32_t id) noexcept
     {
