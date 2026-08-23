@@ -134,7 +134,9 @@ struct StateSnapshot
     float stripPeakPost[kMaxStrips][2] = {}; // … output peak (post fader/mute/pan)
     float stripRmsPre[kMaxStrips] = {};      // … input RMS over the window (both channels pooled)
     float stripRmsPost[kMaxStrips] = {};
-    float stripGain[kMaxStrips] = {}; // … the smoothed fader × mute gain at the block end (1 = unity)
+    float stripGain[kMaxStrips] = {};           // … the smoothed fader × mute gain at the block end (1 = unity)
+    std::uint8_t stripFxCount[kMaxStrips] = {}; // … inserts in the chain (4.2)
+    std::uint32_t mixerFxRejected = 0;          // lifetime mixerAddFx refusals (full / pool empty / not ported / dead)
 };
 static_assert(std::is_trivially_copyable_v<StateSnapshot>, "StateSnapshot must be trivially copyable");
 

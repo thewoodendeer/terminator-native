@@ -21,6 +21,9 @@ add_library(terminator_engine STATIC
     include/terminator/core/Metronome.h
     include/terminator/core/Arp.h
     include/terminator/core/Mixer.h
+    include/terminator/core/fx/Effect.h
+    include/terminator/core/fx/BasicFx.h
+    include/terminator/core/fx/FxPool.h
     include/terminator/core/planners/JsMath.h
     include/terminator/core/planners/StemMask.h
     include/terminator/core/planners/Trims.h
@@ -55,6 +58,8 @@ add_library(terminator_engine STATIC
     src/core/MidiClock.cpp
     src/core/Metronome.cpp
     src/core/Mixer.cpp
+    src/core/fx/BasicFx.cpp
+    src/core/fx/FxPool.cpp
     src/core/Arp.cpp
     src/io/AudioIO.cpp
     src/io/MidiHub.cpp

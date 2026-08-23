@@ -102,6 +102,15 @@ enum class CommandType : std::uint32_t
     mixerSetMainOut, // strip.index — the master's hardware pair (0 = outs 1/2)
     setSourceStrip,  // strip.kind = the source (0 bass · 1 click) + strip.target = its strip (−1 = the direct
                      // Phase-3 path: bass dry into outs 1/2, the click post master gain)
+    // ---- the insert chain (Phase 4.2, core/fx/Effect.h + core/fx/FxPool.h) ----
+    mixerAddFx,       // fx.strip + fx.type (FxType) — append a device (≤ 8; refused: dead strip / full / pool empty /
+                      // not ported → snapshot mixerFxRejected++)
+    mixerRemoveFx,    // fx.strip + fx.index
+    mixerSetFxBypass, // fx.strip + fx.index + fx.flag
+    mixerSetFxParam,  // fx.strip + fx.index + fx.param (the type's param index) + fx.value (enum: the option index) +
+                      // fx.flag = immediate (no glide — a restore / the first set)
+    mixerReorderFx,   // fx.strip + fx.index (from) + fx.to
+    mixerClearFx,     // fx.strip
 };
 
 enum class PadMode : std::uint8_t
@@ -283,6 +292,17 @@ struct Command
             std::uint8_t kind;   // StripKind / StripOutput / the source id
             std::uint8_t flag;   // mute / solo on
         } strip;
+
+        struct Fx
+        {
+            float value;
+            std::int16_t strip;
+            std::int8_t index; // the slot (from)
+            std::int8_t to;    // reorder: the destination slot
+            std::uint8_t type; // FxType
+            std::uint8_t param;
+            std::uint8_t flag; // bypass on / immediate
+        } fx;
 
         struct Calibration
         {
@@ -797,6 +817,51 @@ struct Command
         c.payload.strip.target = static_cast<std::int16_t>(strip);
         return c;
     }
+    // ---- the insert chain (Phase 4.2) ----
+    static Command fxCmd(CommandType t, int strip, int index = 0) noexcept
+    {
+        Command c;
+        c.type = t;
+        c.payload.fx.value = 0.0f;
+        c.payload.fx.strip = static_cast<std::int16_t>(strip);
+        c.payload.fx.index = static_cast<std::int8_t>(index);
+        c.payload.fx.to = 0;
+        c.payload.fx.type = 0;
+        c.payload.fx.param = 0;
+        c.payload.fx.flag = 0;
+        return c;
+    }
+    static Command mixerAddFx(int strip, std::uint8_t fxType) noexcept
+    {
+        Command c = fxCmd(CommandType::mixerAddFx, strip);
+        c.payload.fx.type = fxType;
+        return c;
+    }
+    static Command mixerRemoveFx(int strip, int index) noexcept
+    {
+        return fxCmd(CommandType::mixerRemoveFx, strip, index);
+    }
+    static Command mixerSetFxBypass(int strip, int index, bool on) noexcept
+    {
+        Command c = fxCmd(CommandType::mixerSetFxBypass, strip, index);
+        c.payload.fx.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command mixerSetFxParam(int strip, int index, int param, float value, bool immediate = false) noexcept
+    {
+        Command c = fxCmd(CommandType::mixerSetFxParam, strip, index);
+        c.payload.fx.param = static_cast<std::uint8_t>(param < 0 ? 0 : param);
+        c.payload.fx.value = value;
+        c.payload.fx.flag = immediate ? 1 : 0;
+        return c;
+    }
+    static Command mixerReorderFx(int strip, int from, int to) noexcept
+    {
+        Command c = fxCmd(CommandType::mixerReorderFx, strip, from);
+        c.payload.fx.to = static_cast<std::int8_t>(to);
+        return c;
+    }
+    static Command mixerClearFx(int strip) noexcept { return fxCmd(CommandType::mixerClearFx, strip); }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,
                                     std::uint32_t id) noexcept
     {

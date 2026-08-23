@@ -20,6 +20,7 @@
 
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/StateSnapshot.h"
+#include "terminator/core/fx/Effect.h"
 
 namespace terminator
 {
@@ -27,6 +28,7 @@ namespace terminator
 // kMaxStrips lives in StateSnapshot.h (the snapshot carries per-strip meters): 0 = master, 1..63 = channels / sends /
 // buses (the page names them)
 inline constexpr int kMasterStrip = 0;
+inline constexpr int kMaxInserts = 8;        // the TS: ≤ 8 inserts per strip (Phase 4.2)
 inline constexpr int kMaxSends = 4;          // the TS: 4 post-fader sends per regular strip
 inline constexpr float kFaderMinDb = -60.0f; // at/below = −∞ (gain 0) — FADER_MIN_DB / SEND_MIN_DB
 inline constexpr float kFaderMaxDb = 6.0f;
@@ -75,6 +77,8 @@ struct StripMeter
     float rmsPost = 0.0f;
 };
 
+class FxPool;
+
 class Mixer
 {
   public:
@@ -104,6 +108,26 @@ class Mixer
     bool setOutput(int strip, StripOutput kind, int index) noexcept TERMINATOR_NONBLOCKING;
     /// The master's hardware pair (0 = outs 1/2).
     void setMainOut(int pair) noexcept TERMINATOR_NONBLOCKING;
+
+    // --- the insert chain (Phase 4.2) --------------------------------------------------------------
+    /// Non-RT (prepare): the pool the chains take their devices from.
+    void setPool(FxPool* pool) noexcept { pool_ = pool; }
+    /// Append a device (the TS addFx pushes to the end). false = the strip is dead / full (8) / the pool has none
+    /// left / the type is not ported (fxRejected++).
+    bool addFx(int strip, FxType type) noexcept TERMINATOR_NONBLOCKING;
+    bool removeFx(int strip, int index) noexcept TERMINATOR_NONBLOCKING;
+    void setFxBypass(int strip, int index, bool on) noexcept TERMINATOR_NONBLOCKING;
+    /// `immediate` = no glide (a restore / the page's first set).
+    void setFxParam(int strip, int index, int param, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING;
+    bool reorderFx(int strip, int from, int to) noexcept TERMINATOR_NONBLOCKING;
+    void clearFx(int strip) noexcept TERMINATOR_NONBLOCKING;
+    int fxCount(int strip) const noexcept { return strips_[clampIdx(strip)].fxCount; }
+    FxType fxType(int strip, int index) const noexcept;
+    bool fxBypassed(int strip, int index) const noexcept;
+    const Effect* fx(int strip, int index) const noexcept;
+    std::uint32_t fxRejected() const noexcept { return fxRejected_; }
+    /// Σ latencySamples of the strip's non-bypassed inserts (the PDC plan, 4.4).
+    int chainLatencySamples(int strip) const noexcept;
 
     // --- sources (audio thread, before process()) -----------------------------------------------
     /// Zero every active strip's accumulator for this block — call first.
@@ -164,6 +188,10 @@ class Mixer
         float sendCur[kMaxSends] = {0.0f, 0.0f, 0.0f, 0.0f}; // linear
         MeterTap pre, post;
         StripMeter meter;
+        // the insert chain (4.2)
+        Effect* fx[kMaxInserts] = {};
+        bool fxBypass[kMaxInserts] = {};
+        int fxCount = 0;
     };
 
     static int clampIdx(int i) noexcept { return i < 0 ? 0 : (i >= kMaxStrips ? kMaxStrips - 1 : i); }
@@ -182,12 +210,15 @@ class Mixer
     std::uint64_t activeMask_ = 0;
     std::uint64_t silentMask_ = 0;
     std::uint32_t rejected_ = 0;
+    std::uint32_t fxRejected_ = 0;
+    FxPool* pool_ = nullptr;
     int mainOut_ = 0;
     // buffers (prepare)
     std::vector<double> inputs_;      // kMaxStrips × 2 × maxBlock
     std::vector<double> trash_;       // 2 × maxBlock (dead strips)
     std::vector<double*> inputPtrs_;  // 2 × kMaxStrips
     std::vector<double> outL_, outR_; // the strip being processed
+    std::vector<double> wetL_, wetR_; // an insert's wet path when it crossfades (WET < 100)
 };
 
 } // namespace terminator

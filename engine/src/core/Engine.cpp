@@ -70,6 +70,8 @@ void Engine::prepare(const Config& config)
     clockOut_.prepare(config_.sampleRate);
     metro_.prepare(config_.sampleRate);
     arp_.prepare(config_.sampleRate);
+    fxPool_.prepare(config_.sampleRate, config_.maxBlockSize);
+    mixer_.setPool(&fxPool_);
     mixer_.prepare(config_.sampleRate, config_.maxBlockSize);
     scratchL_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     scratchR_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
@@ -378,6 +380,26 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
             clickStrip_ = strip;
         break;
     }
+    // ---- the insert chain (Phase 4.2) ----
+    case CommandType::mixerAddFx:
+        (void)mixer_.addFx(c.payload.fx.strip, static_cast<FxType>(c.payload.fx.type));
+        break;
+    case CommandType::mixerRemoveFx:
+        (void)mixer_.removeFx(c.payload.fx.strip, c.payload.fx.index);
+        break;
+    case CommandType::mixerSetFxBypass:
+        mixer_.setFxBypass(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.flag != 0);
+        break;
+    case CommandType::mixerSetFxParam:
+        mixer_.setFxParam(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.param, c.payload.fx.value,
+                          c.payload.fx.flag != 0);
+        break;
+    case CommandType::mixerReorderFx:
+        (void)mixer_.reorderFx(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.to);
+        break;
+    case CommandType::mixerClearFx:
+        mixer_.clearFx(c.payload.fx.strip);
+        break;
     case CommandType::setMetronome:
         metro_.setEnabled(c.payload.metro.enabled != 0);
         metro_.setSound(static_cast<ClickSound>(c.payload.metro.sound > 4 ? 0 : c.payload.metro.sound));
@@ -652,7 +674,9 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
         s.stripRmsPre[i] = m.rmsPre;
         s.stripRmsPost[i] = m.rmsPost;
         s.stripGain[i] = mixer_.currentGain(i);
+        s.stripFxCount[i] = static_cast<std::uint8_t>(mixer_.fxCount(i));
     }
+    s.mixerFxRejected = mixer_.fxRejected();
     snapshot_.publish(s);
 }
 

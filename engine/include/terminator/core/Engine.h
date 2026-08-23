@@ -18,6 +18,7 @@
 #include "terminator/core/Metronome.h"
 #include "terminator/core/MidiClock.h"
 #include "terminator/core/Mixer.h"
+#include "terminator/core/fx/FxPool.h"
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/Sampler.h"
 #include "terminator/core/StateSnapshot.h"
@@ -161,6 +162,7 @@ class Engine
     Arp arp_;         // the arp (Phase 3.6) — steps on the sample clock
     Mixer mixer_;     // the strips / sends / buses / master (Phase 4.1) — pads, drum lanes, the bass and the click
                       // with a strip sum into it in 64-bit; the direct paths (strip −1) stay as in Phase 3
+    FxPool fxPool_;   // every insert device the chains can hold, built + prepared up front (Phase 4.2)
     std::vector<float> scratchL_, scratchR_; // a source's block on its way into a strip (prepare-sized)
     int bassStrip_ = -1;                     // setSourceStrip 0: the bass synth's strip (−1 = dry into outs 1/2)
     int clickStrip_ = -1;                    // setSourceStrip 1: the metronome's strip (−1 = direct, post master gain)

@@ -226,6 +226,14 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
     e.commands().push(Command::seqSetBpm(240.0));
     e.commands().push(Command::countIn(4));
     e.commands().push(Command::triggerPad(0, 1.0f));
+    // the insert chain (4.2): devices come from the pre-built pool — add / param / bypass / reorder / remove on the
+    // callback allocate nothing
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::eq)));
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::filter)));
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::utility)));
+    e.commands().push(Command::mixerAddFx(2, static_cast<std::uint8_t>(FxType::pan)));
+    e.commands().push(Command::mixerAddFx(3, static_cast<std::uint8_t>(FxType::mseq)));
+    e.commands().push(Command::mixerAddFx(7, static_cast<std::uint8_t>(FxType::wide)));
     REQUIRE(test::allocationsDuring(
                 [&]
                 {
@@ -233,6 +241,14 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
                     {
                         if (i == 10)
                         {
+                            e.commands().push(Command::mixerSetFxParam(1, 0, 0, 6.0f));
+                            e.commands().push(Command::mixerSetFxParam(1, 1, 1, 800.0f));
+                            e.commands().push(Command::mixerSetFxParam(1, 2, 1, 1.0f, true));
+                            e.commands().push(Command::mixerSetFxBypass(1, 1, true));
+                            e.commands().push(Command::mixerReorderFx(1, 2, 0));
+                            e.commands().push(Command::mixerRemoveFx(1, 1));
+                            e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::wide)));
+                            e.commands().push(Command::mixerClearFx(3));
                             e.commands().push(Command::mixerSetFader(1, -12.0f));
                             e.commands().push(Command::mixerSetPan(1, 0.5f));
                             e.commands().push(Command::mixerSetWidth(7, 0.5f));
@@ -245,6 +261,8 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
                 }) == 0);
     REQUIRE(e.snapshot().mixerRoutesRejected == 1u);
     REQUIRE(e.snapshot().mixerOrderValid == 1u);
+    REQUIRE(e.snapshot().stripFxCount[1] == 3);
+    REQUIRE(e.snapshot().mixerFxRejected == 0u);
 }
 
 TEST_CASE("RT: process before prepare and after release allocates nothing", "[rt]")

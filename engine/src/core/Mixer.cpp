@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "terminator/core/fx/FxPool.h"
+
 namespace terminator
 {
 
@@ -93,6 +95,8 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
     trash_.assign(2 * n, 0.0);
     outL_.assign(n, 0.0);
     outR_.assign(n, 0.0);
+    wetL_.assign(n, 0.0);
+    wetR_.assign(n, 0.0);
     inputPtrs_.assign(static_cast<std::size_t>(kMaxStrips) * 2, nullptr);
     if (!prepared_)
     {
@@ -104,10 +108,17 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
         mainOut_ = 0;
         rejected_ = 0;
     }
-    // the settings survive a re-prepare (a device change): only the smoothed state + meters restart at the targets
+    // the settings survive a re-prepare (a device change): only the smoothed state + meters restart at the targets;
+    // the insert chains are DROPPED (the pool re-prepares and frees every device — the page re-sends its chains)
     for (int i = 0; i < kMaxStrips; ++i)
     {
         auto& s = strips_[i];
+        for (int k = 0; k < kMaxInserts; ++k)
+        {
+            s.fx[k] = nullptr;
+            s.fxBypass[k] = false;
+        }
+        s.fxCount = 0;
         s.faderCur = dbToGain(s.set.faderDb);
         s.panCur = s.set.pan;
         s.widthCur = s.set.width;
@@ -176,7 +187,10 @@ void Mixer::setStripKind(int strip, StripKind kind) noexcept TERMINATOR_NONBLOCK
         }
     }
     if (!live)
+    {
         s.meter = StripMeter{};
+        clearFx(strip); // the devices go back to the pool (the page re-adds them with the channel)
+    }
     updateSilence();
     if (live && !wasLive)
         s.muteCur = (silentMask_ >> strip) & 1u ? 0.0f : 1.0f;
@@ -294,6 +308,143 @@ void Mixer::setMainOut(int pair) noexcept TERMINATOR_NONBLOCKING
     mainOut_ = std::clamp(pair, 0, 63);
     strips_[kMasterStrip].set.outKind = StripOutput::hardware;
     strips_[kMasterStrip].set.outIndex = static_cast<std::int16_t>(mainOut_);
+}
+
+// ---- the insert chain (4.2) -------------------------------------------------------------------------
+
+bool Mixer::addFx(int strip, FxType type) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips || pool_ == nullptr)
+        return false;
+    auto& s = strips_[strip];
+    if (s.set.kind == StripKind::off || s.fxCount >= kMaxInserts)
+    {
+        ++fxRejected_;
+        return false;
+    }
+    Effect* e = pool_->acquire(type);
+    if (e == nullptr)
+    {
+        ++fxRejected_;
+        return false;
+    }
+    s.fx[s.fxCount] = e;
+    s.fxBypass[s.fxCount] = false;
+    ++s.fxCount;
+    return true;
+}
+
+bool Mixer::removeFx(int strip, int index) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return false;
+    auto& s = strips_[strip];
+    if (index < 0 || index >= s.fxCount)
+        return false;
+    if (pool_ != nullptr)
+        pool_->release(s.fx[index]);
+    for (int k = index; k + 1 < s.fxCount; ++k)
+    {
+        s.fx[k] = s.fx[k + 1];
+        s.fxBypass[k] = s.fxBypass[k + 1];
+    }
+    --s.fxCount;
+    s.fx[s.fxCount] = nullptr;
+    s.fxBypass[s.fxCount] = false;
+    return true;
+}
+
+void Mixer::setFxBypass(int strip, int index, bool on) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return;
+    auto& s = strips_[strip];
+    if (index < 0 || index >= s.fxCount)
+        return;
+    s.fxBypass[index] = on;
+}
+
+void Mixer::setFxParam(int strip, int index, int param, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return;
+    auto& s = strips_[strip];
+    if (index < 0 || index >= s.fxCount || s.fx[index] == nullptr)
+        return;
+    if (param < 0 || param >= s.fx[index]->numParams())
+        return;
+    s.fx[index]->setParam(param, value, immediate);
+}
+
+bool Mixer::reorderFx(int strip, int from, int to) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return false;
+    auto& s = strips_[strip];
+    if (from < 0 || from >= s.fxCount || to < 0 || to >= s.fxCount)
+        return false;
+    if (from == to)
+        return true;
+    Effect* e = s.fx[from];
+    const bool b = s.fxBypass[from];
+    if (from < to)
+        for (int k = from; k < to; ++k)
+        {
+            s.fx[k] = s.fx[k + 1];
+            s.fxBypass[k] = s.fxBypass[k + 1];
+        }
+    else
+        for (int k = from; k > to; --k)
+        {
+            s.fx[k] = s.fx[k - 1];
+            s.fxBypass[k] = s.fxBypass[k - 1];
+        }
+    s.fx[to] = e;
+    s.fxBypass[to] = b;
+    return true;
+}
+
+void Mixer::clearFx(int strip) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return;
+    auto& s = strips_[strip];
+    for (int k = 0; k < s.fxCount; ++k)
+    {
+        if (pool_ != nullptr)
+            pool_->release(s.fx[k]);
+        s.fx[k] = nullptr;
+        s.fxBypass[k] = false;
+    }
+    s.fxCount = 0;
+}
+
+FxType Mixer::fxType(int strip, int index) const noexcept
+{
+    const auto& s = strips_[clampIdx(strip)];
+    return (index >= 0 && index < s.fxCount && s.fx[index] != nullptr) ? s.fx[index]->type() : FxType::none;
+}
+
+bool Mixer::fxBypassed(int strip, int index) const noexcept
+{
+    const auto& s = strips_[clampIdx(strip)];
+    return index >= 0 && index < s.fxCount && s.fxBypass[index];
+}
+
+const Effect* Mixer::fx(int strip, int index) const noexcept
+{
+    const auto& s = strips_[clampIdx(strip)];
+    return (index >= 0 && index < s.fxCount) ? s.fx[index] : nullptr;
+}
+
+int Mixer::chainLatencySamples(int strip) const noexcept
+{
+    const auto& s = strips_[clampIdx(strip)];
+    int total = 0;
+    for (int k = 0; k < s.fxCount; ++k)
+        if (s.fx[k] != nullptr && !s.fxBypass[k])
+            total += s.fx[k]->latencySamples();
+    return total;
 }
 
 // ---- the graph ----------------------------------------------------------------------------------------
@@ -475,8 +626,8 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
 {
     auto& s = strips_[idx];
     const bool isMaster = idx == kMasterStrip;
-    const double* inL = inputPtrs_[static_cast<std::size_t>(idx) * 2];
-    const double* inR = inputPtrs_[static_cast<std::size_t>(idx) * 2 + 1];
+    double* inL = inputPtrs_[static_cast<std::size_t>(idx) * 2];
+    double* inR = inputPtrs_[static_cast<std::size_t>(idx) * 2 + 1];
     double* oL = outL_.data();
     double* oR = outR_.data();
     const double invN = 1.0 / static_cast<double>(n);
@@ -505,7 +656,33 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         s.pre.push(pl, pr, ss, n);
     }
 
-    // ---- [inserts: Phase 4.2] → width → fader × mute → pan ----
+    // ---- the inserts (4.2): in place on the strip's input, in order; bypass = skipped (dry, bit-exact); a device
+    // with a WET param crossfades (dry 1−mix + wet mix — the TS WetDry, a true crossfade) ----
+    for (int k = 0; k < s.fxCount; ++k)
+    {
+        Effect* e = s.fx[k];
+        if (e == nullptr || s.fxBypass[k])
+            continue;
+        const float mix = e->wetMix();
+        if (mix >= 1.0f)
+        {
+            e->process(inL, inR, n);
+            continue;
+        }
+        double* wl = wetL_.data();
+        double* wr = wetR_.data();
+        std::copy_n(inL, n, wl);
+        std::copy_n(inR, n, wr);
+        e->process(wl, wr, n);
+        const double m = static_cast<double>(mix), d = 1.0 - m;
+        for (int i = 0; i < n; ++i)
+        {
+            inL[i] = inL[i] * d + wl[i] * m;
+            inR[i] = inR[i] * d + wr[i] * m;
+        }
+    }
+
+    // ---- width → fader × mute → pan ----
     const float wS = s.widthCur, wT = s.set.width;
     const float wE = approach(wS, wT);
     const float fS = s.faderCur, fT = dbToGain(s.set.faderDb);
