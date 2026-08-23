@@ -74,6 +74,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     # pushed, drumEngine.start() → native drumPlaying, hits fire, getStep() tracks the native step, stop lands natively
     grep -Eq '"drumPageOk": ?true' "$OUT" || { echo "::error::the drum machine did not drive the native drum sequencer (drumPageOk false — see the drums object: laneBound / nativePlaying / stepCount / hits / cursor / stopped)"; exit 1; }
     echo "drum machine → native drum sequencer OK: $(grep -Eo '"drumPageCursor": ?\{[^}]*\}' "$OUT") $(grep -Eo '"drumPageCursorAgeMs": ?\{[^}]*\}' "$OUT")"
+    # Phase 3.4: the BASS drives the native BassSequencer + BassSynth — the patch pushed, a pattern pushed, bass.start()
+    # → native bassPlaying, notes fire, the synth sounds (meter), getPlayheadBeats() tracks the native tick, stop lands
+    grep -Eq '"bassPageOk": ?true' "$OUT" || { echo "::error::the bass did not drive the native bass sequencer/synth (bassPageOk false — see the bass object: nativePlaying / loopTicks / notesFired / level / cursor / stopped)"; exit 1; }
+    echo "bass → native bass sequencer + synth OK: $(grep -Eo '"bassPageCursor": ?\{[^}]*\}' "$OUT") $(grep -Eo '"bassPageCursorAgeMs": ?\{[^}]*\}' "$OUT") level=$(grep -Eo '"level": ?[-0-9.e]+' "$OUT" | head -1)"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

@@ -603,7 +603,7 @@ export function HardwareView() {
   useEffect(() => { engine.setPadLock(padLockFrom); }, [engine, padLockFrom]);
   useEffect(() => () => { loudTap.dispose(); engine.dispose(); }, [engine, loudTap]);
   // Terminator 3.0: the pads sound through the native C++ engine (no-op in Electron / the browser)
-  useEffect(() => attachNativeEngineShadow(engine, drumEngine), [engine, drumEngine]);
+  useEffect(() => attachNativeEngineShadow(engine, drumEngine, bassEngine), [engine, drumEngine, bassEngine]);
 
   // Tap the master output with an AnalyserNode for the LED spectrum display.
   // Listen-only: never connect the analyser onward to the destination (that

@@ -22,16 +22,20 @@
  *   • Phase 3.3 — the DRUM MACHINE runs natively too (`nativeDrumShadow.ts`, lanes = pads 64..127 on the same clock):
  *     the DrumEngine's sink; the page cursors (chop + drums) read the ENGINE's position at the ear through NativeClock
  *     (`nativeCursorHook`) — not the AudioContext clock.
- * Not mirrored yet (honest list, also in STATUS.md): bass + metronome + count-in (still Web Audio on the page's
- * AudioContext — Phase 3.4/3.6; kept phase-locked by the nudge, the ear-alignment is as good as the clock
+ *   • Phase 3.4 — the BASS runs natively (`nativeBassShadow.ts`: the BassEngine's sink — every worklet message + the
+ *     transport + the pattern's tick map go to the C++ BassSynth/BassSequencer on the same clock).
+ * Not mirrored yet (honest list, also in STATUS.md): metronome + count-in (still Web Audio on the page's
+ * AudioContext — Phase 3.6; kept phase-locked by the nudge, the ear-alignment is as good as the clock
  * mapping ≈ 1 ms + the two devices' latency reports), mixer strips / master FX (Phase 4), time-STRETCH (plays
  * dry natively), live re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered
  * LOOP. Native MIDI hits the C++ engine directly (MidiHub, note−36) and is mirrored to the page (2.5e).
  */
 import { SEQ_MAX_STEPS, type ChopperEngine, type ChopperState, type SeqPattern } from '../chopper/ChopperEngine';
+import type { BassEngine } from '../bass/BassEngine';
 import type { DrumEngine } from '../drums/DrumEngine';
 import { isNative, native, onNativeEvent } from './juceBridge';
 import { NativeClock, ctxPair, ctxHeardLatencySec } from './nativeClock';
+import { NativeBassShadow } from './nativeBassShadow';
 import { NativeDrumShadow } from './nativeDrumShadow';
 
 type AnyRecord = Record<string, any>;
@@ -120,6 +124,9 @@ export interface NativeShadowStats {
   drumCommands: number;
   drumLanesBound: number;
   drumHits: number;
+  /** Phase 3.4 — the native bass */
+  bassCommands: number;
+  bassEvents: number;
   lastError: string | null;
 }
 
@@ -150,10 +157,11 @@ class NativeEngineShadow {
   private playStartSample = NaN; // the engine sample the run started at (its first loop start)
   private nudgeApplied = 0;      // seconds of satellite nudge applied this run
   private snapEmitPerfMs = NaN;  // performance.now() the newest snapshot's position was stamped at (its emit)
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, lastError: null };
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, lastError: null };
   private drumShadow: NativeDrumShadow | null = null;
+  private bassShadow: NativeBassShadow | null = null;
 
-  constructor(private engine: ChopperEngine, private drums: DrumEngine | null = null) {}
+  constructor(private engine: ChopperEngine, private drums: DrumEngine | null = null, private bass: BassEngine | null = null) {}
 
   attach(): void {
     this.engine.mutePadVoices = true;
@@ -191,6 +199,21 @@ class NativeEngineShadow {
       });
       this.drumShadow.attach();
     }
+    // the bass (3.4)
+    if (this.bass) {
+      this.bassShadow = new NativeBassShadow(this.bass, {
+        cmd: (c) => this.cmd(c),
+        clock: this.clock,
+        ctx: this.engine.ctx,
+        latestSnapshot: () => this.latestSnapshot,
+        leadSec: () => this.playLeadSec(),
+        snapshotAgeMs: () => this.snapshotAgeMs(),
+        cursorToleranceSteps: (stepDurSec) => this.cursorToleranceSteps(stepDurSec),
+        note: (stat, v) => { if (stat === 'commands') this.stats.bassCommands += v; else this.stats.bassEvents += v; },
+        error: (msg) => { this.stats.lastError = msg; },
+      });
+      this.bassShadow.attach();
+    }
     void this.calibrateClock(8);
     this.clockTimer = setInterval(() => { void this.calibrateClock(1); }, 4000);
     this.unsubscribe = this.engine.subscribe((s) => this.sync(s));
@@ -216,6 +239,7 @@ class NativeEngineShadow {
     this.stats.attached = false;
     this.engine.nativeCursorHook = null;
     this.drumShadow?.detach(); this.drumShadow = null;
+    this.bassShadow?.detach(); this.bassShadow = null;
     this.unsubscribe?.(); this.unsubscribe = null;
     this.unsubSnapshot?.(); this.unsubSnapshot = null;
     this.unsubMidi?.(); this.unsubMidi = null;
@@ -463,6 +487,7 @@ class NativeEngineShadow {
     if (s && this.clock.ready && Number(s.emitHostNs) > 0) this.snapEmitPerfMs = this.clock.hostNsToPerfMs(Number(s.emitHostNs));
     this.stats.snapshotAgeMs = this.snapshotAgeMs();
     this.drumShadow?.onSnapshot(s);
+    this.bassShadow?.onSnapshot(s);
     if (!s || this.detached || !this.engine.seqSink || typeof s.seqPlaying !== 'boolean') return;
     const idx = Number(s.seqPatternIndex);
     const held = this.sentPatterns.get(idx);
@@ -692,10 +717,15 @@ class NativeEngineShadow {
         r.drums = await this.drumShadow.selfTest();
         r.drumPageOk = r.drums?.drumPageOk === true;
       } else r.drumPageOk = null;
+      // part 5 — Phase 3.4: the BASS drives the native BassSequencer + BassSynth (nativeBassShadow.selfTest)
+      if (this.bassShadow && this.latestSnapshot?.prepared) {
+        r.bass = await this.bassShadow.selfTest();
+        r.bassPageOk = r.bass?.bassPageOk === true;
+      } else r.bassPageOk = null;
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await new Promise((res) => setTimeout(res, 50));
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true)) : true);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true)) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;
@@ -706,11 +736,11 @@ declare global {
   interface Window { __terminatorNativeShadow?: { stats: () => NativeShadowStats; selfTest: () => Promise<AnyRecord> } }
 }
 
-/** Attach the shadow to a ChopperEngine (+ its DrumEngine — Phase 3.3) (ChopperView / HardwareView, on mount).
- *  Returns the detach. No-op outside the shell. */
-export function attachNativeEngineShadow(engine: ChopperEngine, drums: DrumEngine | null = null): () => void {
+/** Attach the shadow to a ChopperEngine (+ its DrumEngine — Phase 3.3, + its BassEngine — Phase 3.4) (ChopperView /
+ *  HardwareView, on mount). Returns the detach. No-op outside the shell. */
+export function attachNativeEngineShadow(engine: ChopperEngine, drums: DrumEngine | null = null, bass: BassEngine | null = null): () => void {
   if (!isNative()) return () => {};
-  const shadow = new NativeEngineShadow(engine, drums);
+  const shadow = new NativeEngineShadow(engine, drums, bass);
   shadow.attach();
   window.__terminatorNativeShadow = { stats: () => ({ ...shadow.stats }), selfTest: () => shadow.selfTest() };
   return () => {

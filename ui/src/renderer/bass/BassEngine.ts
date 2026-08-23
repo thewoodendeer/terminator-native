@@ -121,6 +121,23 @@ export interface BassState extends BassPreset {
   voicesOn: number;
 }
 
+/** NATIVE TRANSPORT (Terminator 3.0, Phase 3.4): when set, the C++ engine IS the bass — every worklet message
+ *  (patch / note / notes / bend / bends / mod / clear / panic, with its ctx-time `at`) is forwarded instead of posted to
+ *  the AudioWorklet, PLAY/STOP drive the native BassSequencer with the audible pattern (its PPQ-96 tick map + BEND lane),
+ *  and the playhead reads the engine's clock. Null = the Electron behaviour, byte for byte. */
+export interface BassSink {
+  message(m: any): void;
+  play(anchorCtxTime: number, offsetTicks: number): void;
+  stop(): void;
+  /** The audible pattern (re-sent on every edit) + whether the BEND lane plays (false while ● REC — the wheel owns it). */
+  pattern(p: BassPattern, bendLane: boolean): void;
+  arrangerDriven(on: boolean): void;
+  /** Seconds since the audible pass's tick 0, at the ear, from the engine's own clock (null = unknown). */
+  elapsedSec(): number | null;
+  /** The lead a standalone PLAY needs so the engine renders the anchor in time (default 20 ms). */
+  leadSec?(): number;
+}
+
 export function defaultBassPatch(): BassPatch {
   return {
     osc: [
@@ -268,6 +285,11 @@ export class BassEngine {
   readonly outputNode: GainNode;
   readonly ready: Promise<void>;
   private node: AudioWorkletNode | null = null;
+  /** Phase 3.4 — the native engine plays the bass (see BassSink). */
+  bassSink: BassSink | null = null;
+  /** Every message to the voice engine goes through here: the native sink when attached, else the worklet. */
+  private post(m: any): void { if (this.bassSink) this.bassSink.message(m); else this.post(m); }
+  private get engineReady(): boolean { return this.node !== null || this.bassSink !== null; }
   private getBpm: () => number;
   private listeners = new Set<Listener>();
   private nextId = 1;
@@ -378,7 +400,7 @@ export class BassEngine {
     if (!f) return;
     this.setPatch(f.patch, { name: f.name, replace: true });
   }
-  private pushPatch(): void { this.node?.port.postMessage({ type: 'patch', patch: this.patch }); }
+  private pushPatch(): void { this.post({ type: 'patch', patch: this.patch }); }
   /** MOD matrix edits. `mods` is replaced wholesale (the worklet's merge does
    *  the same), so the list is always exactly what the UI shows. */
   private setMods(mods: ModAssign[]): void { this.setPatch({ mods }); }
@@ -399,17 +421,22 @@ export class BassEngine {
   /** 0 = OFF: notes land where you click / play them, nothing snaps. */
   setGrid(div: number): void { this.grid = div <= 0 ? 0 : Math.max(1, Math.min(12, div)); this.emit(); }
   setMidiIn(on: boolean): void { this.midiIn = on; if (!on) this.releaseAllLive(); this.emit(); }
-  setRecording(on: boolean): void { this.recording = on; if (!on) this.recStarts.clear(); this.emit(); }
+  setRecording(on: boolean): void {
+    this.recording = on; if (!on) this.recStarts.clear();
+    // NATIVE: the wheel owns the BEND lane while ● REC — the engine mutes the lane's posts
+    if (this.bassSink && this.timer !== null) this.bassSink.pattern(this.patterns[this.playingIdx] ?? this.patterns[0], !on);
+    this.emit();
+  }
   /** Snap through the lock if it's on — the one place MIDI/roll input agrees on. */
   quantizeNote(n: number): number { return this.lock ? snapToScale(n, this.key) : n; }
 
   // ── live notes (MIDI / keyboard / roll audition) ──
   noteOn(note: number, vel = 1, when?: number, opts?: { raw?: boolean }): void {
-    if (!this.node) return;
+    if (!this.engineReady) return;
     let n = Math.max(0, Math.min(127, Math.round(note)));
     if (!opts?.raw) n = this.quantizeNote(n);
     const at = when && when > this.ctx.currentTime ? when : 0;
-    this.node.port.postMessage({ type: 'note', on: true, note: n, vel: Math.max(0.05, Math.min(1, vel)), at, tag: 'live' });
+    this.post({ type: 'note', on: true, note: n, vel: Math.max(0.05, Math.min(1, vel)), at, tag: 'live' });
     this.liveHeld.add(n);
     this.emitLive();
     if (this.recording && this.timer !== null) {
@@ -418,11 +445,11 @@ export class BassEngine {
     }
   }
   noteOff(note: number, when?: number, opts?: { raw?: boolean }): void {
-    if (!this.node) return;
+    if (!this.engineReady) return;
     let n = Math.max(0, Math.min(127, Math.round(note)));
     if (!opts?.raw) n = this.quantizeNote(n);
     const at = when && when > this.ctx.currentTime ? when : 0;
-    this.node.port.postMessage({ type: 'note', on: false, note: n, at, tag: 'live' });
+    this.post({ type: 'note', on: false, note: n, at, tag: 'live' });
     this.liveHeld.delete(n);
     this.emitLive();
     const rec = this.recStarts.get(n);
@@ -475,8 +502,8 @@ export class BassEngine {
     this.noteOff(n, when, { raw: true });
   }
   releaseAllLive(): void {
-    if (!this.node) return;
-    for (const n of this.liveHeld) this.node.port.postMessage({ type: 'note', on: false, note: n, at: 0, tag: 'live' });
+    if (!this.engineReady) return;
+    for (const n of this.liveHeld) this.post({ type: 'note', on: false, note: n, at: 0, tag: 'live' });
     this.liveHeld.clear();
     this.recStarts.clear();
     this.mpcHeld.clear();
@@ -484,20 +511,20 @@ export class BassEngine {
   }
   /** Audition helper for the roll: a short blip. */
   preview(note: number, vel = 0.9, durSec = 0.22): void {
-    if (!this.node) return;
+    if (!this.engineReady) return;
     const n = Math.max(0, Math.min(127, Math.round(note)));
     const now = this.ctx.currentTime;
-    this.node.port.postMessage({ type: 'notes', list: [
+    this.post({ type: 'notes', list: [
       { on: true, note: n, vel, at: 0, tag: 'prev' },
       { on: false, note: n, at: now + durSec, tag: 'prev' },
     ] });
   }
-  panic(): void { this.node?.port.postMessage({ type: 'panic' }); this.liveHeld.clear(); this.recStarts.clear(); this.sounding = []; this.emitLive(); }
+  panic(): void { this.post({ type: 'panic' }); this.liveHeld.clear(); this.recStarts.clear(); this.sounding = []; this.emitLive(); }
   /** The wheel: bends the synth now — and while ● REC runs with the transport,
    *  writes into the BEND lane of the current pattern (the lane plays back
    *  what you did; while recording the wheel drives and the lane stays quiet). */
   setBend(semis: number): void {
-    this.node?.port.postMessage({ type: 'bend', semis });
+    this.post({ type: 'bend', semis });
     if (this.recording && this.timer !== null) {
       const loop = this.currentPattern.bars * 4;
       const beat = ((this.tickAt(this.ctx.currentTime) / PPQ) % loop + loop) % loop;
@@ -538,7 +565,7 @@ export class BassEngine {
     if (!pat.bend.length) delete pat.bend;
     this.onPatternEdited();
   }
-  setMod(v: number): void { this.node?.port.postMessage({ type: 'mod', value: v }); }
+  setMod(v: number): void { this.post({ type: 'mod', value: v }); }
 
   // ── patterns ──
   /** Grid step in beats; 0 when the grid is OFF (no quantise anywhere). */
@@ -715,17 +742,21 @@ export class BassEngine {
     // note). So: drop the queued 'seq' events (without releasing what sounds),
     // release any sounding note whose pitch changed or whose off vanished, and
     // rewind the scheduler to NOW so the window is refilled from the new map.
-    if (this.timer !== null && this.node) {
+    if (this.timer !== null && this.bassSink) {
+      // NATIVE: the engine holds the tick map — a live replace releases the sounding notes whose pitch changed or
+      // whose off vanished and the next ticks read the new map (BassSequencer::setPattern)
+      this.bassSink.pattern(pat, !this.recording);
+    } else if (this.timer !== null && this.node) {
       const byId = new Map<number, number>();
       for (const n of pat.notes) byId.set(n.id, n.note);
       const still = new Set<number>();
       for (const evs of map.values()) for (const e of evs) if (!e.on) still.add(e.id);
-      this.node.port.postMessage({ type: 'clear', tag: 'seq', release: false });
+      this.post({ type: 'clear', tag: 'seq', release: false });
       const keep: typeof this.sounding = [];
       for (const s of this.sounding) {
         const nowNote = byId.get(s.id);
         if (still.has(s.id) && nowNote === s.note) keep.push(s);
-        else this.node.port.postMessage({ type: 'note', on: false, note: s.note, at: 0, tag: 'seq' });
+        else this.post({ type: 'note', on: false, note: s.note, at: 0, tag: 'seq' });
       }
       this.sounding = keep;
       // Refill from the current tick (a note that began before now stays
@@ -741,7 +772,9 @@ export class BassEngine {
   /** Absolute beat position of the playhead inside the loop (0..bars*4), or -1. */
   getPlayheadBeats(): number {
     if (this.timer === null) return -1;
-    const ticks = (this.ctx.currentTime - this.startTime) / this.tickDur();
+    // NATIVE: the engine's position at the ear (independent of this context's clock); else the ctx anchor
+    const native = this.bassSink?.elapsedSec();
+    const ticks = native != null && Number.isFinite(native) ? native / this.tickDur() : (this.ctx.currentTime - this.startTime) / this.tickDur();
     if (ticks < 0) return -1;
     return (ticks % this.loopTicks) / PPQ;
   }
@@ -758,12 +791,23 @@ export class BassEngine {
       else if (!this.mutedByArranger) this.playingIdx = this.currentIdx;
       this.rebuildTickMap();
       const now = this.ctx.currentTime;
-      const anchor = typeof atTime === 'number' && atTime > now - 0.05 ? atTime : now + 0.02; // 20 ms lead (PLAY feels instant); a transport anchor up to 50 ms old is still honoured
+      const lead = Math.max(0.02, this.bassSink?.leadSec?.() ?? 0); // 20 ms (PLAY feels instant); native: the engine's out-latency
+      const anchor = typeof atTime === 'number' && atTime > now - 0.05 ? atTime : now + lead; // a transport anchor up to 50 ms old is still honoured
       const offTicks = Math.round(offsetBeats * PPQ);
       this.startTime = anchor - offTicks * this.tickDur();
       this.nextTick = offTicks;
       this.nextTickTime = anchor;
       this.sounding = [];
+      if (this.bassSink) {
+        // NATIVE (Phase 3.4): the engine schedules every tick itself on its sample clock — no Worker clock here; the
+        // `timer` handle only marks "playing" for the rest of this class
+        this.timer = { stop() { /* native */ } };
+        const pat = this.patterns[this.playingIdx] ?? this.patterns[0];
+        this.bassSink.pattern(pat, !this.recording);
+        this.bassSink.play(anchor, offTicks);
+        this.emit();
+        return;
+      }
       this.look.reset();
       this.timer = startClock(() => { this.look.beat(); this.scheduleAhead(); }, this.INTERVAL);
       this.scheduleAhead();
@@ -772,14 +816,19 @@ export class BassEngine {
   }
   /** NATIVE TRANSPORT (Phase 3.2): shift the running tick grid by `deltaSec` (+ = later) — see DrumEngine.nudge. */
   nudge(deltaSec: number): void {
+    if (this.bassSink) return; // NATIVE: the bass runs on the engine's own clock — nothing to nudge
     if (this.timer === null || !Number.isFinite(deltaSec) || deltaSec === 0) return;
     this.startTime += deltaSec;
     this.nextTickTime += deltaSec;
   }
   stop(): void {
+    const wasRunning = this.timer !== null;
     if (this.timer !== null) { this.timer.stop(); this.timer = null; }
-    this.node?.port.postMessage({ type: 'clear', tag: 'seq', release: true });
-    this.node?.port.postMessage({ type: 'bend', semis: 0 });   // a lane never leaves the synth bent
+    if (this.bassSink) { if (wasRunning) this.bassSink.stop(); } // NATIVE: bassStop = release the seq notes + bend 0
+    else {
+      this.post({ type: 'clear', tag: 'seq', release: true });
+      this.post({ type: 'bend', semis: 0 });   // a lane never leaves the synth bent
+    }
     this.lastBendSent = NaN;
     this.sounding = [];
     this.recStarts.clear();
@@ -798,16 +847,16 @@ export class BassEngine {
         const at = this.nextTickTime;
         // offs first so a retrigger of the same pitch at this tick isn't eaten
         for (const e of evs) if (!e.on) {
-          this.node.port.postMessage({ type: 'note', on: false, note: e.note, at, tag: 'seq' });
+          this.post({ type: 'note', on: false, note: e.note, at, tag: 'seq' });
           this.sounding = this.sounding.filter((s) => s.id !== e.id);
         }
         for (const e of evs) if (e.on) {
           if (e.slideBeats !== undefined) {
             // SLIDE: bend what's sounding; nothing to track in `sounding`
-            this.node.port.postMessage({ type: 'note', on: true, slide: true, note: e.note, dur: e.slideBeats * this.tickDur() * PPQ, at: at + 0.0002, tag: 'seq' });
+            this.post({ type: 'note', on: true, slide: true, note: e.note, dur: e.slideBeats * this.tickDur() * PPQ, at: at + 0.0002, tag: 'seq' });
             continue;
           }
-          this.node.port.postMessage({ type: 'note', on: true, note: e.note, vel: e.vel, at: at + 0.0002, tag: 'seq' });
+          this.post({ type: 'note', on: true, note: e.note, vel: e.vel, at: at + 0.0002, tag: 'seq' });
           this.sounding.push({ note: e.note, offAt: 0, id: e.id });
         }
       }
@@ -816,7 +865,7 @@ export class BassEngine {
       if (this.bendTicks && !this.mutedByArranger && !this.recording) {
         const b = this.bendTicks[inLoop];
         if (Number.isNaN(this.lastBendSent) || Math.abs(b - this.lastBendSent) > 0.002) {
-          this.node.port.postMessage({ type: 'bend', semis: b, at: this.nextTickTime, tag: 'seq' });
+          this.post({ type: 'bend', semis: b, at: this.nextTickTime, tag: 'seq' });
           this.lastBendSent = b;
         }
       }
@@ -831,19 +880,19 @@ export class BassEngine {
   /** Schedule a whole timeline (absolute ctx times) — used by the arranger
    *  preview. Tag 'arr'; clearTimeline() drops it. */
   playTimeline(notes: BassRenderNote[], bends: BassRenderBend[] = []): void {
-    if (!this.node) return;
-    if (bends.length) this.node.port.postMessage({ type: 'bends', list: bends.map((b) => ({ semis: b.semis, at: b.time, tag: 'arr' })) });
+    if (!this.engineReady) return;
+    if (bends.length) this.post({ type: 'bends', list: bends.map((b) => ({ semis: b.semis, at: b.time, tag: 'arr' })) });
     const list: any[] = [];
     for (const n of notes) {
       if (n.slide) { list.push({ on: true, slide: true, note: n.note, dur: Math.max(0.005, n.dur), at: n.time, tag: 'arr' }); continue; }
       list.push({ on: true, note: n.note, vel: n.vel, at: n.time, tag: 'arr' });
       list.push({ on: false, note: n.note, at: n.time + Math.max(0.005, n.dur), tag: 'arr' });
     }
-    this.node.port.postMessage({ type: 'notes', list });
+    this.post({ type: 'notes', list });
   }
-  clearTimeline(): void { this.node?.port.postMessage({ type: 'clear', tag: 'arr', release: true }); this.node?.port.postMessage({ type: 'bend', semis: 0 }); }
+  clearTimeline(): void { this.post({ type: 'clear', tag: 'arr', release: true }); this.post({ type: 'bend', semis: 0 }); }
   /** While the arranger drives the bass, the pattern scheduler stays quiet. */
-  setArrangerDriven(on: boolean): void { this.mutedByArranger = on; }
+  setArrangerDriven(on: boolean): void { this.mutedByArranger = on; this.bassSink?.arrangerDriven(on); }
 
   // ── persistence ──
   serialize(): BassPreset {
@@ -903,6 +952,20 @@ export class BassEngine {
     if (!pat) return '····';
     return [0, 1, 2, 3].map((b) => (pat.notes.some((n) => n.start >= b && n.start < b + 1) ? '●' : '·')).join('');
   }
+  /** NATIVE (Phase 3.4): the engine's position push (20 Hz) — the ctx time the audible pass's tick 0 is heard (the
+   *  `startTime` origin `tickAt()` / the live-record landing read) and the notes the engine's voices sound (the roll's
+   *  dim keys). The playhead itself reads the sink's elapsedSec directly. */
+  nativeBassUpdate(u: { playing: boolean; loopStartCtx: number; sounding?: number[] }): void {
+    if (!this.bassSink) return;
+    if (u.playing && this.timer !== null && Number.isFinite(u.loopStartCtx)) this.startTime = u.loopStartCtx;
+    if (u.sounding) {
+      const cur = this.sounding.map((s) => s.note).join(',');
+      const next = u.sounding.filter((n) => !this.liveHeld.has(n)).join(',');
+      if (cur !== next) { this.sounding = u.sounding.filter((n) => !this.liveHeld.has(n)).map((note) => ({ note, offAt: 0, id: -1 })); this.emitLive(); }
+    }
+  }
+  /** NATIVE: the engine's meter (peak over the last 1/30 s window + voices sounding) replaces the worklet's. */
+  nativeMeter(level: number, voices: number): void { this.level = level; this.voicesOn = voices; this.emitMeter(); }
   dispose(): void { this.stop(); try { this.node?.disconnect(); } catch { /* */ } this.listeners.clear(); }
 }
 

@@ -85,6 +85,10 @@ class WebShell final : public juce::Component, private juce::Timer
     // dozen swaps ahead, so the pattern ring is deeper; graphs change rarely
     std::vector<std::shared_ptr<DrumPattern>> drumPatternRing_;
     std::vector<std::shared_ptr<DrumGraphs>> drumGraphsRing_;
+    // the bass (Phase 3.4): the patch, the pattern (tick map) and the arranger timeline, same pointer hand-over
+    std::vector<std::shared_ptr<BassPatch>> bassPatchRing_;
+    std::vector<std::shared_ptr<BassPattern>> bassPatternRing_;
+    std::vector<std::shared_ptr<BassTimeline>> bassTimelineRing_;
     std::uint32_t padSampleIds_[kMaxPads] = {};
     juce::String padSampleNames_[kMaxPads];
     juce::File padSampleFiles_[kMaxPads];

@@ -8,10 +8,11 @@
     "dev": "vite --mode native",
     "build": "vite build --mode native",
     "typecheck": "node scripts/typecheck.mjs",
-    "gate": "npm run typecheck && npm run test:library && npm run test:clock && npm run build",
+    "gate": "npm run typecheck && npm run test:library && npm run test:clock && npm run test:bass-theory && npm run build",
     "typecheck:update-baseline": "node scripts/typecheck.mjs --update",
     "test:library": "node scripts/test-library.mts",
-    "test:clock": "node scripts/test-native-clock.mts"
+    "test:clock": "node scripts/test-native-clock.mts",
+    "test:bass-theory": "node scripts/test-bass-theory.mts"
   },
   "dependencies": {
     "@audio/stretch-transient": "1.2.1",
