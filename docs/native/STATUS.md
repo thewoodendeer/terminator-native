@@ -1363,7 +1363,23 @@ PLAY works. Verified: `at 48000: fx=2 playhead=0 seqPlaying=0`.
 **Still open (his call):** should playback AUTO-RESUME across a rate change? Rescaling every component's
 sample-domain state across a rate ratio is real risk for a rare action; stopping is the DAW norm. Ask before building it.
 
-**Gates for all four fixes:** mac-debug 0 warnings + ctest **233/233** · RTSan 234/234 · universal (0 warnings)
+### BUG E — "change any setting, close Preferences, and the pads stop answering the keyboard" — **FIXED** (`bc26187`)
+Preferences is a second, always-on-top `DocumentWindow`. BOTH close paths (the title-bar button's
+`closeButtonPressed` and the page's `closePreferences` verb) only called `setVisible(false)`. Hiding a window does
+not hand keyboard focus back on macOS, and the WebView must be first responder before the page sees ANY keydown —
+so the pads went dead until something was clicked (which is what made it look like a chopping bug).
+**Fix:** a single `WebShell::closePreferences()` used by both paths — main window `toFront(true)`, browser
+`grabKeyboardFocus()`, and a `terminator.focusMain` event the page answers with `window.focus()` (the native view can
+be key while the DOCUMENT is not focused; that is the exact symptom, and grabbing native focus alone does not fix it).
+**Victor's rule, recorded:** *keys and MIDI must ALWAYS trigger pads unless he is typing (a save-file name, etc.).*
+That policy already exists in the page — one `isTextEntry` predicate (input / textarea / contenteditable) guards the
+window key handlers — so nothing there needed changing; the focus loss had simply made it unreachable. MIDI is not
+focus-dependent at all (CoreMIDI → the engine directly) and a settings change only re-applies clock-send + output
+ports (`applyMidiSettings`), so it should never have been affected — **awaiting his confirmation that MIDI actually
+died, or whether he was stating the requirement.**
+**Not headlessly testable** (keyboard focus across two native windows) — needs his pass.
+
+**Gates for all five fixes:** mac-debug 0 warnings + ctest **233/233** · RTSan 234/234 · universal (0 warnings)
 233/233 · ui gate (tsc baseline 5) · app probe green on debug AND universal (`enginePrepared`, `mixerPageOk`,
 `mixerLoudnessOk`) with his real settings file in place.
 
