@@ -1256,7 +1256,88 @@ native peaks). The SnapshotPublisher copies ~2 KB more per block (the GR table) 
 pre meter does not); the LOUDNESS popup's LUFS / TP / LRA / correlation are the engine's (RESET works); an SC COMP
 panel's GR meter ducks with the kick.
 
+## BUGS FROM VICTOR'S FIRST NATIVE TEST DRIVE (2026-08-23, eleventh session)
+
+He ran the universal build and found two. Both root-caused with the systematic-debugging loop; evidence below.
+
+### BUG A — "adding a chop stops the sample playing" — **FIXED** (`Sampler::setPadSample`)
+**The chain:** dropping a chop point moves the SOURCE chop's `end` (`ChopperEngine.sliceAtCurrentPosition`,
+`chops.splice`) → `nativeEngineShadow.syncPad` sees `sameRegion` fail (buf/start/**end**) → sends `setPadSample`
+to the pad that is CURRENTLY SOUNDING with the same buffer and a new `endFrame` → `Sampler::setPadSample`
+unconditionally faded out every voice on that pad ("the previous sample may be freed soon"). The page itself stops
+nothing on a main-track slice (every `stopAllPads()` call site is unreachable from one) — **this was native-only;
+the Electron app is not affected.**
+**Why the fade was wrong:** a Voice SNAPSHOTS its own `sample`, `startFrame`, `endFrame` and stem planes at trigger
+(`Sampler.cpp` v->endFrame = p.endFrame; the render loop reads `v.endFrame`). A region-only change frees nothing and
+invalidates nothing a playing voice reads. The hazard the comment describes is real ONLY when the BUFFER pointer
+changes (the shadow unretains the old rec after a 2 s grace, `RELEASE_GRACE_MS`).
+**Fix:** fade the voices AND drop the stem planes only `if (p.sample != sample)`; a region-only update just moves
+`startFrame` / `endFrame`. Gate: `[sampler][chop]` — a sounding pad survives a same-buffer re-chop and stays audible,
+a different buffer still fades it out.
+
+### BUG B — "changed buffer size, audio glitched and did not resume" — ROOT-CAUSED, **NOT FIXED**
+**Measured** (a real release()+prepare() through the engine, the buffer-size path):
+
+| | before | after |
+|---|---|---|
+| inserts on strip 1 | 2 | **0** |
+| master limiter | on | on |
+| playhead | 102400 | **0** |
+| sequencer | playing | **stopped** |
+
+**The chain:** Preferences → buffer size → `AudioIO::audioDeviceStopped` → `Engine::release()` → then
+`audioDeviceAboutToStart` → `Engine::prepare()`. `release()` resets every component; `prepare()` zeroes the transport
+counters and re-prepares the sequencers, whose `reset()` is documented "stop, **forget patterns**". `Mixer::prepare`
+drops every insert chain — its comment says "the page re-sends its chains", and `FxPool::prepare` rebuilds the pool.
+**So the ENGINE is behaving as designed.** The defect is that the page never implemented its half: the only listener
+for `terminator.devicesChanged` is `NativeAudioPane.tsx`, which refreshes a device dropdown. Nothing re-mirrors.
+**And it is worse than "nothing re-sends":** every shadow keeps a "what I already sent" diff cache
+(`nativeEngineShadow.last[] / lastKey[] / lastNoteMap / lastQueued / lastBpmSent / lastMetro / lastArp`,
+`nativeDrumShadow.last[] / lastKey[] / lastPattern`, `nativeBassShadow.lastPatch / lastPatternSig`,
+`nativeMixerShadow.names / live`). After the engine restarts, those caches are a LIE — they claim state is already
+on the engine that the engine has just forgotten — so even a later page edit will not resend the untouched parts.
+
+**The fix (next session), a `resync()` layer:**
+1. Each shadow grows `resync()`: re-send everything it owns, bypassing its diff cache.
+2. `nativeEngineShadow` subscribes to `terminator.devicesChanged` and calls its own + the drum / bass / mixer
+   shadows' `resync()`.
+3. **Care — the retain/unretain bookkeeping:** do NOT simply clear `last[]`. `apply()` retains on
+   `!prev || prev.buf !== d.buf`, so a cleared cache double-retains the same rec with no matching unretain and leaks
+   the sample refcount. Add a `force` flag that re-sends the COMMANDS while leaving `retain`/`unretain` alone.
+   (Samples themselves survive — the store lives in the shell's SampleRegistry, not the Engine.)
+4. Gate it end to end in the probe: change the buffer size through the settings verb, then assert the strip's
+   `fxCount` comes back and a pattern still plays. That is the only test that would have caught this.
+
+**Open product question for Victor:** should PLAYBACK continue through a buffer-size change? Most DAWs (Ableton,
+Logic) stop the transport — so "stops" may be correct and only the silent FX loss is the bug. The engine test written
+for it was lifted back out of the suite rather than left red; start from this body:
+
+```cpp
+TEST_CASE("Engine: a device change (re-prepare) keeps the transport position and the sequencer running", "[engine]")
+{
+    Engine e;
+    e.prepare({48000.0, 512, 2, 0});
+    e.commands().push(Command::seqSetBpm(90.0));
+    e.commands().push(Command::seqPlay(true));
+    std::vector<float> a(512), b(512);
+    float* outs[2] = {a.data(), b.data()};
+    for (int i = 0; i < 100; ++i) e.process(outs, 2, 512);
+    const auto beforePlayhead = e.snapshot().playheadSamples;
+    e.release();
+    e.prepare({48000.0, 128, 2, 0});
+    std::vector<float> c(128), d(128);
+    float* outs2[2] = {c.data(), d.data()};
+    for (int i = 0; i < 8; ++i) e.process(outs2, 2, 128);
+    REQUIRE(e.snapshot().seqPlaying == 1u);
+    REQUIRE(e.snapshot().playheadSamples >= beforePlayhead);
+}
+```
+
+**Until it is fixed:** a buffer-size change silently wipes the insert chains. Set the buffer size FIRST, then build
+the mix.
+
 ### Next session (in order) — updated at the end of the eleventh session
+-1. **BUG B above (the device-change resync)** — it silently eats his FX chains; do it before 4.4.
 0. Push (Victor) → `gh run list` → the 4 jobs (Windows: the stack fix + the ASCII names; the universal probe asserts
    `mixerPageOk` incl. the heavy round trip, CONSOLE on/off, the limiter).
 1. **Phase 4.4** — PDC: the two-tier integer plan (channel: maxChan − own; bus: maxBus − own, toMaster = maxBus; the
