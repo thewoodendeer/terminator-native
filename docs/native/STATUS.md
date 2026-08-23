@@ -725,8 +725,9 @@ bassEventsDropped / bassTimelineFired / bassBend`; info `bassPpq / bassMaxBars /
 
 ### Next session (in order) — updated at the end of the seventh session
 0. `gh run list` — CI for the 3.4 trio (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk` + `bassPageOk`
-   with derived tolerances and the measured `snapshotAgeMs` in its output). CI for `ca9cd1a` (the cursor-tolerance fix)
-   was green on RTSan at hand-off; the other three jobs were still running — check them too.
+   with derived tolerances and the measured `snapshotAgeMs` in its output). **CI for `ca9cd1a` (the cursor-tolerance
+   fix, run 32611489982) went GREEN ON ALL FOUR jobs** (RTSan · universal · Intel · Windows) — the first fully green run
+   since the 3.1 tip; the derived tolerance was the missing piece.
 1. **3.5 MIDI clock in/out from the transport** (sample-exact OUT from the callback, IN follower on driver timestamps,
    the unified learn store, note-out); bass MIDI notes with driver timestamps → `bassNote{atSample}`.
 2. 3.6 arp, metronome (through the mixer), count-in on the sample grid — the last Web Audio satellites.
