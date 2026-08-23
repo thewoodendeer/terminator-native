@@ -81,6 +81,7 @@ add_library(terminator_engine STATIC
     src/io/SampleStore.cpp
     src/io/Settings.cpp
     src/render/OfflineRenderer.cpp
+    src/render/BassSpec.cpp
     src/render/ProjectRenderer.cpp
     src/model/ProjectModel.cpp
     src/model/EditHistory.cpp

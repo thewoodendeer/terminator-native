@@ -52,6 +52,8 @@ struct ProjectRenderOptions
     /// Phase 4.5c: render the project's DRUM MACHINE too, through the engine's own DrumSequencer. False = chops
     /// only, which is what every pre-4.5c project render did.
     bool renderDrums = false;
+    /// Phase 4.5d: render the project's BASS too, through the engine's own BassSequencer + BassSynth.
+    bool renderBass = false;
     /// The master's −1 dBFS safety limiter. The page always has it in, so exports carry it by default; off gives an
     /// UNLIMITED master bounce, which is also what makes the master exactly the sum of its trackouts.
     bool masterLimiter = true;
@@ -83,6 +85,10 @@ juce::String padRouteName(const juce::ValueTree& project, int pad);
 /// slots out. Lanes whose key is missing from `bank.drumLanes` still take their slot (silent) so the graphs and the
 /// mute groups keep their lane indices. `namer` gives each lane its mixer strip when `useMixer` is on.
 RenderDrumsSpec buildDrumsSpec(const juce::ValueTree& project, const SampleBank& bank, StripNamer* namer);
+
+/// The project's `bass` blob (the page's BassPreset: patch / patterns / currentIdx) → the bass for an export.
+/// `namer` gives the synth its mixer strip when `useMixer` is on. Disabled when the pattern has no notes.
+RenderBassSpec buildBassSpec(const juce::ValueTree& project, StripNamer* namer);
 
 /// The project's `mixer` blob (the page's MixerPreset: channels / master / console) → a RenderMixerSpec. Channels
 /// the blob does not mention still get a default strip if `extraChannels` names them (a pad routed to a channel the

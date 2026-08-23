@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "terminator/core/fx/ConsoleStage.h"
+#include "terminator/render/BassSpec.h"
 #include "terminator/core/fx/Effect.h"
 #include "terminator/core/planners/LoopRender.h"
 #include "terminator/core/planners/StemMask.h"
@@ -415,6 +416,27 @@ RenderDrumsSpec buildDrumsSpec(const juce::ValueTree& project, const SampleBank&
     return out;
 }
 
+RenderBassSpec buildBassSpec(const juce::ValueTree& project, StripNamer* namer)
+{
+    RenderBassSpec out;
+    const auto blob = project.getProperty(ids::bass);
+    if (!blob.isObject())
+        return out;
+    out.patch = std::make_shared<BassPatch>(bassPatchFromVar(blob.getProperty("patch", juce::var())));
+    const auto* patterns = blob.getProperty("patterns", juce::var()).getArray();
+    if (patterns == nullptr || patterns->isEmpty())
+        return out;
+    const int idx = std::clamp(static_cast<int>(blob.getProperty("currentIdx", 0)), 0, patterns->size() - 1);
+    out.pattern = std::make_shared<BassPattern>();
+    bassPatternFromVar((*patterns)[idx], *out.pattern);
+    if (out.pattern->numNotes == 0)
+        return out; // an empty roll is not "the bass is off", but it renders the same and saves a synth
+    if (namer != nullptr)
+        out.strip = (*namer)("bass");
+    out.enabled = true;
+    return out;
+}
+
 RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBank& bank,
                                   const ProjectRenderOptions& opts)
 {
@@ -622,6 +644,16 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         // a drum lane rings past the last hit like any one-shot: give the tail the same room the chops get
         if (spec.drums.enabled)
             spec.lengthSeconds = std::max(spec.lengthSeconds, patternDur * std::max(1, opts.loops) + opts.tailSeconds);
+    }
+    if (opts.renderBass)
+    {
+        spec.bass = buildBassSpec(project, opts.useMixer ? &namer : nullptr);
+        if (spec.bass.enabled)
+        {
+            if (spec.bass.strip >= 0)
+                routed.push_back("bass");
+            spec.lengthSeconds = std::max(spec.lengthSeconds, patternDur * std::max(1, opts.loops) + opts.tailSeconds);
+        }
     }
     if (opts.useMixer)
         spec.mixer = buildMixerSpec(project, namer, routed, opts.stemChannels, opts.masterLimiter);

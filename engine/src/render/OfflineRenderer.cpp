@@ -363,6 +363,18 @@ RenderResult renderOffline(const RenderSpec& spec)
                                                       static_cast<std::uint16_t>(spec.drums.ppq)));
         engine.commands().push(Command::drumPlay());
     }
+    // the BASS (Phase 4.5d): the engine's own BassSequencer + BassSynth, so the patch, the slides and the BEND lane
+    // in a bounce are the ones that were playing
+    if (spec.bass.enabled)
+    {
+        engine.commands().push(Command::seqSetBpm(spec.tempoBpm));
+        engine.commands().push(Command::setSourceStrip(0, spec.bass.strip)); // 0 = bass
+        if (spec.bass.patch != nullptr)
+            engine.commands().push(Command::bassSetPatch(spec.bass.patch.get()));
+        if (spec.bass.pattern != nullptr)
+            engine.commands().push(Command::bassSetPattern(spec.bass.pattern.get()));
+        engine.commands().push(Command::bassPlay());
+    }
     engine.commands().push(Command::setMasterGain(spec.masterGain));
     engine.commands().push(
         Command::setTestTone(spec.testToneEnabled, spec.testToneFrequencyHz, spec.testToneAmplitude));

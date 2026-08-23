@@ -40,7 +40,8 @@ add_executable(terminator-tests
     engine/test_pdc.cpp
     engine/test_export_mix.cpp
     engine/test_export_project.cpp
-    engine/test_export_drums.cpp)
+    engine/test_export_drums.cpp
+    engine/test_export_bass.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

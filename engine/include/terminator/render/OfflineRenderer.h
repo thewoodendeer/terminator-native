@@ -23,6 +23,8 @@
 #include <juce_core/juce_core.h>
 
 #include "terminator/core/Command.h"
+#include "terminator/core/BassSequencer.h"
+#include "terminator/core/BassSynth.h"
 #include "terminator/core/DrumSequencer.h"
 #include "terminator/core/Mixer.h"
 #include "terminator/core/SampleBuffer.h"
@@ -90,6 +92,16 @@ struct RenderDrumsSpec
     int ppq = 96;
 };
 
+/// The BASS for an export (Phase 4.5d): the engine's own BassSequencer + BassSynth render it, so a bounce carries
+/// the same patch, the same slides and the same BEND lane as playback.
+struct RenderBassSpec
+{
+    bool enabled = false;
+    std::shared_ptr<BassPatch> patch;
+    std::shared_ptr<BassPattern> pattern;
+    int strip = -1; // the mixer strip the synth sums into (−1 = the Phase-3 direct path)
+};
+
 /// One insert in an exported chain: the device and the params it is carrying (by the type's param INDEX, the same
 /// order FxPool publishes). Anything not listed keeps the device's default.
 struct RenderFxSpec
@@ -150,6 +162,7 @@ struct RenderSpec
     std::vector<RenderEvent> events;
     RenderMixerSpec mixer;
     RenderDrumsSpec drums;
+    RenderBassSpec bass;
     double tempoBpm = 120.0; // the drum sequencer reads this (seqSetBpm)
 
     std::int64_t totalSamples() const noexcept { return static_cast<std::int64_t>(lengthSeconds * sampleRate + 0.5); }
