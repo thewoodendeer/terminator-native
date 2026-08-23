@@ -475,8 +475,13 @@ function PreferencesApp() {
   useEffect(() => { if (loaded) void bridge?.setSettings?.({ audio }); }, [audio, loaded]);
   useEffect(() => { if (loaded) void bridge?.setSettings?.({ midi }); }, [midi, loaded]);
 
-  // ── audio device enumeration ───────────────────────────────────────────────
+  // ── audio device enumeration (WEB / Electron only) ─────────────────────────
+  // Natively the audio tab is NativeAudioPane and the device lists come from the C++ AudioIO — these `outputs` /
+  // `inputs` are never rendered there. Running it anyway asked WKWebView for the microphone (getUserMedia) on mount
+  // and again on every `devicechange`, and that permission is not persisted in the WebView: opening Preferences
+  // popped the macOS mic prompt several times for a list nothing reads. Native skips the whole path.
   const refreshAudioDevices = useCallback(async () => {
+    if (isNative()) return;
     try {
       // Unlock device labels by briefly requesting mic access (best effort).
       try {
@@ -490,14 +495,18 @@ function PreferencesApp() {
   }, []);
 
   useEffect(() => {
+    if (isNative()) return;
     void refreshAudioDevices();
     const handler = () => void refreshAudioDevices();
     navigator.mediaDevices?.addEventListener?.('devicechange', handler);
     return () => navigator.mediaDevices?.removeEventListener?.('devicechange', handler);
   }, [refreshAudioDevices]);
 
-  // ── MIDI device enumeration ────────────────────────────────────────────────
+  // ── MIDI device enumeration (WEB / Electron only) ──────────────────────────
+  // Same story: natively the MIDI tab is NativeMidiPane (CoreMIDI through the shell), so asking the WebView for Web
+  // MIDI access only costs another permission prompt for a list nothing renders.
   const refreshMidiDevices = useCallback(async () => {
+    if (isNative()) return;
     try {
       const access = await (navigator as any).requestMIDIAccess?.({ sysex: false });
       if (!access) return;

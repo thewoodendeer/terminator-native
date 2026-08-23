@@ -1315,6 +1315,24 @@ costs latency while such a device is in the mix.
 
 He ran the universal build and found two. Both root-caused with the systematic-debugging loop; evidence below.
 
+### BUG F — "when I open settings I have to hit yes to microphone access 3 times" — **FIXED** (twelfth session)
+
+`PreferencesWindow.tsx` ran TWO web-only device enumerations unconditionally on mount:
+`refreshAudioDevices()` → `navigator.mediaDevices.getUserMedia({ audio: true })` (there only to unlock device LABELS)
++ `enumerateDevices()`, re-armed on every `devicechange`; and `refreshMidiDevices()` → `navigator.requestMIDIAccess()`.
+Natively **neither result is ever rendered**: the audio tab is `NativeAudioPane` (the C++ `AudioIO` device lists) and
+the MIDI tab is `NativeMidiPane` (CoreMIDI through the shell) — the `<select>`s that consume `outputs` / `inputs` /
+`midiInputs` / `midiOutputs` are all inside `!isNative()` branches. So the app was asking WKWebView for the microphone
+for a list nothing reads, and the WebView does not persist that grant — mount prompted, `getUserMedia` succeeding fired
+`devicechange` (labels became available) which re-ran it, and so on: three prompts to open Preferences.
+
+Fix: `if (isNative()) return;` at the top of both callbacks AND in the `devicechange` effect (so the listener is not
+even installed). Web / Electron behaviour is untouched — those builds still need the label unlock.
+
+**Needs his pass (not headlessly testable — a TCC prompt is a system dialog):** open Preferences and confirm no
+microphone prompt at all. Note the real RECORD SAMPLE / input-recording paths still ask for the mic when he actually
+records, which is correct and unchanged.
+
 ### BUG A — "adding a chop stops the sample playing" — **FIXED** (`Sampler::setPadSample`)
 **The chain:** dropping a chop point moves the SOURCE chop's `end` (`ChopperEngine.sliceAtCurrentPosition`,
 `chops.splice`) → `nativeEngineShadow.syncPad` sees `sameRegion` fail (buf/start/**end**) → sends `setPadSample`
