@@ -41,7 +41,7 @@ Engine::Engine()
     : commands_(std::make_unique<Commands>()), midiQueues_(kMaxMidiPorts), calibCapture_(kCalibrationMaxFrames, 0.0f)
 {
     for (int n = 0; n < 128; ++n)
-        noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kMaxPads ? n - 36 : -1); // A01 = C1 (note 36)
+        noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kChopPads ? n - 36 : -1); // A01 = C1 (note 36)
     for (auto& t : liveHitSample_)
         t = -1.0e12;
     (void)clickTable(); // built at static-init time; nothing to warm
@@ -63,6 +63,7 @@ void Engine::prepare(const Config& config)
     setTestToneFrequency(toneFrequencyHz_);
     sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels);
     seq_.prepare(config_.sampleRate);
+    drums_.prepare(config_.sampleRate);
     for (auto& t : liveHitSample_)
         t = -1.0e12;
     for (auto& t : pendingTrig_)
@@ -77,6 +78,7 @@ void Engine::release()
     prepared_ = false;
     sampler_.reset();
     seq_.reset();
+    drums_.reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -133,6 +135,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::panic:
         playing_ = false;
         toneEnabled_ = false;
+        drums_.stop(sampler_);
         sampler_.stopAll();
         for (auto& t : pendingTrig_)
             t.used = false;
@@ -154,7 +157,10 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::triggerPad:
     {
         const auto off = offsetForHostTime(c.payload.trigger.hostTimeNs, numSamples);
-        sampler_.trigger(c.payload.trigger.pad, c.payload.trigger.velocity, off);
+        if (c.payload.trigger.hasPan != 0)
+            sampler_.triggerEx(c.payload.trigger.pad, c.payload.trigger.velocity, off, c.payload.trigger.pan, false);
+        else
+            sampler_.trigger(c.payload.trigger.pad, c.payload.trigger.velocity, off);
         noteLiveHit(c.payload.trigger.pad, static_cast<double>(samplesProcessed_) + static_cast<double>(off));
         break;
     }
@@ -162,7 +168,8 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         sampler_.release(c.payload.trigger.pad);
         break;
     case CommandType::triggerPadAtSample:
-        bookTrigger(c.payload.trigger.pad, c.payload.trigger.velocity, c.payload.trigger.hostTimeNs, false, numSamples);
+        bookTrigger(c.payload.trigger.pad, c.payload.trigger.velocity, c.payload.trigger.hostTimeNs, false, numSamples,
+                    c.payload.trigger.hasPan != 0, c.payload.trigger.pan);
         break;
     case CommandType::releasePadAtSample:
         bookTrigger(c.payload.trigger.pad, 0.0f, c.payload.trigger.hostTimeNs, true, numSamples);
@@ -196,9 +203,36 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::seqSetBpm:
         seq_.setBpm(c.payload.seq.value);
+        drums_.setBpm(c.payload.seq.value); // one BPM for both sequencers (getMasterBpm)
         break;
     case CommandType::seqSetLoop:
         seq_.setLoop(c.payload.seq.value != 0.0);
+        break;
+    case CommandType::drumSetPattern:
+        drums_.setPattern(c.payload.drum.pattern);
+        break;
+    case CommandType::drumSchedulePattern:
+        drums_.schedulePattern(c.payload.drum.pattern, c.payload.drum.atSample);
+        break;
+    case CommandType::drumClearScheduled:
+        drums_.clearScheduled();
+        break;
+    case CommandType::drumSetGraphs:
+        drums_.setGraphs(c.payload.drum.graphs);
+        break;
+    case CommandType::drumSetLane:
+        drums_.setLane(c.payload.drumLane.lane, c.payload.drumLane.volume, c.payload.drumLane.audible != 0,
+                       c.payload.drumLane.group);
+        break;
+    case CommandType::drumSetParams:
+        drums_.setParams(c.payload.drumParams.swing, c.payload.drumParams.masterVolume, c.payload.drumParams.ppq);
+        break;
+    case CommandType::drumPlay:
+        drums_.play(c.payload.drum.atSample, c.payload.drum.stepOffset, samplesProcessed_);
+        playing_ = true;
+        break;
+    case CommandType::drumStop:
+        drums_.stop(sampler_);
         break;
     case CommandType::startCalibration:
     {
@@ -224,8 +258,8 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     ++commandsApplied_;
 }
 
-void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release,
-                         int numSamples) noexcept TERMINATOR_NONBLOCKING
+void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release, int numSamples,
+                         bool hasPan, float pan) noexcept TERMINATOR_NONBLOCKING
 {
     // inside this block (or in the past): fire now at its offset; later: wait in the ring (fired by
     // firePendingTriggers in the block that contains it — sample-exact, any lead)
@@ -238,6 +272,8 @@ void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSamp
         const auto clampedOff = static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1));
         if (release)
             sampler_.release(pad, clampedOff);
+        else if (hasPan)
+            sampler_.triggerEx(pad, velocity, clampedOff, pan, false);
         else
             sampler_.trigger(pad, velocity, clampedOff);
         return;
@@ -250,11 +286,15 @@ void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSamp
             t.velocity = velocity;
             t.pad = pad;
             t.release = release;
+            t.hasPan = hasPan;
+            t.pan = pan;
             return;
         }
     // ring full (64 hits booked ahead): fire now rather than lose it
     if (release)
         sampler_.release(pad, 0);
+    else if (hasPan)
+        sampler_.triggerEx(pad, velocity, 0, pan, false);
     else
         sampler_.trigger(pad, velocity, 0);
 }
@@ -271,7 +311,13 @@ void Engine::firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING
         if (t.release)
             sampler_.release(t.pad, clampedOff);
         else
-            sampler_.trigger(t.pad, t.velocity, clampedOff);
+        {
+            if (t.hasPan)
+                sampler_.triggerEx(t.pad, t.velocity, clampedOff, t.pan, false);
+            else
+                sampler_.trigger(t.pad, t.velocity, clampedOff);
+            noteLiveHit(t.pad, static_cast<double>(t.sample)); // re-stamp: a later booking of the same pad overwrote it
+        }
         t.used = false;
     }
 }
@@ -342,6 +388,7 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.activeVoices = sampler_.activeVoices();
     s.voiceStealing = sampler_.stealCount();
     s.padActiveMask = sampler_.padActiveMask();
+    s.drumActiveMask = sampler_.drumActiveMask();
     s.lastTriggeredPad = sampler_.lastTriggeredPad();
     s.lastTriggeredPadPositionSec = sampler_.lastTriggeredPadPositionSec();
     s.seqPlaying = seq_.playing() ? 1u : 0u;
@@ -355,6 +402,13 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.seqLoopStartSample = seq_.loopStartSample();
     s.seqHitsFired = seq_.hitsFired();
     s.seqHitsSkipped = seq_.hitsSkippedLiveOwned();
+    s.drumPlaying = drums_.playing() ? 1u : 0u;
+    s.drumStep = drums_.currentStep();
+    s.drumStepCount = drums_.stepCount();
+    s.drumStepPhase = drums_.stepPhase();
+    s.drumLoopStartSample = drums_.loopStartSample();
+    s.drumHitsFired = drums_.hitsFired();
+    s.drumHitsSkipped = drums_.hitsSkippedLiveOwned();
     s.calibrationState = calibState_;
     s.calibrationId = calibId_;
     snapshot_.publish(s);
@@ -379,10 +433,12 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     drainCommands(numSamples);
     drainMidi(numSamples);
     firePendingTriggers(numSamples); // live hits booked ahead (quantized live record) land at their exact sample
-    seq_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_); // this block's sequenced hits + note ends
-    if (!seq_.playing() && playing_ && seqWasPlaying_)
-        playing_ = false; // the sequencer stopped itself (loop off): the transport follows
+    seq_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_);   // this block's sequenced hits + note ends
+    drums_.process(samplesProcessed_, numSamples, sampler_, liveHitSample_); // this block's drum hits / rolls / ends
+    if (playing_ && !seq_.playing() && !drums_.playing() && (seqWasPlaying_ || drumsWasPlaying_))
+        playing_ = false; // the sequencers stopped themselves (loop off): the transport follows
     seqWasPlaying_ = seq_.playing();
+    drumsWasPlaying_ = drums_.playing();
 
     // ---- input peaks + calibration capture ----
     const int nIn = std::min(numIn, kMaxInputChannels);

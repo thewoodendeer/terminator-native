@@ -9,6 +9,7 @@
 
 #include "terminator/core/ChopSequencer.h"
 #include "terminator/core/Command.h"
+#include "terminator/core/DrumSequencer.h"
 #include "terminator/core/CommandQueue.h"
 #include "terminator/core/HostClock.h"
 #include "terminator/core/RtAssert.h"
@@ -99,8 +100,8 @@ class Engine
     std::int32_t offsetForHostTime(std::uint64_t hostTimeNs, int numSamples) const noexcept TERMINATOR_NONBLOCKING;
     void publish(int numSamples) noexcept TERMINATOR_NONBLOCKING;
     void firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING;
-    void bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release,
-                     int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    void bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release, int numSamples,
+                     bool hasPan = false, float pan = 0.0f) noexcept TERMINATOR_NONBLOCKING;
     void noteLiveHit(std::uint16_t pad, double atSample) noexcept TERMINATOR_NONBLOCKING
     {
         if (pad < kMaxPads)
@@ -116,13 +117,15 @@ class Engine
     std::vector<MidiQueue> midiQueues_;
     SnapshotPublisher<StateSnapshot> snapshot_;
     Sampler sampler_;
-    ChopSequencer seq_; // the chop sequencer on the sample clock (Phase 3.1)
+    ChopSequencer seq_;   // the chop sequencer on the sample clock (Phase 3.1)
+    DrumSequencer drums_; // the drum sequencer on the same clock (Phase 3.3) — lanes = pads kDrumPadBase..
 
     // RT state (owned by the audio thread after prepare)
     float masterGainTarget_ = 1.0f;
     float masterGainCurrent_ = 1.0f;
     bool playing_ = false;
     bool seqWasPlaying_ = false;
+    bool drumsWasPlaying_ = false;
     std::uint64_t playheadSamples_ = 0;
     std::uint64_t blocksProcessed_ = 0;
     std::uint64_t samplesProcessed_ = 0;
@@ -142,8 +145,10 @@ class Engine
     {
         std::uint64_t sample;
         float velocity;
+        float pan;
         std::uint16_t pad;
         bool release;
+        bool hasPan;
         bool used;
     };
     PendingTrigger pendingTrig_[kMaxPendingTriggers] = {};

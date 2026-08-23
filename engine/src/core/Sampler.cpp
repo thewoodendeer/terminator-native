@@ -93,6 +93,8 @@ void Sampler::setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING
     q.releaseSec = std::clamp(q.releaseSec, 0.0f, 0.5f);
     q.fadeOutSec = std::clamp(q.fadeOutSec, 0.0f, 60.0f);
     q.gain = std::clamp(q.gain, 0.0f, 4.0f);
+    q.pan = std::clamp(q.pan, -1.0f, 1.0f);
+    q.chokeFadeSec = std::clamp(q.chokeFadeSec, 0.001f, 0.05f);
     pads_[p.pad].params = q;
 }
 
@@ -238,26 +240,46 @@ void Sampler::beginFade(Voice& v, float seconds, std::int32_t offsetInBlock) noe
     if (!v.active() || v.stage == Voice::Stage::fading)
         return;
     if (offsetInBlock > 0)
-        v.fadeOffset = offsetInBlock; // the fade starts when the block reaches the choking hit's position
+    {
+        v.fadeOffset = offsetInBlock; // the fade starts when the block reaches the choking hit's position …
+        v.fadeSeconds = seconds;      // … and keeps the cutter's length (a deferred fade used to fall back to 3 ms)
+    }
     else
         beginFadeNow(v, seconds);
 }
 
-void Sampler::chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* keep,
-                           std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
+void Sampler::chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* keep, std::int32_t offsetInBlock,
+                           float fadeSec) noexcept TERMINATOR_NONBLOCKING
 {
     for (auto& v : voices_)
     {
-        if (!v.active() || &v == keep)
+        if (!v.active() || &v == keep || v.subHit)
             continue;
-        const bool same = (group == -1) ? (v.pad == pad) // own pad only
-                                        : (v.chokeGroup == group);
-        if (same)
-            beginFade(v, kStopFadeSec, offsetInBlock);
+        if (group == -1)
+        {
+            if (v.pad == pad) // own pad only (the lane's retrigger chain)
+                beginFade(v, fadeSec, offsetInBlock);
+            continue;
+        }
+        if (v.chokeGroup != group || v.pad == pad)
+            continue; // (the own pad is handled by the −1 pass)
+        // a group mate that starts at the SAME sample of this block (triggered earlier in this block, not yet
+        // rendered) is a deliberate layer, not a cut (muteGroups.ts: strictly-later hits cut)
+        if (!v.started && v.startOffset == offsetInBlock)
+            continue;
+        beginFade(v, fadeSec, offsetInBlock);
     }
 }
 
 void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
+{
+    if (pad >= kMaxPads)
+        return;
+    triggerEx(pad, velocity, offsetInBlock, pads_[pad].params.pan, false);
+}
+
+void Sampler::triggerEx(std::uint16_t pad, float velocity, std::int32_t offsetInBlock, float pan,
+                        bool subHit) noexcept TERMINATOR_NONBLOCKING
 {
     if (pad >= kMaxPads)
         return;
@@ -285,16 +307,21 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     if (v == nullptr)
         return;
     // choke, at the hit's position: −1 = the pad's own previous voice; ≥0 = the whole mute group (and its own
-    // previous voice); −2 = poly: nothing is choked
-    if (p.params.chokeGroup == -1)
-        chokeGroupOf(pad, -1, v, offsetInBlock);
-    else if (p.params.chokeGroup >= 0)
+    // previous voice); −2 = poly: nothing is choked. A note-repeat SUB-HIT chokes nothing (TS: it bypasses the lane
+    // registry; its predecessor's end is booked by the sequencer — stopSubHitsAt)
+    if (!subHit)
     {
-        chokeGroupOf(pad, p.params.chokeGroup, v, offsetInBlock);
-        chokeGroupOf(pad, -1, v, offsetInBlock);
+        if (p.params.chokeGroup == -1)
+            chokeGroupOf(pad, -1, v, offsetInBlock, p.params.chokeFadeSec);
+        else if (p.params.chokeGroup >= 0)
+        {
+            chokeGroupOf(pad, p.params.chokeGroup, v, offsetInBlock, p.params.chokeFadeSec);
+            chokeGroupOf(pad, -1, v, offsetInBlock, p.params.chokeFadeSec);
+        }
     }
 
     *v = Voice{};
+    v->subHit = subHit;
     v->stage = Voice::Stage::attack;
     v->pad = pad;
     v->serial = nextSerial_++;
@@ -331,6 +358,43 @@ void Sampler::trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBl
     v->chokeGroup = p.params.chokeGroup;
     v->velocity = std::clamp(velocity, 0.0f, 1.0f);
     v->gain = v->velocity * p.params.gain;
+    // PAN: the StereoPanner law (Web Audio spec §StereoPannerNode), resolved now for the voice's read set. pan 0 =
+    // identity (no panner — the TS only inserts one when pan ≠ 0, so a centred mono drum plays at unity on both outs)
+    {
+        const float pn = std::clamp(pan, -1.0f, 1.0f);
+        if (pn != 0.0f)
+        {
+            bool stereo = false;
+            for (int k = 0; k < v->numSrc; ++k)
+                stereo = stereo || (v->src[k] != nullptr && v->src[k]->numChannels > 1);
+            constexpr float kHalfPi = 1.57079632679489661923f;
+            v->panned = true;
+            if (!stereo)
+            {
+                const float x = (pn + 1.0f) * 0.5f; // 0..1
+                v->mLL = std::cos(x * kHalfPi);
+                v->mRL = 0.0f;
+                v->mRR = std::sin(x * kHalfPi);
+                v->mLR = 0.0f;
+            }
+            else if (pn <= 0.0f)
+            {
+                const float x = pn + 1.0f; // 0..1
+                v->mLL = 1.0f;
+                v->mRL = std::cos(x * kHalfPi); // L gets the right's share
+                v->mRR = std::sin(x * kHalfPi);
+                v->mLR = 0.0f;
+            }
+            else
+            {
+                const float x = pn; // 0..1
+                v->mLL = std::cos(x * kHalfPi);
+                v->mRL = 0.0f;
+                v->mRR = 1.0f;
+                v->mLR = std::sin(x * kHalfPi); // R gets the left's share
+            }
+        }
+    }
     const double semis = static_cast<double>(p.params.pitchSemitones) + static_cast<double>(p.params.fineCents) / 100.0;
     v->rate = std::pow(2.0, semis / 12.0) * (p.sample->sampleRate > 0.0 ? p.sample->sampleRate / sampleRate_ : 1.0);
     v->position = v->reverse ? static_cast<double>(v->endFrame) - 1.0 : static_cast<double>(v->startFrame);
@@ -380,16 +444,26 @@ void Sampler::release(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TE
 
 void Sampler::stopPadAt(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
 {
+    const float fade = pad < kMaxPads ? pads_[pad].params.chokeFadeSec : kStopFadeSec;
     for (auto& v : voices_)
         if (v.active() && v.pad == pad && v.stage != Voice::Stage::fading && v.fadeOffset < 0)
-            beginFade(v, kStopFadeSec, offsetInBlock);
+            beginFade(v, fade, offsetInBlock);
+}
+
+void Sampler::stopSubHitsAt(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
+{
+    const float fade = pad < kMaxPads ? pads_[pad].params.chokeFadeSec : kStopFadeSec;
+    for (auto& v : voices_)
+        if (v.active() && v.subHit && v.pad == pad && v.stage != Voice::Stage::fading && v.fadeOffset < 0)
+            beginFade(v, fade, offsetInBlock);
 }
 
 void Sampler::stopPad(std::uint16_t pad) noexcept TERMINATOR_NONBLOCKING
 {
+    const float fade = pad < kMaxPads ? pads_[pad].params.chokeFadeSec : kStopFadeSec;
     for (auto& v : voices_)
         if (v.active() && v.pad == pad)
-            beginFade(v, kStopFadeSec);
+            beginFade(v, fade);
 }
 
 void Sampler::stopAll() noexcept TERMINATOR_NONBLOCKING
@@ -397,6 +471,14 @@ void Sampler::stopAll() noexcept TERMINATOR_NONBLOCKING
     for (auto& v : voices_)
         if (v.active())
             beginFade(v, kStopFadeSec);
+}
+
+void Sampler::stopPadRange(std::uint16_t first, std::uint16_t count) noexcept TERMINATOR_NONBLOCKING
+{
+    const int lo = first, hi = std::min<int>(kMaxPads, first + count);
+    for (auto& v : voices_)
+        if (v.active() && v.pad >= lo && v.pad < hi)
+            beginFade(v, pads_[v.pad].params.chokeFadeSec);
 }
 
 void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels,
@@ -434,7 +516,7 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
     for (; i < numSamples; ++i)
     {
         if (v.fadeOffset >= 0 && i >= v.fadeOffset)
-            beginFadeNow(v, kStopFadeSec);
+            beginFadeNow(v, v.fadeSeconds);
         if (v.releaseOffset >= 0 && i >= v.releaseOffset)
         {
             v.releaseOffset = -1;
@@ -533,6 +615,12 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
                 outSampleR = outSampleL;
         }
         v.started = true;
+        if (v.panned)
+        {
+            const float a = outSampleL, b = outSampleR;
+            outSampleL = a * v.mLL + b * v.mRL;
+            outSampleR = b * v.mRR + a * v.mLR;
+        }
         float g = v.env * v.gain * v.xfGain;
         if (v.fadeOutFrames > 0.0f && !v.loopRendered && v.mode != PadMode::loop)
         {
@@ -571,8 +659,17 @@ std::uint64_t Sampler::padActiveMask() const noexcept TERMINATOR_NONBLOCKING
 {
     std::uint64_t m = 0;
     for (const auto& v : voices_)
-        if (v.active() && v.stage != Voice::Stage::fading && v.pad < 64)
+        if (v.active() && v.stage != Voice::Stage::fading && v.pad < kChopPads)
             m |= (std::uint64_t{1} << v.pad);
+    return m;
+}
+
+std::uint64_t Sampler::drumActiveMask() const noexcept TERMINATOR_NONBLOCKING
+{
+    std::uint64_t m = 0;
+    for (const auto& v : voices_)
+        if (v.active() && v.stage != Voice::Stage::fading && v.pad >= kDrumPadBase && v.pad < kDrumPadBase + kDrumLanes)
+            m |= (std::uint64_t{1} << (v.pad - kDrumPadBase));
     return m;
 }
 

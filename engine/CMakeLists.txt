@@ -13,6 +13,8 @@ add_library(terminator_engine STATIC
     include/terminator/core/SampleBuffer.h
     include/terminator/core/HostClock.h
     include/terminator/core/Sampler.h
+    include/terminator/core/ChopSequencer.h
+    include/terminator/core/DrumSequencer.h
     include/terminator/core/planners/JsMath.h
     include/terminator/core/planners/StemMask.h
     include/terminator/core/planners/Trims.h
@@ -41,6 +43,7 @@ add_library(terminator_engine STATIC
     src/core/Engine.cpp
     src/core/Sampler.cpp
     src/core/ChopSequencer.cpp
+    src/core/DrumSequencer.cpp
     src/io/AudioIO.cpp
     src/io/MidiHub.cpp
     src/io/SampleLoader.cpp

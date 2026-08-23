@@ -14,7 +14,12 @@
 namespace terminator
 {
 
-inline constexpr int kMaxPads = 64;
+/// Sampler pads: 0..63 = the chopper's pad grid (MIDI note − 36, the chop sequencer's bit masks), 64..127 = the
+/// DRUM LANES (Phase 3.3, core/DrumSequencer.h: lane L plays pad kDrumPadBase + L).
+inline constexpr int kChopPads = 64;
+inline constexpr int kDrumPadBase = 64;
+inline constexpr int kDrumLanes = 64;
+inline constexpr int kMaxPads = kDrumPadBase + kDrumLanes; // 128
 inline constexpr int kMaxOutputChannels = 32;
 inline constexpr int kMaxInputChannels = 32;
 inline constexpr int kMaxVoices = 256;
@@ -42,8 +47,9 @@ struct StateSnapshot
 
     // sampler
     std::uint32_t activeVoices = 0;
-    std::uint32_t voiceStealing = 0; // cumulative count of voices stolen because the pool was full
-    std::uint64_t padActiveMask = 0; // bit i = pad i has a sounding voice (first 64 pads)
+    std::uint32_t voiceStealing = 0;  // cumulative count of voices stolen because the pool was full
+    std::uint64_t padActiveMask = 0;  // bit i = pad i has a sounding voice (pads 0..63, the chopper grid)
+    std::uint64_t drumActiveMask = 0; // bit L = drum lane L (pad 64+L) has a sounding voice
     std::int32_t lastTriggeredPad = -1;
     double lastTriggeredPadPositionSec = 0.0; // position inside that pad's region (its buffer's seconds)
 
@@ -59,6 +65,16 @@ struct StateSnapshot
     std::uint64_t seqLoopStartSample = 0; // engine sample of the current pass's step 0
     std::uint64_t seqHitsFired = 0;
     std::uint64_t seqHitsSkipped = 0; // pattern hits skipped by the one-owner rule (a live hit owned the step)
+
+    // drum sequencer (Phase 3.3, core/DrumSequencer.h) — 96 steps/bar on the same sample clock
+    std::uint32_t drumPlaying = 0;
+    std::int32_t drumStep = -1;           // the internal step (0..bars×96−1) the playhead is in (−1 = stopped)
+    std::int32_t drumStepCount = 0;       // bars × stepsPerBar of the audible pattern
+    double drumStepPhase = 0.0;           // 0..1 inside that step at the block end
+    std::int64_t drumLoopStartSample = 0; // engine sample of the current pass's step 0 (the page's playStartTime; a
+                                          // seek with stepOffset right after prepare can put it before sample 0)
+    std::uint64_t drumHitsFired = 0;      // hits + note-repeat sub-hits dispatched to the sampler
+    std::uint64_t drumHitsSkipped = 0;    // pattern hits skipped by the one-owner rule (a live hit owned the step)
 
     // calibration
     std::uint32_t calibrationState =

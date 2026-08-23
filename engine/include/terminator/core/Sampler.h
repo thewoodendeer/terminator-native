@@ -66,7 +66,8 @@ struct Voice
     std::int32_t releaseSamples = 1; // length of the release ramp when it starts
     std::int32_t startOffset = 0;    // samples into the current block before the voice starts (this block only)
     std::int32_t releaseOffset = -1; // ≥0: release begins at this sample of the current block
-    std::int32_t fadeOffset = -1;    // ≥0: the 3 ms stop/choke fade begins at this sample of the current block
+    std::int32_t fadeOffset = -1;    // ≥0: the stop/choke fade begins at this sample of the current block …
+    float fadeSeconds = 0.003f;      // … and lasts this long (the cutter's chokeFadeSec: pads 3 ms, drum lanes 4 ms)
     std::uint8_t outputPair = 0;
     std::uint8_t reverse = 0;
     PadMode mode = PadMode::oneShot;
@@ -91,6 +92,14 @@ struct Voice
     float xfGain = 1.0f;
     float xfStep = 0.0f;
     std::int32_t xfRemaining = 0;
+    // PAN (Phase 3.3): the Web Audio StereoPanner law as a 2×2 matrix resolved at trigger time from the hit's pan and
+    // whether the read set is stereo — L' = L·mLL + R·mRL, R' = R·mRR + L·mLR. panned == false = identity (pan 0 =
+    // no panner: a mono source plays on both outs at unity, exactly like the TS which only inserts the node when ≠ 0).
+    bool panned = false;
+    float mLL = 1.0f, mRL = 0.0f, mRR = 1.0f, mLR = 0.0f;
+    // A note-repeat SUB-HIT (drums): never takes part in a lane's retrigger chain nor a mute group — it chokes nothing
+    // and nothing chokes it except its own booked end (Sampler::stopSubHitsAt) and STOP.
+    bool subHit = false;
 
     bool active() const noexcept { return stage != Stage::idle; }
 };
@@ -123,11 +132,20 @@ class Sampler
                      std::uint8_t mask) noexcept TERMINATOR_NONBLOCKING;
     void setPadParams(const PadParams& p) noexcept TERMINATOR_NONBLOCKING;
     void trigger(std::uint16_t pad, float velocity, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
+    /// A hit with an explicit pan (−1..1, overriding PadParams::pan) and/or as a note-repeat SUB-HIT (see
+    /// Voice::subHit).
+    void triggerEx(std::uint16_t pad, float velocity, std::int32_t offsetInBlock, float pan,
+                   bool subHit) noexcept TERMINATOR_NONBLOCKING;
+    /// Fade (the pad's chokeFadeSec) only the SUB-HIT voices of a pad, from `offsetInBlock` — a roll's self-choke
+    /// into the next sub-hit / the step boundary (the fade ENDS where the next one starts, TS emitVoice).
+    void stopSubHitsAt(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
     void release(std::uint16_t pad, std::int32_t offsetInBlock = 0) noexcept TERMINATOR_NONBLOCKING;
     void stopPad(std::uint16_t pad) noexcept TERMINATOR_NONBLOCKING; // 3 ms fade
     /// The same 3 ms fade, starting at `offsetInBlock` of the current block (the sequencer's note ends).
     void stopPadAt(std::uint16_t pad, std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
     void stopAll() noexcept TERMINATOR_NONBLOCKING; // 3 ms fade on everything (panic)
+    /// stopPad for pads [first, first+count) in one pass (the drum sequencer's STOP cuts every lane).
+    void stopPadRange(std::uint16_t first, std::uint16_t count) noexcept TERMINATOR_NONBLOCKING;
 
     /// Adds every active voice into outputs[0..numOutputChannels). Outputs must already hold whatever the
     /// caller wants to sum with (the engine clears/fills them first).
@@ -136,7 +154,8 @@ class Sampler
     // --- read-back for the snapshot (audio thread) ---
     std::uint32_t activeVoices() const noexcept { return activeVoices_; }
     std::uint32_t stealCount() const noexcept { return steals_; }
-    std::uint64_t padActiveMask() const noexcept TERMINATOR_NONBLOCKING;
+    std::uint64_t padActiveMask() const noexcept TERMINATOR_NONBLOCKING;  // pads 0..63 (the chopper grid)
+    std::uint64_t drumActiveMask() const noexcept TERMINATOR_NONBLOCKING; // bit L = pad kDrumPadBase+L (a drum lane)
     std::int32_t lastTriggeredPad() const noexcept { return lastTriggeredPad_; }
     double lastTriggeredPadPositionSec() const noexcept TERMINATOR_NONBLOCKING; // buffer seconds inside the region
     const Pad& pad(int i) const noexcept { return pads_[i]; }
@@ -148,8 +167,12 @@ class Sampler
     void beginFade(Voice& v, float seconds, std::int32_t offsetInBlock = 0) noexcept TERMINATOR_NONBLOCKING;
     void beginFadeNow(Voice& v, float seconds) noexcept TERMINATOR_NONBLOCKING;
     void beginRelease(Voice& v) noexcept TERMINATOR_NONBLOCKING;
-    void chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* keep,
-                      std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
+    /// Fade every voice a hit of `pad` cuts: group −1 = the pad's own voices (retrigger); ≥0 = the OTHER pads of that
+    /// mute group. Time order decides (TS emitVoice / muteGroups.ts): a voice that started at or before the hit is
+    /// cut; a group mate starting at the SAME sample of this block is a deliberate layer and is left alone (the
+    /// documented "same instant = layer" rule — the lane's own retrigger still cuts); sub-hits are never cut here.
+    void chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* keep, std::int32_t offsetInBlock,
+                      float fadeSec) noexcept TERMINATOR_NONBLOCKING;
     void renderVoice(Voice& v, float* const* outputs, int numOutputChannels,
                      int numSamples) noexcept TERMINATOR_NONBLOCKING;
 

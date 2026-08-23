@@ -10,6 +10,8 @@ namespace terminator
 
 struct SampleBuffer;
 struct SeqPattern;
+struct DrumPattern;
+struct DrumGraphs;
 
 enum class CommandType : std::uint32_t
 {
@@ -40,8 +42,17 @@ enum class CommandType : std::uint32_t
     seqStop,         // —
     seqPause,        // — freeze the position
     seqResume,       // — continue from the frozen position
-    seqSetBpm,       // seq.value — 20..300, applies at the next step
+    seqSetBpm,       // seq.value — 20..300, applies at the next step (the drum sequencer reads the same BPM)
     seqSetLoop,      // seq.value — 0/1
+    // ---- the drum sequencer (Phase 3.3, core/DrumSequencer.h) — lane L plays pad kDrumPadBase + L ----
+    drumSetPattern, // drum.pattern — live replace: the steps not scheduled yet read it (pointer owned by the shell)
+    drumSchedulePattern, // drum.pattern + drum.atSample — arranged playback: a step whose grid time ≥ atSample uses it
+    drumClearScheduled,  // — drop the arranged swap list (the live pattern plays again)
+    drumSetGraphs, // drum.graphs — the VELOCITY / SHIFT / PAN / REPEAT rows (engine-level, shared by every pattern)
+    drumSetLane,   // drumLane — one lane's volume, audible (mute + solo resolved by the UI), mute group
+    drumSetParams, // drumParams — swing 0..1, master volume 0..1, ppq (the SHIFT snap grid)
+    drumPlay,      // drum.atSample (0 = the start of the next block) + drum.stepOffset — start; restarts when playing
+    drumStop,      // — stop scheduling; every drum-lane voice fades (its lane's choke fade)
 };
 
 enum class PadMode : std::uint8_t
@@ -76,6 +87,12 @@ struct PadParams
            // implies it. 0 = the voice plays out on its own (one-shot / free-running loop)
     std::int16_t chokeGroup = -1; // −1 = the pad itself; ≥0 = a shared mute group id; −2 = poly (never choked)
     Interpolation interpolation = Interpolation::hermite;
+    float pan = 0.0f; // −1..1, the Web Audio StereoPanner law (mono: equal-power cos/sin; stereo: the side-mix law);
+                      // exactly 0 = NO panner (a mono source plays on both outs at unity — the TS inserts the node only
+                      // when pan ≠ 0). A drum hit's PAN graph overrides it per hit (Sampler::triggerEx)
+    float chokeFadeSec =
+        0.003f; // the fade a hit of THIS pad applies when it cuts (retrigger / mute group) and the
+                // fade stopPad gives its voices: pads 3 ms (kStopFadeSec), drum lanes 4 ms (DRUM_CHOKE_S)
 };
 
 struct Command
@@ -113,6 +130,8 @@ struct Command
             std::uint64_t hostTimeNs; // 0 = as soon as possible (start of the next block)
             float velocity;           // 0..1 linear gain
             std::uint16_t pad;
+            std::uint8_t hasPan; // 1 = `pan` overrides the pad's PadParams::pan for this hit (a drum lane's PAN)
+            float pan;           // −1..1
         } trigger;
 
         struct NoteMap
@@ -143,6 +162,29 @@ struct Command
             std::uint64_t atSample;
             double value;
         } seq;
+
+        struct Drum
+        {
+            const DrumPattern* pattern; // lifetime owned by the shell (a ring keeps retired patterns alive)
+            const DrumGraphs* graphs;   // same
+            std::uint64_t atSample;
+            std::int32_t stepOffset; // drumPlay: the internal step the run starts on (the arranger's seek)
+        } drum;
+
+        struct DrumLane
+        {
+            float volume;         // 0..1 (the lane's fader; × the step VELOCITY × the drum master per hit)
+            std::int16_t group;   // 0 = none; ≥ 1 = the lane's mute group (lanes sharing it cut each other)
+            std::uint16_t lane;   // 0..kDrumLanes−1
+            std::uint8_t audible; // 0 = silenced by mute / another lane's solo
+        } drumLane;
+
+        struct DrumParams
+        {
+            double swing;       // 0..1 (16T, the shared swing formula on the step's 16th slot)
+            float masterVolume; // 0..1
+            std::uint16_t ppq;  // SHIFT snaps to 60/bpm/ppq (24..960)
+        } drumParams;
 
         struct Calibration
         {
@@ -213,6 +255,16 @@ struct Command
         c.payload.trigger.pad = pad;
         c.payload.trigger.velocity = velocity;
         c.payload.trigger.hostTimeNs = hostTimeNs;
+        c.payload.trigger.hasPan = 0;
+        c.payload.trigger.pan = 0.0f;
+        return c;
+    }
+    /// A hit with its own pan (a drum lane's PAN graph / a panned live drum hit).
+    static Command triggerPadPanned(std::uint16_t pad, float velocity, float pan, std::uint64_t hostTimeNs = 0) noexcept
+    {
+        Command c = triggerPad(pad, velocity, hostTimeNs);
+        c.payload.trigger.hasPan = 1;
+        c.payload.trigger.pan = pan;
         return c;
     }
     static Command releasePad(std::uint16_t pad, std::uint64_t hostTimeNs = 0) noexcept
@@ -222,6 +274,8 @@ struct Command
         c.payload.trigger.pad = pad;
         c.payload.trigger.velocity = 0.0f;
         c.payload.trigger.hostTimeNs = hostTimeNs;
+        c.payload.trigger.hasPan = 0;
+        c.payload.trigger.pan = 0.0f;
         return c;
     }
     static Command triggerPadAtSample(std::uint16_t pad, float velocity, std::uint64_t samplePosition) noexcept
@@ -238,11 +292,8 @@ struct Command
     }
     static Command stopPad(std::uint16_t pad) noexcept
     {
-        Command c;
+        Command c = releasePad(pad);
         c.type = CommandType::stopPad;
-        c.payload.trigger.pad = pad;
-        c.payload.trigger.velocity = 0.0f;
-        c.payload.trigger.hostTimeNs = 0;
         return c;
     }
     static Command setNoteMap(std::uint8_t note, std::int16_t pad) noexcept
@@ -328,6 +379,70 @@ struct Command
         Command c = seqPlay();
         c.type = CommandType::seqSetLoop;
         c.payload.seq.value = loop ? 1.0 : 0.0;
+        return c;
+    }
+    // ---- drums (Phase 3.3) ----
+    static Command drumSetPattern(const DrumPattern* pattern) noexcept
+    {
+        Command c;
+        c.type = CommandType::drumSetPattern;
+        c.payload.drum.pattern = pattern;
+        c.payload.drum.graphs = nullptr;
+        c.payload.drum.atSample = 0;
+        c.payload.drum.stepOffset = 0;
+        return c;
+    }
+    static Command drumSchedulePattern(const DrumPattern* pattern, std::uint64_t atSample) noexcept
+    {
+        Command c = drumSetPattern(pattern);
+        c.type = CommandType::drumSchedulePattern;
+        c.payload.drum.atSample = atSample;
+        return c;
+    }
+    static Command drumClearScheduled() noexcept
+    {
+        Command c = drumSetPattern(nullptr);
+        c.type = CommandType::drumClearScheduled;
+        return c;
+    }
+    static Command drumSetGraphs(const DrumGraphs* graphs) noexcept
+    {
+        Command c = drumSetPattern(nullptr);
+        c.type = CommandType::drumSetGraphs;
+        c.payload.drum.graphs = graphs;
+        return c;
+    }
+    static Command drumSetLane(std::uint16_t lane, float volume, bool audible, std::int16_t group) noexcept
+    {
+        Command c;
+        c.type = CommandType::drumSetLane;
+        c.payload.drumLane.lane = lane;
+        c.payload.drumLane.volume = volume;
+        c.payload.drumLane.audible = audible ? 1 : 0;
+        c.payload.drumLane.group = group;
+        return c;
+    }
+    static Command drumSetParams(double swing, float masterVolume, std::uint16_t ppq) noexcept
+    {
+        Command c;
+        c.type = CommandType::drumSetParams;
+        c.payload.drumParams.swing = swing;
+        c.payload.drumParams.masterVolume = masterVolume;
+        c.payload.drumParams.ppq = ppq;
+        return c;
+    }
+    static Command drumPlay(std::uint64_t atSample = 0, std::int32_t stepOffset = 0) noexcept
+    {
+        Command c = drumSetPattern(nullptr);
+        c.type = CommandType::drumPlay;
+        c.payload.drum.atSample = atSample;
+        c.payload.drum.stepOffset = stepOffset;
+        return c;
+    }
+    static Command drumStop() noexcept
+    {
+        Command c = drumSetPattern(nullptr);
+        c.type = CommandType::drumStop;
         return c;
     }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,
