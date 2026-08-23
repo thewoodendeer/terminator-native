@@ -1459,6 +1459,45 @@ summed to 1e-6; the lanes land on the page's strip numbering.
 - No dither (TPDF, fixed seeds, WAV == FLAC bit-identity); `writeWav` truncates.
 - The legacy chopper chain for the single-chop bake.
 
+## Phase 4 — 4.5d DONE (THE BASS IS IN THE BOUNCE; ONE BASS PARSER FOR LIVE AND EXPORT), 2026-08-23 twelfth session
+
+The last of the three instruments to reach an export. Same shape as the drums: the engine's OWN `BassSequencer` +
+`BassSynth` render it, so the patch, the slides and the BEND lane in a bounce are the ones that were playing.
+
+**The parser moved into the engine — `engine/render/BassSpec.h/.cpp`.** `bassPatchFromVar` (the worklet's
+`mergePatch(defaultPatch(), patch)` deep-merge, ~110 lines) and the wave / LFO-wave / mod-target enum mappers used to
+live in `app/WebShell.cpp`, reachable only by the live bridge. The offline exporter needs exactly the same reading of
+exactly the same JSON, and **a second copy would drift — a patch that reads differently in a bounce than it sounds
+live is precisely the bug "export == what you hear" exists to prevent.** WebShell now calls
+`render::bassPatchFromVar` / `render::bassPatternFromVar`; its own copies (and the `setBassPattern` body) are gone.
+Verified live as well as offline: the app probe's `bassPageOk` is green through the refactor.
+
+**`bassPatternFromVar` accepts the BEND lane in BOTH shapes** — a real trap, because the two callers disagree:
+`nativeBassShadow` sends the lane **already sampled per tick** (plain numbers), while a **project file stores the
+page's breakpoints** `[{beat, semis}]`. The parser detects which it has and, for breakpoints, samples them per tick
+with the page's `bendAt` law (flat before the first, flat after the last, linear between). Gated by building the same
+ramp both ways and requiring the two tick arrays to match.
+
+**`buildBassSpec(project, namer)`** reads the `bass` blob (patch / patterns / currentIdx), takes the current pattern
+and gives the synth its strip. An empty roll leaves it disabled. `renderOffline` sends `setSourceStrip(bass)`,
+`bassSetPatch`, `bassSetPattern`, `bassPlay`. `ProjectRenderOptions::renderBass` defaults to false.
+
+**Tests — `tests/engine/test_export_bass.cpp` (7 cases):** the blob → patch + pattern (and the patch really is the
+project's, not the defaults — cutoff 800, DIODE, drive 3); an empty roll renders nothing; **the BEND lane in both
+shapes agrees tick for tick**; breakpoints are flat before the first and after the last and linear between; the bass
+is in the bounce at the sequenced beats and silent without `renderBass`; it sums into the bass strip and comes out as
+a trackout equal to the master to 1e-6; it lands on strip 7.
+
+**Gates (4.5d):** mac-debug 0 warnings + ctest **271/271** (264 + 7) · RTSan 272/272 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 271/271 · probe OK on universal (`bassPageOk` green through the parser move) · format clean.
+
+**Where 4.5 stands now:** chops, drums AND bass all render offline through the same engine and the same mixer, with
+trackouts and alignment gated. **The renderer is complete enough to move the export button onto.** Still owed:
+- **No export verb in the shell / page yet** — the app's buttons are still the page's Web Audio path. THIS IS NEXT.
+- No dither (TPDF, fixed seeds, WAV == FLAC bit-identity); `writeWav` truncates.
+- The legacy chopper chain for the single-chop bake.
+- The metronome/CLICK is not rendered offline (deliberate — a bounce should not click).
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
