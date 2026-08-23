@@ -110,6 +110,8 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
         mainOut_ = 0;
         rejected_ = 0;
     }
+    limiter_.prepare(static_cast<float>(sampleRate));
+    limiter_.setPreDelayTime(0.006f);
     // the settings survive a re-prepare (a device change): only the smoothed state + meters restart at the targets;
     // the insert chains are DROPPED (the pool re-prepares and frees every device — the page re-sends its chains)
     for (int i = 0; i < kMaxStrips; ++i)
@@ -129,6 +131,9 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
         s.pre.clear();
         s.post.clear();
         s.meter = StripMeter{};
+        s.console.prepare(sampleRate);
+        s.console.configure(i == kMasterStrip, s.seed);
+        s.console.set(consoleFlavour_, consoleAmount_ * 0.01f, true);
         const bool live = s.set.kind != StripKind::off;
         inputPtrs_[static_cast<std::size_t>(i) * 2] =
             live ? inputs_.data() + static_cast<std::size_t>(i) * 2 * n : trash_.data();
@@ -184,6 +189,8 @@ void Mixer::setStripKind(int strip, StripKind kind) noexcept TERMINATOR_NONBLOCK
             s.pre.clear();
             s.post.clear();
             s.meter = StripMeter{};
+            s.console.reset();
+            s.console.set(consoleFlavour_, consoleAmount_ * 0.01f, true);
             std::fill_n(inputPtrs_[static_cast<std::size_t>(strip) * 2], n, 0.0);
             std::fill_n(inputPtrs_[static_cast<std::size_t>(strip) * 2 + 1], n, 0.0);
         }
@@ -303,6 +310,42 @@ bool Mixer::setOutput(int strip, StripOutput kind, int index) noexcept TERMINATO
     }
     rebuildOrder();
     return true;
+}
+
+void Mixer::setStripSeed(int strip, std::uint32_t seed) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return;
+    auto& s = strips_[strip];
+    if (s.seed == seed)
+        return;
+    s.seed = seed;
+    s.console.configure(strip == kMasterStrip, seed);
+    s.console.set(consoleFlavour_, consoleAmount_ * 0.01f, true);
+}
+
+void Mixer::setMasterLimiter(bool on) noexcept TERMINATOR_NONBLOCKING
+{
+    if (on && !limiterOn_)
+    {
+        limiter_.reset(); // a fresh node (Blink's: the detector from 0 — its start-up dip, the page's)
+        limiter_.setPreDelayTime(0.006f);
+    }
+    limiterOn_ = on;
+}
+
+void Mixer::setConsole(bool on, ConsoleFlavour flavour, float amount) noexcept TERMINATOR_NONBLOCKING
+{
+    const bool wasOn = consoleOn_;
+    consoleOn_ = on;
+    consoleFlavour_ = flavour;
+    consoleAmount_ = std::clamp(amount, 0.0f, 100.0f);
+    for (auto& s : strips_)
+    {
+        if (on && !wasOn)
+            s.console.reset(); // the page builds a fresh stage when CONSOLE comes on — it starts AT the setting
+        s.console.set(flavour, consoleAmount_ * 0.01f, on && !wasOn);
+    }
 }
 
 void Mixer::setMainOut(int pair) noexcept TERMINATOR_NONBLOCKING
@@ -687,6 +730,10 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         s.pre.push(pl, pr, ss, n);
     }
 
+    // ---- CONSOLE (4.2c): the desk stage — channel role on every strip, bus role on the master ----
+    if (consoleOn_)
+        s.console.process(inL, inR, n);
+
     // ---- the inserts (4.2): in place on the strip's input, in order; bypass = skipped (dry, bit-exact); a device
     // with a WET param crossfades (dry 1−mix + wet mix — the TS WetDry, a true crossfade) ----
     for (int k = 0; k < s.fxCount; ++k)
@@ -775,6 +822,15 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
     s.faderCur = fE;
     s.muteCur = mE;
     s.panCur = pE;
+
+    // ---- the master's safety limiter (4.2c): the page's DynamicsCompressor −1 / 0 / 20 / 1 ms / 50 ms ----
+    if (isMaster && limiterOn_)
+    {
+        const double* src[2] = {oL, oR};
+        double* dst[2] = {oL, oR};
+        limiter_.process(src, dst, 2, n, -1.0f, 0.0f, 20.0f, 0.001f, 0.05f, 0.006f, 0.0f, 1.0f, 0.09f, 0.16f, 0.42f,
+                         0.98f);
+    }
 
     // ---- post meter (what leaves the strip) ----
     {

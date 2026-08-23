@@ -34,7 +34,8 @@ add_executable(terminator-tests
     engine/test_arp.cpp
     engine/test_mixer.cpp
     engine/test_fx.cpp
-    engine/test_fx_devices.cpp)
+    engine/test_fx_devices.cpp
+    engine/test_console.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

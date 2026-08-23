@@ -88,7 +88,10 @@ enum class CommandType : std::uint32_t
     arpRelease,    // arp.pad — release: stops the arp when it is the held pad (−1 = whatever is held)
     // ---- the mixer (Phase 4.1, core/Mixer.h) ----
     mixerSetStrip,   // strip.strip + strip.kind (StripKind: 0 off · 1 channel · 2 send · 3 bus) — activate / retype /
-                     // deactivate a strip (strip 0 = the master, always)
+                     // deactivate a strip (strip 0 = the master, always) + strip.seed (the CONSOLE seed = FNV-1a of
+                     // the page's strip NAME; 0 = leave as is)
+    mixerSetConsole, // strip.flag = on + strip.kind = flavour (0 SSL · 1 NEVE · 2 API) + strip.value = amount 0..100
+    mixerSetLimiter, // strip.flag = on — the master's safety limiter (the page's −1 dBFS / 20:1 DynamicsCompressor)
     mixerSetFader,   // strip.strip + strip.value — dB, −60 (= −∞) .. +6 (τ 8 ms)
     mixerSetPan,     // strip.strip + strip.value — −1..1 (τ 8 ms); the master has no pan
     mixerSetWidth,   // strip.strip + strip.value — M/S width 0 (mono) .. 1 (as is) .. 2
@@ -285,12 +288,13 @@ struct Command
 
         struct Strip
         {
-            float value;         // dB / pan / width
+            float value;         // dB / pan / width / the console amount
+            std::uint32_t seed;  // mixerSetStrip: the CONSOLE seed (0 = leave)
             std::int16_t strip;  // the strip 0..kMaxStrips−1
             std::int16_t index;  // send index / hardware pair / output strip
             std::int16_t target; // a send's destination strip / a source's strip (−1 = none)
-            std::uint8_t kind;   // StripKind / StripOutput / the source id
-            std::uint8_t flag;   // mute / solo on
+            std::uint8_t kind;   // StripKind / StripOutput / the source id / the console flavour
+            std::uint8_t flag;   // mute / solo / console on
         } strip;
 
         struct Fx
@@ -745,6 +749,7 @@ struct Command
         Command c;
         c.type = t;
         c.payload.strip.value = 0.0f;
+        c.payload.strip.seed = 0;
         c.payload.strip.strip = static_cast<std::int16_t>(strip);
         c.payload.strip.index = 0;
         c.payload.strip.target = -1;
@@ -752,10 +757,25 @@ struct Command
         c.payload.strip.flag = 0;
         return c;
     }
-    static Command mixerSetStrip(int strip, std::uint8_t kind) noexcept
+    static Command mixerSetStrip(int strip, std::uint8_t kind, std::uint32_t seed = 0) noexcept
     {
         Command c = stripCmd(CommandType::mixerSetStrip, strip);
         c.payload.strip.kind = kind;
+        c.payload.strip.seed = seed;
+        return c;
+    }
+    static Command mixerSetLimiter(bool on) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetLimiter, 0);
+        c.payload.strip.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command mixerSetConsole(bool on, std::uint8_t flavour, float amount) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetConsole, 0);
+        c.payload.strip.flag = on ? 1 : 0;
+        c.payload.strip.kind = flavour;
+        c.payload.strip.value = amount;
         return c;
     }
     static Command mixerSetFader(int strip, float db) noexcept

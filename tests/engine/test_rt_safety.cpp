@@ -267,6 +267,9 @@ TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sen
                             e.commands().push(Command::mixerSetFxParam(8, 0, 2, 0.8f));  // REVERB DECAY → a rebuild
                             e.commands().push(Command::mixerSetFxParam(2, 1, 0, 60.0f)); // MB SAT LOW
                             e.commands().push(Command::mixerSetFxParam(1, 2, 0, 3.0f));  // COMP STYLE NY-PARALLEL
+                            e.commands().push(
+                                Command::mixerSetConsole(true, 2, 75.0f));     // CONSOLE API 75 on every strip
+                            e.commands().push(Command::mixerSetLimiter(true)); // the master's safety limiter
                             e.commands().push(Command::mixerSetFader(1, -12.0f));
                             e.commands().push(Command::mixerSetPan(1, 0.5f));
                             e.commands().push(Command::mixerSetWidth(7, 0.5f));

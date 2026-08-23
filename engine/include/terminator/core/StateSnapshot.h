@@ -137,6 +137,8 @@ struct StateSnapshot
     float stripGain[kMaxStrips] = {};           // … the smoothed fader × mute gain at the block end (1 = unity)
     std::uint8_t stripFxCount[kMaxStrips] = {}; // … inserts in the chain (4.2)
     std::uint32_t mixerFxRejected = 0;          // lifetime mixerAddFx refusals (full / pool empty / not ported / dead)
+    std::uint8_t mixerConsoleOn = 0;            // CONSOLE (4.2c): the desk stage is in on every live strip
+    std::uint8_t mixerLimiterOn = 0;            // the master's safety limiter (4.2c)
 };
 static_assert(std::is_trivially_copyable_v<StateSnapshot>, "StateSnapshot must be trivially copyable");
 

@@ -11,7 +11,6 @@ namespace terminator
 // silently: 502 KB → 16 Windows tests died of stack overflow).
 static_assert(sizeof(Engine) <= 384 * 1024, "Engine must stay small enough for a 1 MB stack — heap the new member");
 
-
 namespace
 {
 constexpr double kPi = 3.14159265358979323846;
@@ -347,7 +346,17 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     // ---- the mixer (Phase 4.1) ----
     case CommandType::mixerSetStrip:
         mixer_->setStripKind(c.payload.strip.strip,
-                            static_cast<StripKind>(c.payload.strip.kind > 4 ? 0 : c.payload.strip.kind));
+                             static_cast<StripKind>(c.payload.strip.kind > 4 ? 0 : c.payload.strip.kind));
+        if (c.payload.strip.seed != 0)
+            mixer_->setStripSeed(c.payload.strip.strip, c.payload.strip.seed);
+        break;
+    case CommandType::mixerSetLimiter:
+        mixer_->setMasterLimiter(c.payload.strip.flag != 0);
+        break;
+    case CommandType::mixerSetConsole:
+        mixer_->setConsole(c.payload.strip.flag != 0,
+                           static_cast<ConsoleFlavour>(c.payload.strip.kind > 2 ? 0 : c.payload.strip.kind),
+                           c.payload.strip.value);
         break;
     case CommandType::mixerSetFader:
         mixer_->setFader(c.payload.strip.strip, c.payload.strip.value);
@@ -366,12 +375,12 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::mixerSetSend:
         (void)mixer_->setSend(c.payload.strip.strip, c.payload.strip.index, c.payload.strip.value,
-                             c.payload.strip.target);
+                              c.payload.strip.target);
         break;
     case CommandType::mixerSetOutput:
         (void)mixer_->setOutput(c.payload.strip.strip,
-                               static_cast<StripOutput>(c.payload.strip.kind > 3 ? 0 : c.payload.strip.kind),
-                               c.payload.strip.index);
+                                static_cast<StripOutput>(c.payload.strip.kind > 3 ? 0 : c.payload.strip.kind),
+                                c.payload.strip.index);
         break;
     case CommandType::mixerSetMainOut:
         mixer_->setMainOut(c.payload.strip.index);
@@ -398,7 +407,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::mixerSetFxParam:
         mixer_->setFxParam(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.param, c.payload.fx.value,
-                          c.payload.fx.flag != 0);
+                           c.payload.fx.flag != 0);
         break;
     case CommandType::mixerReorderFx:
         (void)mixer_->reorderFx(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.to);
@@ -683,6 +692,8 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
         s.stripFxCount[i] = static_cast<std::uint8_t>(mixer_->fxCount(i));
     }
     s.mixerFxRejected = mixer_->fxRejected();
+    s.mixerConsoleOn = mixer_->consoleOn() ? 1 : 0;
+    s.mixerLimiterOn = mixer_->masterLimiter() ? 1 : 0;
     snapshot_.publish(s);
 }
 

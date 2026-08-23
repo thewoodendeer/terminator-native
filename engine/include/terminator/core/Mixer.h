@@ -20,6 +20,8 @@
 
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/StateSnapshot.h"
+#include "terminator/core/fx/ConsoleStage.h"
+#include "terminator/core/fx/DynamicsFx.h"
 #include "terminator/core/fx/Effect.h"
 
 namespace terminator
@@ -96,6 +98,23 @@ class Mixer
     /// keeps the settings (reactivating brings them back), drops nothing else: routes INTO a dead strip are dropped
     /// at the dead strip (its input is never summed).
     void setStripKind(int strip, StripKind kind) noexcept TERMINATOR_NONBLOCKING;
+    /// The strip's CONSOLE seed (the page: FNV-1a of the strip NAME → its six tolerances); 0 = not set.
+    void setStripSeed(int strip, std::uint32_t seed) noexcept TERMINATOR_NONBLOCKING;
+    /// CONSOLE (4.2c): the desk stage on every live strip (channel role; the master = bus role), global
+    /// on / flavour / amount 0..100 (the amount glides ~23 ms; switching on starts AT the setting).
+    void setConsole(bool on, ConsoleFlavour flavour, float amount) noexcept TERMINATOR_NONBLOCKING;
+    bool consoleOn() const noexcept { return consoleOn_; }
+    ConsoleFlavour consoleFlavour() const noexcept { return consoleFlavour_; }
+    float consoleAmount() const noexcept { return consoleAmount_; }
+    const ConsoleStage& console(int strip) const noexcept { return strips_[clampIdx(strip)].console; }
+    /// The master's safety limiter (4.2c) — the page's DynamicsCompressor −1 dBFS / knee 0 / 20:1 / 1 ms / 50 ms on
+    /// Blink's kernel (its 6 ms look-ahead = the master's latency, `masterLatencySamples()`; its perceptual makeup
+    /// lifts the mix +0.57 dB — the page's). OFF by default (the engine's tests keep a bit-exact master); the page
+    /// shadow turns it on.
+    void setMasterLimiter(bool on) noexcept TERMINATOR_NONBLOCKING;
+    bool masterLimiter() const noexcept { return limiterOn_; }
+    int masterLatencySamples() const noexcept { return limiterOn_ ? limiter_.preDelayFrames() : 0; }
+    float masterLimiterGrDb() const noexcept { return limiter_.meteringGainDb(); }
     void setFader(int strip, float db) noexcept TERMINATOR_NONBLOCKING;
     void setPan(int strip, float pan) noexcept TERMINATOR_NONBLOCKING;
     void setWidth(int strip, float width) noexcept TERMINATOR_NONBLOCKING;
@@ -195,6 +214,9 @@ class Mixer
         Effect* fx[kMaxInserts] = {};
         bool fxBypass[kMaxInserts] = {};
         int fxCount = 0;
+        // the desk stage (4.2c): between the pre meter and the inserts
+        ConsoleStage console;
+        std::uint32_t seed = 0;
     };
 
     static int clampIdx(int i) noexcept { return i < 0 ? 0 : (i >= kMaxStrips ? kMaxStrips - 1 : i); }
@@ -216,6 +238,11 @@ class Mixer
     std::uint32_t rejected_ = 0;
     std::uint32_t fxRejected_ = 0;
     FxPool* pool_ = nullptr;
+    bool limiterOn_ = false;
+    BlinkCompressorKernel limiter_;
+    bool consoleOn_ = false;
+    ConsoleFlavour consoleFlavour_ = ConsoleFlavour::ssl;
+    float consoleAmount_ = 50.0f;
     std::uint64_t keyMask_ = 0;       // strips that key an SC COMP somewhere (their input is copied to keys_)
     std::uint64_t processedMask_ = 0; // strips already processed this block (their input has been mutated)
     int mainOut_ = 0;
