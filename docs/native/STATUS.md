@@ -1311,6 +1311,55 @@ now, not smear; put a COMP on a send/bus and the dry channel beside it should st
 The PDC button should still switch it, and with it off you should hear the old early/late behaviour return. It only
 costs latency while such a device is in the mix.
 
+## Phase 4 — 4.5a DONE (THE EXPORT RUNS THROUGH THE MIXER; MASTER IMPULSE == STEM IMPULSE), 2026-08-23 twelfth session
+
+`renderOffline()` already drove the SAME Engine — so the Mixer was technically in the export path, but **nothing
+configured it**: every pad defaulted to `strip = −1` (the Phase-3 direct path) and the render spec had no mix. A
+bounce therefore skipped the strips, the inserts, the console, the limiter and 4.4's alignment. That is what this
+closes: "export == what you hear" is now literal, not aspirational.
+
+**Engine — `core/Mixer` stem tap + export latency:**
+- `setStemTap(strip, pair)` copies a strip's output to a hardware pair **in addition to** its normal routing, so ONE
+  render produces the master AND every trackout, aligned by construction rather than by N separate passes. The tap is
+  post insert / PDC / width / fader / mute / pan and PRE the master's chain + limiter — a trackout is a post-strip
+  stem. Command `mixerSetStemTap`; a strip going `off` drops its tap.
+- `outputLatencySamples(strip)` — how late that strip's output runs against true zero: `own chain + its PDC delay`
+  (which is exactly the tier, maxChan or maxChan+maxBus, when PDC is on), and for the MASTER additionally the tier-1
+  + tier-2 upstream, its own chain, and the limiter's look-ahead. With PDC off it degrades to the strip's own chain.
+
+**Renderer — `RenderSpec::mixer` (`RenderMixerSpec`):** strips (kind, seed, fader, pan, width, mute, solo, 4 sends,
+output target, insert chain with per-param values + bypass, stem tap), console on/flavour/amount, limiter, pdc,
+`trimLatency`. `enabled = false` is the default, so **every pre-4.5 render is byte-unchanged** (gated).
+**Head-trim:** the render runs past the end by `2·kMaxPdcSamples + blockSize` and each output pair is then shifted
+left by its OWN latency, reported back in `RenderResult::pairLatency`. That is what makes the headline gate true.
+
+**A real export bug found by the gate, and the rule that came out of it:** the fader test read 0.5 where 0.25 was
+due. **Activating a strip snaps its smoothers to whatever the settings currently say** — so sending `mixerSetFader`
+AFTER `mixerSetStrip` makes the export glide in from unity over the 8 ms tau, and the first note of every bounce
+plays at the wrong level. Live that glide is the point; in a bounce it is a bug. The renderer now pushes every
+smoothed value (fader / pan / width / mute / solo / sends) BEFORE the strip is activated. **Rule: an export must
+start SETTLED — order the commands so nothing is still gliding at sample 0.**
+
+**Tests — `tests/engine/test_export_mix.cpp` (8 cases):** no mixer section = the Phase-3 direct path bit-exact; the
+strip's fader is really in the bytes (the settled-start rule); **MASTER IMPULSE == STEM IMPULSE** — a COMP on one of
+two channels, each tapped, and all three pairs put their impulse on sample 0 while the master equals the two stems
+summed to 1e-6 (a trackout set that rebuilds the master); the same for a BUS return against the dry channel beside
+it; the limiter's look-ahead is trimmed off the MASTER alone (the stem never carries it); `trimLatency` off leaves
+the alignment delay in the file; PDC off exports the strips misaligned exactly as they play; CONSOLE prints into the
+bytes and is a character stage, not a level change.
+
+**Gates (4.5a):** mac-debug 0 warnings + ctest **248/248** (240 + 8) · RTSan 249/249 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 248/248 · probe OK on universal · clang-format clean.
+
+**Honest boundary after 4.5a — what is NOT done:**
+- `ProjectRenderer::buildProjectRenderSpec` does not populate `spec.mixer` yet, so a PROJECT export still renders the
+  direct path. The plumbing is all here; it needs the project's mixer state, which is Phase-8 persistence territory.
+  **Next concrete step for 4.5b.**
+- No dither yet (TPDF with the fixed xorshift seeds, WAV == FLAC bit-identity) — `writeWav` still truncates.
+- The legacy chopper chain for the single-chop bake is untouched.
+- Nothing in the SHELL or the page calls this yet: there is no export verb wired to `RenderMixerSpec`, so the app's
+  export buttons are unchanged. 4.5b joins them up.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
