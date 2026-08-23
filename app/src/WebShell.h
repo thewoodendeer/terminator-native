@@ -46,6 +46,10 @@ class WebShell final : public juce::Component, private juce::Timer
     juce::String startUrlFor(const juce::String& page) const; // "" = the root page, "preferences/preferences.html"
     void emitToAll(const juce::String& event, const juce::var& payload); // main window + Preferences (when open)
     void openPreferences();
+    /// Preferences is a second always-on-top window; hiding it does NOT hand keyboard focus back, so the main
+    /// window stays un-keyed and the page never sees a keydown — pads went dead until the user clicked something.
+    /// Called from both close paths (the title-bar button and the page's closePreferences verb).
+    void closePreferences();
     void timerCallback() override;
     void pageLoaded(const juce::String& url);
     void runProbe();

@@ -59,6 +59,17 @@ export function installNativeIPC(): void {
   const base = ((window as any).terminator ?? {}) as AnyRecord;
   const boot = nativeBoot();
 
+  // ── focus: Preferences closed, so the shell handed the main window back (see WebShell::closePreferences).
+  // The native view being key is not enough — the DOCUMENT has to be focused or keydown never fires and the pads
+  // stay dead until something is clicked. ──
+  onNativeEvent('terminator.focusMain', () => {
+    try {
+      window.focus();
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || el === document.body) document.body.focus?.();
+    } catch { /* */ }
+  });
+
   // ── settings (settings.json `app` — the Electron terminator-settings.json keys, verbatim) ──
   let settingsCache: AnyRecord = boot?.settings ?? {};
   const settingsListeners = new Set<(s: AnyRecord) => void>();

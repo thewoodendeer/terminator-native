@@ -47,7 +47,13 @@ class WebShell::PrefsWindow final : public juce::DocumentWindow
         browser_->goToURL(url);
     }
     ~PrefsWindow() override { browser_ = nullptr; }
-    void closeButtonPressed() override { setVisible(false); }
+    void closeButtonPressed() override
+    {
+        setVisible(false);
+        if (onClosed)
+            onClosed();
+    }
+    std::function<void()> onClosed;
     Browser& browser() noexcept { return *browser_; }
 
   private:
@@ -558,8 +564,7 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                     }
                     else if (verb == "closePreferences")
                     {
-                        if (prefsWindow_ != nullptr)
-                            prefsWindow_->setVisible(false);
+                        closePreferences();
                         complete(ok(true));
                     }
                     else
@@ -601,9 +606,25 @@ void WebShell::openPreferences()
         prefsReady_ = false;
         prefsWindow_ = std::make_unique<PrefsWindow>(makeOptions(), startUrlFor("preferences/preferences.html"),
                                                      [this](const juce::String&) { prefsReady_ = true; });
+        prefsWindow_->onClosed = [this] { closePreferences(); };
     }
     prefsWindow_->setVisible(true);
     prefsWindow_->toFront(true);
+}
+
+void WebShell::closePreferences()
+{
+    if (prefsWindow_ != nullptr)
+        prefsWindow_->setVisible(false);
+    if (browser_ == nullptr)
+        return;
+    // Make the main window key again and put the focus back inside it…
+    if (auto* top = browser_->getTopLevelComponent())
+        top->toFront(true);
+    browser_->grabKeyboardFocus();
+    // …and tell the PAGE to take keyboard focus too: the native view can be key while the document is not focused,
+    // which is exactly the "keys do nothing until I click a pad" symptom.
+    browser_->emitEventIfBrowserIsVisible("terminator.focusMain", juce::var());
 }
 
 WebShell::~WebShell()
