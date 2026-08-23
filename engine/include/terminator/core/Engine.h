@@ -131,7 +131,11 @@ class Engine
     void noteLiveHit(std::uint16_t pad, double atSample) noexcept TERMINATOR_NONBLOCKING
     {
         if (pad < kMaxPads)
+        {
             liveHitSample_[pad] = atSample;
+            lastLiveHitPad_ = pad;
+            lastLiveHitSample_ = atSample > 0.0 ? static_cast<std::uint64_t>(atSample) : 0;
+        }
     }
 
     Config config_{};
@@ -171,6 +175,10 @@ class Engine
     float outputPeak_[kMaxOutputChannels] = {};
     float inputPeak_[kMaxInputChannels] = {};
 
+    // the last LIVE trigger (a command / a booked hit / a MIDI note on the direct path): pad + its engine sample — the
+    // page's live-record probe compares it to the landed grid line (3.7)
+    std::int32_t lastLiveHitPad_ = -1;
+    std::uint64_t lastLiveHitSample_ = 0;
     // MIDI note → pad
     std::int16_t noteToPad_[128];
     // when each pad was last LIVE triggered (command / MIDI — not the sequencer), engine samples; feeds the chop

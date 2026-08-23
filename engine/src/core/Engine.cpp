@@ -534,6 +534,8 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.drumActiveMask = sampler_.drumActiveMask();
     s.lastTriggeredPad = sampler_.lastTriggeredPad();
     s.lastTriggeredPadPositionSec = sampler_.lastTriggeredPadPositionSec();
+    s.lastLiveHitPad = lastLiveHitPad_;
+    s.lastLiveHitSample = lastLiveHitSample_;
     s.seqPlaying = seq_.playing() ? 1u : 0u;
     s.seqPaused = seq_.paused() ? 1u : 0u;
     s.seqLoop = seq_.loop() ? 1u : 0u;

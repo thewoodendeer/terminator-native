@@ -52,6 +52,8 @@ struct StateSnapshot
     std::uint64_t drumActiveMask = 0; // bit L = drum lane L (pad 64+L) has a sounding voice
     std::int32_t lastTriggeredPad = -1;
     double lastTriggeredPadPositionSec = 0.0; // position inside that pad's region (its buffer's seconds)
+    std::int32_t lastLiveHitPad = -1;         // the last LIVE trigger (command / booked / MIDI direct): its pad …
+    std::uint64_t lastLiveHitSample = 0;      // … and the engine sample it fired / was booked at (3.7)
 
     // chop sequencer (Phase 3.1)
     std::uint32_t seqPlaying = 0;

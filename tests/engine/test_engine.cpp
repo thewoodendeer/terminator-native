@@ -180,3 +180,33 @@ TEST_CASE("Engine: extra output channels beyond 2 are silenced, odd block sizes 
             REQUIRE(x == 0.0f);
     REQUIRE(e.snapshot().samplesProcessed == 999);
 }
+
+TEST_CASE("Engine: the snapshot publishes the last LIVE hit's pad + sample (a booked hit at its booking, a direct "
+          "trigger at its block offset, a MIDI note at its offset)",
+          "[engine]")
+{
+    Engine e;
+    e.prepare({48000.0, 64, 2, 0});
+    Buffers b(2, 64);
+    CHECK(e.snapshot().lastLiveHitPad == -1);
+    e.commands().push(Command::triggerPadAtSample(5, 1.0f, 48000)); // booked 1 s ahead (no sample bound: silent)
+    run(e, b, 1);
+    CHECK(e.snapshot().lastLiveHitPad == 5);
+    CHECK(e.snapshot().lastLiveHitSample == 48000);
+    e.commands().push(Command::triggerPad(7, 1.0f));
+    run(e, b, 1);
+    CHECK(e.snapshot().lastLiveHitPad == 7);
+    CHECK(e.snapshot().lastLiveHitSample == 64); // the block that applied it (offset 0, no host clock)
+    MidiEvent on;
+    on.data[0] = 0x90;
+    on.data[1] = 36 + 9;
+    on.data[2] = 100;
+    on.size = 3;
+    e.midiQueue(0).push(on);
+    run(e, b, 1);
+    CHECK(e.snapshot().lastLiveHitPad == 9);
+    CHECK(e.snapshot().lastLiveHitSample == 128);
+    run(e, b, 800); // the booked hit fires at 48000: the re-stamp keeps it as the last live hit
+    CHECK(e.snapshot().lastLiveHitPad == 5);
+    CHECK(e.snapshot().lastLiveHitSample == 48000);
+}
