@@ -59,6 +59,7 @@ class WebShell final : public juce::Component, private juce::Timer
     juce::var applyJsonCommand(const juce::var& json);
     juce::var handleAudio(const juce::var& req);
     juce::var handleMidi(const juce::var& req);
+    void applyMidiSettings(const juce::var& appSettings); // app.midi.clock → the engine, app.midi.outputs → the hub
     void handlePads(const juce::var& req, juce::WebBrowserComponent::NativeFunctionCompletion complete);
     juce::var padsVar() const;
     void persistAudioSetup();

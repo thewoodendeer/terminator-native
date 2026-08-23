@@ -436,21 +436,37 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     addAndMakeVisible(*browser_);
 
     services_.onSettingsChanged = [this](const juce::var& settings)
-    { emitToAll("terminator.settingsChanged", settings); };
+    {
+        applyMidiSettings(settings); // Preferences → MIDI: clock send + the output toggles live in `app.midi`
+        emitToAll("terminator.settingsChanged", settings);
+    };
     audioIO_.onDeviceChanged = [this] { emitToAll("terminator.devicesChanged", deviceInfoVar()); };
     midi_.onPortsChanged = [this]
     { emitToAll("terminator.midiChanged", handleMidi(juce::var(new juce::DynamicObject()))); };
-    // every note the engine got from a device, mirrored to the page (LEDs, step/live record, the playhead) — the
-    // sound already fired on the direct MidiHub → engine path; the page's shadow marks its hit nativeOwned
-    midi_.onNote = [this](int note, int velocity, bool on, int channel)
+    // every message a device sent (notes, CCs, bend, the transport bytes the clock lock accepted), mirrored to the
+    // page AFTER the engine got it on the direct MidiHub → engine path (notes → pads when the routing allows) — the
+    // page runs its one MIDI router on it (pads marked nativeOwned, bass MIDI IN, DRUM PADS, learn, START/STOP)
+    midi_.onMessage = [this](const MidiEvent& e, const juce::String& portName)
     {
         auto* o = new juce::DynamicObject();
-        o->setProperty("note", note);
-        o->setProperty("velocity", velocity);
-        o->setProperty("on", on);
-        o->setProperty("channel", channel);
-        emitToAll("terminator.midiNote", juce::var(o));
+        juce::Array<juce::var> data;
+        for (int i = 0; i < static_cast<int>(e.size); ++i)
+            data.add(static_cast<int>(e.data[i]));
+        o->setProperty("data", juce::var(data));
+        o->setProperty("hostNs", static_cast<juce::int64>(e.hostTimeNs));
+        o->setProperty("port", static_cast<int>(e.port));
+        o->setProperty("portName", portName);
+        emitToAll("terminator.midiMessage", juce::var(o));
     };
+    // the clock-IN follower settled on a new tempo (≤ 1 per beat) — the page applies its "follow tempo" preference
+    midi_.onClockBpm = [this](double bpm, int port)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("bpm", bpm);
+        o->setProperty("port", port);
+        emitToAll("terminator.midiClock", juce::var(o));
+    };
+    applyMidiSettings(services_.appSettings());
 
     browser_->goToURL(startUrlFor({}));
 
@@ -587,6 +603,8 @@ WebShell::~WebShell()
     stopTimer();
     audioIO_.onDeviceChanged = nullptr;
     midi_.onPortsChanged = nullptr;
+    midi_.onMessage = nullptr;
+    midi_.onClockBpm = nullptr;
     services_.onSettingsChanged = nullptr;
     prefsWindow_ = nullptr;
     browser_ = nullptr;
@@ -1018,6 +1036,10 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         c = Command::bassClear(bassTagOf(json, 0), static_cast<bool>(json.getProperty("release", true)));
     else if (type == "bassPanic")
         c = Command::bassPanic();
+    else if (type == "midiClockEnable")
+        c = Command::midiClockEnable(static_cast<bool>(json.getProperty("on", false)));
+    else if (type == "setMidiRouting")
+        c = Command::setMidiRouting(static_cast<bool>(json.getProperty("pads", true)));
     else if (type == "seqPlay")
         c = Command::seqPlay(static_cast<std::uint64_t>(static_cast<juce::int64>(json.getProperty("atSample", 0))));
     else if (type == "seqStop")
@@ -1257,15 +1279,35 @@ void WebShell::finishCalibration()
     settings_.save();
 }
 
+void WebShell::applyMidiSettings(const juce::var& app)
+{
+    // Preferences → MIDI (the page's `app.midi` object, the Electron keys verbatim): "MIDI Clock (send)" → the
+    // engine's clock OUT; the "MIDI Outputs" toggles (missing = ON) → which ports the pump sends to. "follow tempo"
+    // stays the page's own gate (it owns the BPM state — it applies the `terminator.midiClock` reports).
+    const auto midi = app.isObject() ? app.getProperty("midi", juce::var()) : juce::var();
+    const bool clock = midi.isObject() && static_cast<bool>(midi.getProperty("clock", false));
+    engine_.commands().push(Command::midiClockEnable(clock));
+    midi_.applyOutputPrefs(midi.isObject() ? midi.getProperty("outputs", juce::var()) : juce::var());
+}
+
 juce::var WebShell::handleMidi(const juce::var& req)
 {
     const auto verb = req.isObject() ? req.getProperty("verb", "list").toString() : juce::String("list");
     juce::String err;
     if (verb == "inject") // tests / the probe: a note as if it arrived on port 0 (engine queue + the page event)
     {
-        midi_.injectNote(
-            static_cast<int>(req.getProperty("note", 36)), static_cast<int>(req.getProperty("velocity", 100)),
-            static_cast<bool>(req.getProperty("on", true)), static_cast<int>(req.getProperty("channel", 1)));
+        if (const auto* raw = req.getProperty("data", juce::var()).getArray()) // raw bytes: transport / CC / clock
+        {
+            std::uint8_t bytes[3] = {0, 0, 0};
+            const int n = std::min(3, raw->size());
+            for (int i = 0; i < n; ++i)
+                bytes[i] = static_cast<std::uint8_t>(static_cast<int>((*raw)[i]) & 0xFF);
+            midi_.inject(bytes, n);
+        }
+        else
+            midi_.injectNote(
+                static_cast<int>(req.getProperty("note", 36)), static_cast<int>(req.getProperty("velocity", 100)),
+                static_cast<bool>(req.getProperty("on", true)), static_cast<int>(req.getProperty("channel", 1)));
         return ok(true);
     }
     if (verb == "enable")
@@ -1274,6 +1316,27 @@ juce::var WebShell::handleMidi(const juce::var& req)
         midi_.enableAllInputs();
     else if (verb == "refresh")
         midi_.refresh();
+    else if (verb == "enableOutput")
+    {
+        // the same `app.midi.outputs` map the page's Preferences keep (missing = ON): persist + broadcast so every
+        // window's toggle and the pump agree
+        err = midi_.enableOutput(req["id"].toString(), static_cast<bool>(req.getProperty("enabled", true)));
+        auto app = services_.appSettings();
+        auto midi = app.getProperty("midi", juce::var());
+        if (!midi.isObject())
+            midi = juce::var(new juce::DynamicObject());
+        auto outs = midi.getProperty("outputs", juce::var());
+        if (!outs.isObject())
+            outs = juce::var(new juce::DynamicObject());
+        outs.getDynamicObject()->setProperty(req["id"].toString(), static_cast<bool>(req.getProperty("enabled", true)));
+        midi.getDynamicObject()->setProperty("outputs", outs);
+        auto* patch = new juce::DynamicObject();
+        patch->setProperty("midi", midi);
+        auto* set = new juce::DynamicObject();
+        set->setProperty("verb", "set");
+        set->setProperty("patch", juce::var(patch));
+        services_.handleSettings(juce::var(set)); // → onSettingsChanged → applyMidiSettings + settingsChanged
+    }
     if (verb == "enable" || verb == "enableAll")
     {
         auto* m = new juce::DynamicObject();
@@ -1297,10 +1360,33 @@ juce::var WebShell::handleMidi(const juce::var& req)
         ports.add(juce::var(po));
     }
     o->setProperty("inputs", juce::var(ports));
+    juce::Array<juce::var> outs;
+    for (const auto& p : midi_.outputs())
+    {
+        auto* po = new juce::DynamicObject();
+        po->setProperty("id", p.identifier);
+        po->setProperty("name", p.name);
+        po->setProperty("enabled", p.enabled);
+        po->setProperty("open", p.open);
+        outs.add(juce::var(po));
+    }
+    o->setProperty("outputs", juce::var(outs));
     o->setProperty("messages", static_cast<juce::int64>(midi_.messageCount()));
     o->setProperty("lastLagMs", midi_.lastInputLagMs());
     o->setProperty("medianLagMs", midi_.medianInputLagMs());
     o->setProperty("last", midi_.lastMessageDescription());
+    const auto& s = engine_.snapshot();
+    auto* clock = new juce::DynamicObject();
+    clock->setProperty("enabled", static_cast<bool>(s.midiClockEnabled));
+    clock->setProperty("running", static_cast<bool>(s.midiClockRunning));
+    clock->setProperty("ticks", static_cast<juce::int64>(s.midiClockTicks));
+    clock->setProperty("sent", static_cast<juce::int64>(midi_.sentCount()));
+    clock->setProperty("lateMs", midi_.lastSendLatenessMs());
+    clock->setProperty("maxLateMs", midi_.maxSendLatenessMs());
+    clock->setProperty("inBpm", midi_.clockInBpm());
+    clock->setProperty("inPort", midi_.clockInOwnerPort());
+    clock->setProperty("inStarted", midi_.clockInStarted());
+    o->setProperty("clock", juce::var(clock));
     return juce::var(o);
 }
 
@@ -1616,6 +1702,18 @@ void WebShell::timerCallback()
     obj->setProperty("midiMessages", static_cast<juce::int64>(midi_.messageCount()));
     obj->setProperty("midiLagMs", midi_.medianInputLagMs());
     obj->setProperty("midiLast", midi_.lastMessageDescription());
+    // MIDI clock OUT / IN (3.5)
+    obj->setProperty("midiClockEnabled", static_cast<bool>(s.midiClockEnabled));
+    obj->setProperty("midiClockRunning", static_cast<bool>(s.midiClockRunning));
+    obj->setProperty("midiClockTicks", static_cast<juce::int64>(s.midiClockTicks));
+    obj->setProperty("midiClockPosition", static_cast<juce::int64>(s.midiClockPosition));
+    obj->setProperty("midiOutDropped", static_cast<juce::int64>(s.midiOutDropped));
+    obj->setProperty("midiNotesToPads", static_cast<bool>(s.midiNotesToPads));
+    obj->setProperty("midiSent", static_cast<juce::int64>(midi_.sentCount()));
+    obj->setProperty("midiSendLateMs", midi_.lastSendLatenessMs());
+    obj->setProperty("midiClockInBpm", midi_.clockInBpm());
+    obj->setProperty("midiClockInPort", midi_.clockInOwnerPort());
+    obj->setProperty("midiClockInStarted", midi_.clockInStarted());
     browser_->emitEventIfBrowserIsVisible("terminator.snapshot", juce::var(obj));
 }
 

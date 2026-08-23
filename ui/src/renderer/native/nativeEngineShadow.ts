@@ -28,7 +28,11 @@
  * AudioContext — Phase 3.6; kept phase-locked by the nudge, the ear-alignment is as good as the clock
  * mapping ≈ 1 ms + the two devices' latency reports), mixer strips / master FX (Phase 4), time-STRETCH (plays
  * dry natively), live re-stem of a ringing voice (the next hit plays the new mix), per-hit reverse of a rendered
- * LOOP. Native MIDI hits the C++ engine directly (MidiHub, note−36) and is mirrored to the page (2.5e).
+ * LOOP. Native MIDI hits the C++ engine directly (MidiHub, the page's note map) and is mirrored to the page (2.5e/3.5:
+ * every message → midiHub.injectNative → ChopperView's one router; `midiSink` tells the engine when the page owns the
+ * notes — bass MIDI IN / DRUM PADS / MIDI OFF / learn — and keeps its note → pad table equal to the learned map).
+ * MIDI clock OUT/IN run in C++ (3.5): the clock rides seqPlay's anchor; the IN follower's BPM reports reach the page as
+ * `terminator.midiClock` (ChopperView applies "follow tempo").
  */
 import { SEQ_MAX_STEPS, type ChopperEngine, type ChopperState, type SeqPattern } from '../chopper/ChopperEngine';
 import type { BassEngine } from '../bass/BassEngine';
@@ -37,6 +41,7 @@ import { isNative, native, onNativeEvent } from './juceBridge';
 import { NativeClock, ctxPair, ctxHeardLatencySec } from './nativeClock';
 import { NativeBassShadow } from './nativeBassShadow';
 import { NativeDrumShadow } from './nativeDrumShadow';
+import { midiHub } from '../chopper/midiHub';
 
 type AnyRecord = Record<string, any>;
 
@@ -109,6 +114,7 @@ export interface NativeShadowStats {
   padsBound: number;
   triggers: number;
   midiNotes: number;
+  midiRouting: boolean; // setMidiRouting as last pushed (notes → pads on the direct path)
   /** Phase 3.2 — the native transport binding */
   seqCommands: number;
   seqNudges: number;
@@ -141,6 +147,9 @@ class NativeEngineShadow {
   private unsubscribe: (() => void) | null = null;
   private unsubSnapshot: (() => void) | null = null;
   private unsubMidi: (() => void) | null = null;
+  private unsubMidiPorts: (() => void) | null = null;
+  // the engine's note → pad table as last pushed (its default: note − 36 for pads 0..63, else unmapped)
+  private lastNoteMap: Int16Array = Int16Array.from({ length: 128 }, (_, n) => (n >= 36 && n - 36 < MAX_PADS ? n - 36 : -1));
   private masterGainSent = -1;
   private detached = false;
   latestSnapshot: AnyRecord | null = null;
@@ -157,7 +166,7 @@ class NativeEngineShadow {
   private playStartSample = NaN; // the engine sample the run started at (its first loop start)
   private nudgeApplied = 0;      // seconds of satellite nudge applied this run
   private snapEmitPerfMs = NaN;  // performance.now() the newest snapshot's position was stamped at (its emit)
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, lastError: null };
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, lastError: null };
   private drumShadow: NativeDrumShadow | null = null;
   private bassShadow: NativeBassShadow | null = null;
 
@@ -218,19 +227,42 @@ class NativeEngineShadow {
     this.clockTimer = setInterval(() => { void this.calibrateClock(1); }, 4000);
     this.unsubscribe = this.engine.subscribe((s) => this.sync(s));
     this.unsubSnapshot = onNativeEvent('terminator.snapshot', (snap) => { this.latestSnapshot = snap; this.onSnapshot(snap); });
-    // MIDI from the devices: the engine already played the note on the direct MidiHub → engine path; the page
-    // runs the same hit through the TS engine (LEDs, playhead, chokes, step/live record) marked nativeOwned so
-    // the shadow does not trigger it twice. Note → pad = the engine's default map (note − 36).
-    this.unsubMidi = onNativeEvent('terminator.midiNote', (m) => {
-      if (!m || typeof m.note !== 'number') return;
-      const pad = m.note - 36;
-      if (pad < 0 || pad >= MAX_PADS) return;
-      this.stats.midiNotes++;
+    // MIDI from the devices (3.5): every message the C++ MidiHub mirrors (notes, CCs, bend, the transport bytes its
+    // clock lock accepted) is injected into the page's midiHub → ChopperView's ONE router runs unchanged (transport
+    // START/STOP, CC learn, bass MIDI IN, DRUM PADS, pad learn, pads). A pad note is marked nativeOwned: the engine
+    // already played it on the direct driver→engine path, so the voice sink must not trigger it twice. The stamp =
+    // the driver's host time mapped to performance.now() (the handler-lag / live-record math reads it as before).
+    this.unsubMidi = onNativeEvent('terminator.midiMessage', (m) => {
+      if (!m || !Array.isArray(m.data) || m.data.length === 0) return;
+      const st = Number(m.data[0]) & 0xf0;
+      if (st === 0x90 || st === 0x80) this.stats.midiNotes++;
+      const hostNs = Number(m.hostNs);
+      const timeStamp = this.clock.ready && hostNs > 0 ? this.clock.hostNsToPerfMs(hostNs) : performance.now();
       try {
-        if (m.on && Number(m.velocity) > 0) this.engine.triggerPad(pad, Math.max(0, Math.min(1, Number(m.velocity) / 127)), undefined, { nativeOwned: true });
-        else this.engine.releasePad(pad);
-      } catch (e) { this.stats.lastError = `midiNote: ${String((e as any)?.message ?? e)}`; }
+        midiHub.injectNative({ data: m.data.map((x: unknown) => Number(x) & 0xff), timeStamp, portId: `native:${m.port ?? 0}`, portName: String(m.portName ?? '') });
+      } catch (e) { this.stats.lastError = `midiMessage: ${String((e as any)?.message ?? e)}`; }
     });
+    this.unsubMidiPorts = onNativeEvent('terminator.midiChanged', (r) => {
+      const names = Array.isArray(r?.inputs) ? r.inputs.filter((p: any) => p?.enabled && p?.open).map((p: any) => String(p.name ?? 'MIDI input')) : [];
+      midiHub.setNativeInputs(names);
+    });
+    void native.midi({ verb: 'list' }).then((r: any) => {
+      const names = Array.isArray(r?.inputs) ? r.inputs.filter((p: any) => p?.enabled && p?.open).map((p: any) => String(p.name ?? 'MIDI input')) : [];
+      midiHub.setNativeInputs(names);
+    }).catch(() => { /* no hub */ });
+    // the page's MIDI policy → the engine: whether notes may play pads on the direct path, and the learned note map
+    this.engine.midiSink = {
+      routing: (notesToPads) => { this.stats.midiRouting = notesToPads; void this.cmd({ type: 'setMidiRouting', pads: notesToPads }); },
+      noteMap: (map) => {
+        for (let note = 0; note < 128; note++) {
+          const raw = map[note];
+          const pad = typeof raw === 'number' && raw >= 0 && raw < MAX_PADS ? raw : -1; // pads ≥ 64 are drum lanes natively
+          if (this.lastNoteMap[note] === pad) continue;
+          this.lastNoteMap[note] = pad;
+          void this.cmd({ type: 'setNoteMap', note, pad });
+        }
+      },
+    };
     this.stats.attached = true;
   }
 
@@ -243,6 +275,8 @@ class NativeEngineShadow {
     this.unsubscribe?.(); this.unsubscribe = null;
     this.unsubSnapshot?.(); this.unsubSnapshot = null;
     this.unsubMidi?.(); this.unsubMidi = null;
+    this.unsubMidiPorts?.(); this.unsubMidiPorts = null;
+    this.engine.midiSink = null;
     this.engine.voiceSink = null;
     this.engine.mutePadVoices = false;
     if (this.clockTimer) { clearInterval(this.clockTimer); this.clockTimer = null; }
@@ -629,12 +663,19 @@ class NativeEngineShadow {
       r.seqSet = await this.cmd({ type: 'setSequence', index: 0, bars: 1, resolution: 16, loop: true, swing: 0, grid: Array.from({ length: 16 }, () => [63]), velGrid: Array.from({ length: 16 }, () => [1]) });
       r.seqBpm = await this.cmd({ type: 'setBpm', bpm: 240 });
       r.seqPlay = await this.cmd({ type: 'seqPlay' });
-      await new Promise((res) => setTimeout(res, 350));
+      // the snapshot is 20 Hz and a starved CI runner can hand the page the SAME snapshot for hundreds of ms (run
+      // 32613089136 read step 3 twice 300 ms apart) — poll until the step moved AND ≥ 8 hits fired (≤ 3 s), never two
+      // fixed reads
+      for (let t = 0; t < 40 && !this.latestSnapshot?.seqPlaying; t++) await new Promise((res) => setTimeout(res, 50));
       const s1 = this.latestSnapshot;
       r.seqPlaying = !!s1?.seqPlaying;
       r.seqStepA = s1?.seqStep ?? -1;
       r.seqStepCount = s1?.seqStepCount ?? 0;
-      await new Promise((res) => setTimeout(res, 300));
+      for (let t = 0; t < 60; t++) {
+        await new Promise((res) => setTimeout(res, 50));
+        const s = this.latestSnapshot;
+        if (s && s.seqStep !== r.seqStepA && Number(s.seqHitsFired ?? 0) >= 8) break;
+      }
       const s2 = this.latestSnapshot;
       r.seqStepB = s2?.seqStep ?? -1;
       r.seqHits = Number(s2?.seqHitsFired ?? 0);
@@ -674,6 +715,33 @@ class NativeEngineShadow {
       r.midiNoDoubleTrigger = this.stats.triggers === trig2;
       r.midiNativeHit = this.latestSnapshot?.lastTriggeredPad === 62;
       await native.midi({ verb: 'inject', note: 62 + 36, velocity: 0, on: false });
+      // Phase 3.5 — MIDI transport + clock: an injected START byte (as a controller's PLAY) reaches the page's router
+      // through midiHub.injectNative and starts the transport; the engine's clock OUT (enabled for this check) runs
+      // from the same anchor and ticks; STOP stops both. (The clock is generated in the callback; the pump has no
+      // output on a CI runner — the snapshot counters are the evidence.)
+      if (this.engine.seqSink && this.latestSnapshot?.prepared) {
+        const clockSnap = await native.midi({ verb: 'list' });
+        r.midiClockWasEnabled = !!clockSnap?.clock?.enabled;
+        r.midiClockEnable = await this.cmd({ type: 'midiClockEnable', on: true });
+        await native.midi({ verb: 'inject', data: [0xfa] });
+        for (let t = 0; t < 40 && !this.engine.isSeqPlaying(); t++) await new Promise((res) => setTimeout(res, 50));
+        r.midiStartPlays = this.engine.isSeqPlaying();
+        for (let t = 0; t < 40 && !this.latestSnapshot?.midiClockRunning; t++) await new Promise((res) => setTimeout(res, 50));
+        const ticks0 = Number(this.latestSnapshot?.midiClockTicks ?? 0);
+        r.midiClockRunning = !!this.latestSnapshot?.midiClockRunning;
+        await new Promise((res) => setTimeout(res, 400));
+        r.midiClockTicksGrew = Number(this.latestSnapshot?.midiClockTicks ?? 0) > ticks0;
+        r.midiClockPosition = Number(this.latestSnapshot?.midiClockPosition ?? 0);
+        await native.midi({ verb: 'inject', data: [0xfc] });
+        for (let t = 0; t < 40 && this.engine.isSeqPlaying(); t++) await new Promise((res) => setTimeout(res, 50));
+        r.midiStopStops = !this.engine.isSeqPlaying();
+        for (let t = 0; t < 40 && this.latestSnapshot?.midiClockRunning; t++) await new Promise((res) => setTimeout(res, 50));
+        r.midiClockStopped = !this.latestSnapshot?.midiClockRunning;
+        r.midiOutDropped = Number(this.latestSnapshot?.midiOutDropped ?? 0);
+        r.midiTransportOk = r.midiStartPlays && r.midiStopStops;
+        r.midiClockOk = r.midiClockRunning && r.midiClockTicksGrew && r.midiClockStopped && r.midiOutDropped === 0;
+        if (!r.midiClockWasEnabled) await this.cmd({ type: 'midiClockEnable', on: false });
+      }
       // part 3 — Phase 3.2: the PAGE's transport drives the NATIVE chop sequencer. The current sequence becomes a
       // 1-bar/16-step pattern hitting pad 62 on steps 0/4/8/12 at 240 BPM (a hit every 250 ms); engine.playSeq()
       // → native seqPlaying with the page's pattern index, hits fire, the TS cursor (read from the native anchor

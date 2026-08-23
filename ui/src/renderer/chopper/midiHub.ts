@@ -66,6 +66,21 @@ class MidiHub {
     return out;
   }
   subscribe(fn: (s: MidiHubState) => void): () => void { this.listeners.add(fn); fn(this.state); return () => { this.listeners.delete(fn); }; }
+
+  /** NATIVE (Terminator 3.0, Phase 3.5): a message the C++ MidiHub mirrored from a device (`terminator.midiMessage`),
+   *  dispatched to the same handlers as a Web MIDI event — the page keeps ONE MIDI router (ChopperView's onMessage:
+   *  transport, CC learn, bass MIDI IN, DRUM PADS, learn, pads). The event carries `timeStamp` in performance ms (the
+   *  driver's stamp mapped through NativeClock), `target.id/name` = the port, and `nativeOwned: true` so the pad path
+   *  does not trigger the native pad a second time (the engine already played it on the direct path). */
+  injectNative(msg: { data: ArrayLike<number>; timeStamp: number; portId: string; portName: string }): void {
+    const data = Uint8Array.from(msg.data);
+    const port = { id: msg.portId, name: msg.portName } as unknown as MIDIInput;
+    const e = { data, timeStamp: msg.timeStamp, target: port, currentTarget: port, nativeOwned: true, type: 'midimessage' } as unknown as MIDIMessageEvent;
+    this.nativeCount++;
+    this.dispatch(e, port);
+  }
+  /** Messages injected from the native hub (diagnostic). */
+  nativeCount = 0;
   private set(patch: Partial<MidiHubState>): void { this.state = { ...this.state, ...patch }; for (const l of this.listeners) l(this.state); }
 
   /** Add a message handler. Starts the hub on first use. */
@@ -151,6 +166,10 @@ class MidiHub {
       }
     }
     for (const h of this.handlers) { try { h(e); } catch (err) { console.warn('[MIDI] handler threw', err); } }
+  }
+  /** NATIVE: the C++ hub's input list (names) — shown where the Web MIDI list would be. */
+  setNativeInputs(names: string[]): void {
+    this.set({ status: names.length ? 'ready' : 'nodevice', inputs: names, error: null });
   }
 }
 

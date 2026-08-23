@@ -4,6 +4,7 @@ import { isSubscribed, isSignedIn, isDemo, recordPull, pullsRemaining, FREE_PAD_
 import { SubscribeModal } from '../components/SubscribeModal';
 import { ChopperEngine, ChopperState, ChopPreset, MetronomeSound, SEQ_MAX_STEPS, NO_SAMPLE_ID } from './ChopperEngine';
 import { attachNativeEngineShadow } from '../native/nativeEngineShadow';
+import { isNative, onNativeEvent } from '../native/juceBridge';
 
 const isWeb = (import.meta as any).env?.MODE === 'web';
 declare const __TERMINATOR_VERSION__: string;
@@ -839,6 +840,16 @@ export function ChopperView() {
   // which doubled the tick rate (89 BPM read 177–178) and restarted PLAY twice.
   const clockLockRef = useRef<MidiClockSourceLock | null>(null);
   if (!clockLockRef.current) clockLockRef.current = new MidiClockSourceLock();
+  // NATIVE (Terminator 3.0, Phase 3.5): the C++ MidiHub follows the clock TICKS on the driver thread (its own
+  // one-port lock + the same estimator) and reports a settled tempo ≤ once per beat; the page keeps the policy —
+  // the tempo moves only while the hardware drives (its START reached the router above) AND "follow tempo" is on.
+  useEffect(() => {
+    if (!isNative()) return;
+    return onNativeEvent('terminator.midiClock', (m: { bpm?: number } | null) => {
+      const bpm = Number(m?.bpm);
+      if (clockFollowOnRef.current && clockFollowTempoRef.current && Number.isFinite(bpm) && bpm > 0) engine.setMetronomeBpm(bpm);
+    });
+  }, [engine]);
   // Full panic — kill EVERY sound at once: the chop sequencer (and its
   // scheduled AudioBufferSourceNodes), the drum loop, and any manually
   // triggered pad voices still ringing out (envelope tails, reverb sends).
@@ -1578,6 +1589,18 @@ export function ChopperView() {
   midiTapNoteRef.current = midiTapNote;
   midiLearnTapRef.current = midiLearnTap;
   padLockFromRef.current = padLockFrom;
+  // NATIVE (3.5): the C++ engine plays MIDI notes on its direct driver→engine path ONLY while this page would route
+  // them to pads — off for MIDI OFF, DRUM PADS mode, pad learn and bass MIDI IN (the page owns those notes); and the
+  // engine's note → pad table follows the (learned) map. No-ops outside the native shell (engine.midiSink is null).
+  const midiRoutingRef = useRef(true);
+  const pushMidiRouting = () => {
+    const on = midiEnabledRef.current && !drumPadModeRef.current && !midiLearnRef.current && !bassMidiRef.current;
+    if (on === midiRoutingRef.current) return;
+    midiRoutingRef.current = on;
+    engine.midiSink?.routing(on);
+  };
+  useEffect(() => { pushMidiRouting(); }, [midiEnabled, drumPadMode, midiLearn]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { engine.midiSink?.noteMap(midiMap); }, [engine, midiMap]);
 
   useEffect(() => {
     const unsub = engine.subscribe(setState);
@@ -2024,7 +2047,9 @@ export function ChopperView() {
         // open modal is a no-op, so holding a locked pad down doesn't churn.
         const lock = padLockFromRef.current;
         if (lock !== null && padIdx >= lock) { setSubModalOpen(true); return; }
-        engine.triggerPad(padIdx, velocity / 127, e.timeStamp);
+        // NATIVE (3.5): a note the C++ MidiHub mirrored was ALREADY played by the engine on its direct path —
+        // run the TS hit for the LEDs / record / chokes only (nativeOwned: the voice sink does not re-trigger it)
+        engine.triggerPad(padIdx, velocity / 127, e.timeStamp, (e as unknown as { nativeOwned?: boolean }).nativeOwned ? { nativeOwned: true } : undefined);
       }
       if (isNoteOff) engine.releasePad(padIdx);
     };
@@ -5598,7 +5623,7 @@ export function ChopperView() {
               onTransportPlay={startTransport}
               onTransportStop={stopTransport}
               transportPlaying={state.seqPlaying}
-              onMidiInChange={(on) => { bassMidiRef.current = on; if (on) setDrumPadMode(false); }}
+              onMidiInChange={(on) => { bassMidiRef.current = on; if (on) setDrumPadMode(false); pushMidiRouting(); }}
             />
           )}
         </>

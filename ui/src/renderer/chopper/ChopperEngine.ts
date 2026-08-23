@@ -716,6 +716,11 @@ export class ChopperEngine {
    *  reading the same fields as before (seqCurrentLoopStart / seqStepDuration / playingSeqIdx). Null (Electron /
    *  web) = the Web Audio scheduler below, unchanged. */
   seqSink: { play(anchorCtxTime: number): void; stop(): void; pause(): void; resume(): void; leadSec?(): number } | null = null;
+  /** NATIVE MIDI (Terminator 3.0, Phase 3.5 — nativeEngineShadow.ts): when set, the page tells the C++ engine whether
+   *  MIDI notes may play pads on its DIRECT driver→engine path (`routing(true)` = pads, the default; false while the
+   *  page routes notes elsewhere — bass MIDI IN, DRUM PADS mode, MIDI OFF, pad learn) and keeps the engine's
+   *  note → pad table equal to the page's (learned) map. Null (Electron / web) = no-op. */
+  midiSink: { routing(notesToPads: boolean): void; noteMap(map: Record<number, number>): void } | null = null;
   /** NATIVE (3.3): the cursor's elapsed seconds since the audible loop start, AT THE EAR, from the engine's own clock
    *  (NativeClock + performance.now) — independent of this AudioContext's clock quality. null = use the ctx anchor. */
   nativeCursorHook: (() => number | null) | null = null;

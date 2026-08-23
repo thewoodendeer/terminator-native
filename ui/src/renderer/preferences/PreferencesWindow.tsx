@@ -628,8 +628,9 @@ function PreferencesApp() {
         {tab === 'midi' && (
           <>
             {isNative() && <NativeMidiPane />}
+            {!isNative() && (<>
             <div style={card}>
-              <label style={label}>MIDI Inputs{isNative() ? ' (Web MIDI — the in-page engines, until Phase 3 moves them native)' : ''}</label>
+              <label style={label}>MIDI Inputs</label>
               {midiInputs.length === 0 && <div style={{ color: 'var(--text-dim)', padding: '6px 0' }}>No MIDI inputs connected</div>}
               {midiInputs.map(d => (
                 <div key={d.id} style={toggleRow}>
@@ -649,6 +650,7 @@ function PreferencesApp() {
                 </div>
               ))}
             </div>
+            </>)}
 
             <div style={card}>
               <div style={{ ...toggleRow, borderBottom: 'none' }} title="Send MIDI Clock from Terminator's transport: PLAY sends Song Position 0 + START and then 24 ticks per quarter note at the session tempo, STOP sends STOP — to every MIDI output left ON above. Your drum machine / DAW set to external sync locks to Terminator's grid (the same anchor the drums and bass play from).">
@@ -671,7 +673,7 @@ function PreferencesApp() {
               </div>
             </div>
 
-            <button style={btn} onClick={() => void refreshMidiDevices()}>Refresh Devices</button>
+            {!isNative() && <button style={btn} onClick={() => void refreshMidiDevices()}>Refresh Devices</button>}
           </>
         )}
 
