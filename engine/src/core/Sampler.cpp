@@ -62,14 +62,22 @@ void Sampler::setPadSample(std::uint16_t pad, const SampleBuffer* sample, std::i
 {
     if (pad >= kMaxPads)
         return;
-    // the previous sample may be freed soon: fade out anything still reading it
-    for (auto& v : voices_)
-        if (v.active() && v.pad == pad)
-            beginFade(v, kStopFadeSec);
     auto& p = pads_[pad];
+    // ONLY when the BUFFER changes: the previous one may be freed soon (the shell unretains it after a grace
+    // period), so fade out anything still reading it, and drop the stem planes (they belong to the buffer they were
+    // split from). A REGION-only change frees nothing and invalidates nothing — the page sends one of these to a
+    // sounding pad every time a chop point is dropped in (the source chop's end moves), and a voice snapshots its
+    // own sample + region + planes at trigger, so it must play on undisturbed.
+    const bool bufferChanged = p.sample != sample;
+    if (bufferChanged)
+    {
+        for (auto& v : voices_)
+            if (v.active() && v.pad == pad)
+                beginFade(v, kStopFadeSec);
+        for (auto& plane : p.stemPlanes)
+            plane = nullptr;
+    }
     p.sample = sample;
-    for (auto& plane : p.stemPlanes) // stems belong to the buffer they were split from; the mask is the pad's
-        plane = nullptr;
     if (sample == nullptr)
     {
         p.startFrame = p.endFrame = 0;

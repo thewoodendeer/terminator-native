@@ -553,3 +553,36 @@ TEST_CASE("Sampler: setPadLoopBuffer + a looping voice do not allocate on the ca
     const auto allocs = test::allocationsDuring([&] { r.run(200); });
     CHECK(allocs == 0);
 }
+
+TEST_CASE("Sampler: dropping a chop point while the pad sounds keeps the voice; only a NEW buffer fades it",
+          "[sampler][chop]")
+{
+    // Adding a chop moves the SOURCE chop's end, so the page re-sends setPadSample for the pad that is currently
+    // sounding — same buffer, new endFrame. A voice snapshots its own sample + region at trigger, so nothing it
+    // reads has changed: it must keep playing. The fade is only for the case the comment describes — the previous
+    // BUFFER may be freed (the shadow unretains it after a 2 s grace), i.e. the sample POINTER changed.
+    Rig r(2, 128);
+    auto s = test::ramp(48000);
+    r.engine.commands().push(Command::setPadParams(r.params(0)));
+    r.engine.commands().push(Command::setPadSample(0, s.get(), 0, 48000));
+    r.engine.commands().push(Command::triggerPad(0, 1.0f));
+    r.run(40); // ~5120 frames in, still sounding
+    REQUIRE(r.engine.snapshot().activeVoices == 1);
+
+    // the user drops a chop point: this pad's chop now ends earlier — SAME buffer
+    r.engine.commands().push(Command::setPadSample(0, s.get(), 0, 24000));
+    r.run(4);
+    REQUIRE(r.engine.snapshot().activeVoices == 1); // the sample keeps playing
+    auto out = r.capture(0, 4);
+    bool audible = false;
+    for (float v : out)
+        if (std::fabs(v) > 1e-4f)
+            audible = true;
+    REQUIRE(audible);
+
+    // a DIFFERENT buffer still fades the voice out (the old one may be freed under it)
+    auto s2 = test::ramp(48000);
+    r.engine.commands().push(Command::setPadSample(0, s2.get(), 0, 48000));
+    r.run(60);
+    REQUIRE(r.engine.snapshot().activeVoices == 0);
+}
