@@ -68,6 +68,14 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   FALLBACK into the Electron app's store on the same machine, `readBinaryFile`/`writeBinaryFile` helpers, the probe
   self-test); `ipc-native.ts` reads `.tprojz` bytes (`readProjectFile` → `bundle`), `saveProjectBundle`, and
   `saveProjectFile` trashes a stale bundle twin like Electron. No shared-renderer edits.
+- **The bass through the engine (3.4, 2026-08-23):** `src/renderer/bass/BassEngine.ts` — the `BassSink` interface +
+  `bassSink` field + `post()` (every worklet message goes to the sink when attached, else the AudioWorklet), `start()`
+  (native: the pattern + `play` at the anchor, a dummy timer handle), `stop()`, `nudge` no-op, `getPlayheadBeats` (the
+  sink's clock), `rebuildTickMap` (native: re-send the pattern), `setRecording`/`setArrangerDriven` forward,
+  `nativeBassUpdate`/`nativeMeter`. NEW `src/renderer/native/nativeBassShadow.ts`; `nativeEngineShadow.ts` wires it and
+  `attachNativeEngineShadow(engine, drumEngine, bassEngine)` in both views. Gate: `scripts/test-bass-theory.mts` (the
+  Electron `scripts/bass-theory.test.mts`) runs inside `npm run gate`. (3.2/3.3 likewise touched `ChopperEngine.ts`
+  `seqSink`/`nativeCursorHook` and `drums/DrumEngine.ts` `drumSink` — see STATUS.md for those lists.)
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

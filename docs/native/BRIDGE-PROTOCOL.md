@@ -28,7 +28,7 @@ headless smoke mode (see tools/ci/probe-app.sh) — the probe also reports `uiMo
 ## `terminatorInfo()` → object
 ```json
 { "app": "Terminator", "version": "3.0.0-alpha.0", "juce": "9.0.1", "os": "macOS 15", "arch": "arm64",
-  "cpu": "Apple M2", "bridgeProtocol": 1, "maxPads": 128, "chopPads": 64, "drumPadBase": 64, "drumLanes": 64,
+  "cpu": "Apple M2", "bridgeProtocol": 1, "maxPads": 128, "chopPads": 64, "drumPadBase": 64, "drumLanes": 64, "bassPpq": 96, "bassMaxBars": 8, "bassMaxVoices": 8,
   "maxVoices": 256, "settingsFile": "…/Terminator3/settings.json", "device": { …see Device object… } }
 ```
 
@@ -54,6 +54,11 @@ headless smoke mode (see tools/ci/probe-app.sh) — the probe also reports `uiMo
 | `setDrumLane` | `lane`, `volume` 0..1, `audible` (mute + solo resolved by the UI), `group` (0 none · ≥1 mute group) | one lane's state |
 | `setDrumParams` | `swing` 0..1 (on the step's 16th slot — the shared swing formula), `masterVolume` 0..1, `ppq` 24..960 | engine-level drum params |
 | `drumPlay` {`atSample`? 0 = next block, `stepOffset`? the internal step landing on the anchor — the arranger's seek} · `drumStop` | — | the drum transport (the drums share `setBpm`); `drumStop` fades every lane voice (4 ms). Mute groups cut by TIME ORDER at the hit's sample (a group mate starting at the SAME sample layers — the documented `muteGroups.ts` rule); **one owner per hit**: a lane live-triggered (`triggerPad` pad 64+L / MIDI) within 120 ms of a pattern hit owns it (`drumHitsSkipped`) |
+| `setBassPatch` | `patch` — the BassEngine `BassPatch` object (partial ok: deep-merged over the worklet's defaults — `osc[3]{on,wave,octave,semi,fine,level,pw,morph}`, `sub{level,wave,octave}`, `noise{level,color}`, `mixerDrive`, `filter{model,mode,cutoff,reso,envAmt,kbd,poles,drive}`, `filtEnv/ampEnv{a,d,s,r}`, `lfo{rate,wave,toCutoff,toPitch}`, `modSrc{lfo[3]{rate,wave,key},trig[2]{ramp,fall,shape}}`, `mods[{src,target,depth}]` (target = the knob's dotted path, unknown paths ignored; `mods` replaces wholesale), `glide`, `legato`, `voices` 1..8, `drift`, `velAmp`, `velFilt`, `post{drive,tone,glue,gain}`) | **the bass synth (Phase 3.4, `core/BassSynth.h`)** — the `bass-synth` worklet ported 1:1 (same equations/constants), by pointer (ring of 8). Renders in 128-sample quanta aligned to sample 0 (block-size invariant), dry into outs 1/2 until Phase 4 |
+| `setBassPattern` | `bars` 1..8, `notes` [{`id`, `note` 0..127, `start` beats, `dur` beats, `vel` 0.05..1, `slide`?}], `bend`? [semitones per PPQ-96 tick, bars×384 long; [] = no lane] | **the bass sequencer (`core/BassSequencer.h`)**: the roll's pattern as the engine's tick map (on = round(start·96), off = round((start+dur)·96) ≥ on+1, an off past the loop fires at its wrap; a slide note bends what sounds over `dur`; the lane posts per tick when it moved > 0.002 st). Live replace: sounding notes whose pitch changed / off vanished are released, the next ticks read the new map (the TS "+8va stuck note" rule). Ring of 16 |
+| `setBassTimeline` | `events` [{`kind` on\|off\|slide\|bend, `atSample` (an ENGINE sample), `note`, `vel`, `dur` (slide seconds), `semis`}] | the arranger's `playTimeline` as absolute events (sorted by sample, pushed into the synth as their block comes; ring of 4). `clearBassTimeline` drops it, releases the `arr` notes, bend 0 |
+| `bassPlay` {`atSample`? 0 = next block, `offsetTicks`? the absolute tick landing on the anchor} · `bassStop` · `bassArrangerDriven` {`on`} · `bassBendLane` {`on`} | — | the bass transport (shares `setBpm`; tickDur = 60/bpm/96 re-read per tick). `bassStop` releases the seq notes + bend 0 (a lane never leaves the synth bent). `bassArrangerDriven` = the pattern ticks stay quiet while the arranger drives (`mutedByArranger`); `bassBendLane false` = the wheel owns the lane while ● REC |
+| `bassNote` {`on`, `note`, `velocity`, `atSample`? 0 = now, `tag`? seq\|live\|arr\|prev\|x (default live)} · `bassSlide` {`note`, `dur` s, `atSample`?, `tag`?} · `bassBend` {`semis`, `atSample`? (0 / the past = the wheel NOW; a future sample = a timed bend queued with the notes), `tag`?} · `bassMod` {`value` 0..1} · `bassClear` {`tag`? any, `release`? true} · `bassPanic` | — | the worklet's messages one-to-one: a live / preview / MPC note (mono last-note priority + legato + glide or poly), FL-style slides, the wheel, the mod wheel, clear-a-tag (drop pending, optionally release), panic (kill every voice). Events land sample-exact at `atSample` (a 512-slot RT ring; `bassEventsDropped` counts refusals) |
 | `setPadLoop` | `pad`, `key`, `startSec`, `endSec`, `fadeInSec`, `fadeOutSec`, `reverse` — or `clear: true` | the shell renders the region's crossfade loop (`render::renderPadLoop`, reverse baked in — the same code the offline renderer uses) into a fresh store buffer and attaches it (`setPadLoopBuffer`); no fades → detached (raw hard-wrap). The old render is retired through the quarantine |
 | `setPadLoopBuffer` *(engine-internal, not a JSON verb)* | `pad`, loop buffer + steady `[loopStart,loopEnd)` frames | attaches a pre-rendered crossfade loop (`loop::renderCrossfadeLoop`) so a LOOP pad plays a seamless period; the shell renders it on the loader thread when a pad's fades/region change (Phase 2.3). Null clears it → raw hard-wrap of the region |
 | `setPadStems` *(engine-internal, not a JSON verb)* | `pad`, `planes[4]` (drums/bass/other/vocals SampleBuffers, each the base buffer's length/rate; null = absent), `mask` 4-bit | attaches the pad's decoded stem planes + mask (Phase 2.3 stems-in-the-voice). A voice with a partial mask SUMS its lit planes while reading (= `mixMaskChannels`); mask 0/15, no planes, or a lit plane missing → the ORIGINAL plays (never silence). Arriving while the pad rings = a LIVE re-stem: a twin voice at the same position/rate/envelope reads the new set with a 12 ms linear fade-in while the old one fades out over 12 ms (`restemVoice`). Send after `setPadSample` (a new sample clears the planes; the mask stays) |
@@ -200,6 +205,8 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
   "seqStepPhase": 0, "seqBpm": 120, "seqLoopStartSample": 0, "seqHitsFired": 0, "seqHitsSkipped": 0,
   "drumPlaying": false, "drumStep": -1, "drumStepCount": 192, "drumStepPhase": 0, "drumLoopStartSample": 0,
   "drumHitsFired": 0, "drumHitsSkipped": 0, "drumActiveMask": 0,
+  "bassPlaying": false, "bassArrangerDriven": false, "bassTick": -1, "bassLoopTicks": 768, "bassLoopStartSample": 0,
+  "bassVoices": 0, "bassLevel": 0, "bassNotesFired": 0, "bassEventsDropped": 0, "bassTimelineFired": 0, "bassBend": 0, "bassNotes": [],
   "lastTriggeredPadPositionSec": 0, "calibrationState": 0, "calibrationSamples": -1, "calibrationMs": -1,
   "midiMessages": 0, "midiLagMs": 0, "midiLast": "" }
 ```
@@ -211,6 +218,12 @@ performance.now offset: receive ≥ emit). With the `clock` verb's round trip th
 `drum*` (Phase 3.3): the drum sequencer's position — `drumStep` = the internal step (0..bars×96−1) the playhead is in,
 `drumLoopStartSample` = the engine sample of the audible pass's step 0 (signed: a seek can put it before sample 0; the
 page's `playStartTime`), `drumActiveMask` bit L = lane L (pad 64+L) sounds; `activePads` lists pads 0..127 (64+ = lanes).
+`bass*` (Phase 3.4): the bass sequencer's position — `bassTick` = the PPQ-96 tick (0..bars×384−1) the playhead is in,
+`bassLoopStartSample` = the engine sample of the audible pass's tick 0 (signed; the page's `startTime` origin through
+NativeClock), `bassVoices` / `bassNotes` (the MIDI notes the synth's voices sound — the roll's dim keys), `bassLevel` =
+the UI meter (peak over the last completed 1/30 s window — the worklet's meter semantics), `bassBend` = the current
+pitch bend, `bassNotesFired` / `bassTimelineFired` / `bassEventsDropped` counters. `BassSink.elapsedSec` reads the
+playhead the same way as the chops/drums (engine position at the ear).
 **The page's cursors** (chop + drums) read the ENGINE's position at the ear: `(clock.sampleHeardAtPerfMs(now) −
 seqLoopStartSample / drumLoopStartSample) / sampleRate` through NativeClock (`ChopperEngine.nativeCursorHook`,
 `DrumSink.elapsedSec`) — not the AudioContext clock (a headless / virtual device runs it fast: CI run 32608087978 read the

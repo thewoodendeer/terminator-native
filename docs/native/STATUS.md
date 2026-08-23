@@ -649,13 +649,89 @@ it fires (two bookings on one pad overwrote each other). Bridge: `setDrumPattern
   the grid); STOP cuts every lane (4 ms); the drum browser preview (tap a lane header = native; audition of an
   unloaded sample = still Web Audio, the system default device). Known: lanes bypass the mixer strips/FX (Phase 4).
 
-### Next session (in order) — updated at the end of the sixth session
-0. `gh run list` — CI for the cursor-tolerance commit (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk`,
-   now with a derived tolerance and the measured `snapshotAgeMs` printed in its output).
-1. **3.4 bass synth native** (the Model D-style worklet → C++; PPQ 96 tick map, slides, bends — the last satellite on
-   the two-clock nudge besides the metronome/MIDI clock). 2. 3.5 MIDI clock in/out from the transport. 3. 3.6 arp,
-   metronome (through the mixer), count-in on the sample grid. 4. 3.7 live-record landing on the native clock.
-   Then Phase 4 (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" first).
+## Phase 3 — 3.4 DONE (THE BASS IS NATIVE), 2026-08-23 seventh session
+**What changed (engine):** `core/BassSynth.h/.cpp` — the `bass-synth` AudioWorklet ported 1:1 (dossier §2.1: the same
+equations and constants — PolyBLEP oscillators incl. SHAPE morph, leaky-integrator tri/shark, per-osc drift walk +
+per-voice cent offsets, the mixer's Padé-tanh overdrive, LADDER (D'Angelo–Välimäki, 2× OS) / OTA (TPT SVF ×2) / DIODE
+(Zavalishin/Pirkle) with the same drive/level laws, RC-shaped ADSRs (attack toward 1.25, decay/release ×0.6), exp glide,
+FL-style SLIDE ramps, the legacy LFO, the MOD matrix (3 LFOs + 2 trigger envs, log/linear tapers by knob path, chained
+mods on one target), post DRIVE/TONE/GLUE/VOL, DC blocker, safety clip, the 1/30 s meter; mono last-note priority with
+the held stack + legato + Model D fallback, poly reuse/free/steal-oldest). **Timing:** events (note on/off, slide, timed
+bend) live in a 512-slot RT ring at absolute ENGINE SAMPLES and fire inside render() at their exact sample (an
+`earliest_` cache skips the scan); the synth **renders in fixed 128-sample QUANTA aligned to sample 0** (the worklet's
+render quantum) so the per-block work (param smoothing τ 20/30 ms, mod LFO/trig advance, drift, envelope times) happens at
+the same instants whatever the host block → **block-size invariant, bit-identical at 37/64/128/480/512** (gated) and the
+same cadence as the worklet. Randomness = a seeded xorshift64* (osc start phases, voice offsets, drift targets, S&H,
+noise — the TS test seeds Math.random the same way for the same reason). One deliberate match worth knowing: a voice that
+starts mid-quantum runs on its ADSR's LAST set coefficients until the next quantum sets the patch's (the worklet's
+constructor defaults for the very first note) — the cached-coefficient port primes those defaults at prepare().
+`core/BassSequencer.h/.cpp` — the piano roll's player on the sample clock (dossier §2.4/§2.6): PPQ-96 tick map (on =
+round(start·96), off = round((start+dur)·96) ≥ on+1, an off past the loop fires at its wrap), tickDur 60/bpm/96 re-read
+per tick, OFFS BEFORE ONS at a tick at the SAME sample (the TS live path added 0.2 ms to the ons; the TS EXPORT path —
+the render reference — does not, and neither does this), SLIDE notes bend what sounds over `dur` beats, the BEND lane
+sampled per tick posted when it moved > 0.002 st (`bassBendLane false` while the wheel records), live pattern replace
+releases the sounding notes whose pitch changed / off vanished (the "+8va stuck note" rule) and the next ticks read the
+new map, play(at, offsetTicks) / stop (release seq notes + bend 0), the arranger's absolute TIMELINE by pointer (sorted,
+cursor-consumed, `arrangerDriven` mutes the pattern ticks; `clearTimeline` releases + unbends). Engine: `bass_` renders
+DRY into outs 1/2 after the sampler (Phase 4 routes it to its strip); `seqSetBpm` drives all three sequencers; panic
+stops + kills the bass. Bridge: `setBassPatch` (deep-merged over the defaults, mod targets by knob path → enum) /
+`setBassPattern` / `setBassTimeline` / `clearBassTimeline` / `bassPlay` / `bassStop` / `bassArrangerDriven` /
+`bassBendLane` / `bassNote` / `bassSlide` / `bassBend` / `bassMod` / `bassClear` / `bassPanic`; snapshot `bassPlaying /
+bassArrangerDriven / bassTick / bassLoopTicks / bassLoopStartSample / bassVoices / bassLevel / bassNotes / bassNotesFired /
+bassEventsDropped / bassTimelineFired / bassBend`; info `bassPpq / bassMaxBars / bassMaxVoices`. Command payload `bass`
+(ptr/atSample/value/vel/offsetTicks/note/tag/flag) keeps `sizeof(Command) ≤ 64`.
+- **Gates:** Catch2 `[bass]` 24 cases / 543 k assertions — the 12 Electron `bass-synth.test.mts` checks ported (default
+  patch pitch ±3 % / envelope / release / attack; every filter model bounded at reso 0 and 1, brighter with cutoff,
+  ladder+diode self-oscillate; every wave on the note with |DC| < 0.05; sub an octave down; mono legato glide mid/end/
+  fallback + no level dip; poly louder + releases; a scheduled note silent before its sample — and the FIRST non-zero
+  sample IS its sample; clear(tag) drops only that tag; MOD LFO moves brightness ≥ 4× the still spread, trig env opens
+  then returns ±35 %; SHAPE morph endpoints = tri/saw/sine + monotone tri→saw; SLIDE mid/landed/original-off releases/
+  alone silent; timed bends 0→+7 st land on time) + native-only: block-size invariance bit-exact, zero allocations while
+  rendering 8 voices + mods, panic silences; the sequencer on the sample clock at 0 tolerance — note-ons exactly at
+  0/24000/48000/72000/96000 (1-sample blocks), off-before-on retrigger, an off past the loop wrapping to the next pass,
+  a BPM change at the NEXT tick (66000 exact), the BEND lane at its tick + the wheel + stop unbends, live replace releases
+  36/43 and the next pass plays 48, the arranger timeline at 1000/9000 with the pattern quiet, live/booked/slide/panic,
+  engine block invariance 64/480/512 bit-exact, **10 minutes at 120 BPM: 150 passes every loop start exactly
+  k×192000, 1200 notes, 0 drops, 0 allocations**; RT case in test_rt_safety. ctest **162/162** (mac-debug), RTSan
+  **163/163**, 0 warnings; ui gate (tsc baseline 5, library 39, clock 23, **bass-theory** (the Electron
+  `bass-theory.test.mts` copied into `ui/scripts`), vite); **the probe** (part 5, asserted by probe-app.sh `bassPageOk`):
+  a fresh 1-bar pattern with 4 notes → `bassEngine.start()` → native `bassPlaying`, 384 ticks, 5 notes fired, the synth
+  SOUNDING through the engine (meter 0.44), `getPlayheadBeats()` tracks the native tick (261/262 · 4/2 within the
+  derived tolerance 15/17 ticks — a 1/96 tick at 240 BPM is 2.6 ms), stop lands natively. Mid-sweep pitch reads in the
+  ported tests use a global-argmax autocorrelation (`sweepHz`): the TS "first local max within 8 %" reader is fine on a
+  steady tone but picked a spurious 361 Hz peak 50 ms into the 65→131 Hz glide with our (seeded, different) phases.
+- **The page binding (ui):** `BassEngine.bassSink` (NEW interface; the ONLY BassEngine edits: `post()` routes every
+  worklet message to the sink when attached, `start()` sends the audible pattern + `bassPlay` at the anchor with the
+  engine's lead and keeps a dummy timer handle as "playing", `stop()` → `bassStop`, `nudge` is a no-op, `getPlayheadBeats`
+  reads the sink's `elapsedSec`, `rebuildTickMap` while playing sends the pattern (the engine reconciles), `setRecording`
+  re-sends with the lane flag, `setArrangerDriven` forwards, `nativeBassUpdate` keeps `startTime` = the loop start in ctx
+  time (the live-record landing's `tickAt`) + the sounding notes, `nativeMeter`); `native/nativeBassShadow.ts` (the
+  sink: messages → verbs with `at` → engine samples through NativeClock, `notes`/`bends` tagged `arr` gathered into ONE
+  `setBassTimeline` per macrotask, the pattern signature-diffed (the TS mutates it in place) + `bassBendLane`, the patch
+  reference-diffed on every state emit, PLAY at the anchor, the probe part 5); `attachNativeEngineShadow(engine, drums,
+  bass)` from both views; shadow stats `bassCommands/bassEvents`.
+- **Honest boundary after 3.4:** what you hear natively = live pads + chop seq + drums + THE BASS (all dry, outs 1/2 —
+  mixer strips/FX/master are Phase 4); still Web Audio on the page's AudioContext: the metronome + count-in clicks (3.6),
+  the ARP, the drum browser's audition of a sample not on a lane; **exports still render the bass through the TS worklet
+  offline** (`renderBassOffline` — Phase 8 moves exports into the engine; the algorithms match, the seeded phases differ).
+  The two-clock nudge now serves only the metronome + MIDI clock. Known: a bass MIDI note's `when` (the page's
+  handler-lag compensation, usually ≤ now) lands "now" natively — the driver-timestamp path is 3.5.
+- **Victor's pass (3.4):** PLAY a bass pattern with chops + drums at 90 BPM for 10 minutes against a DAW click — three
+  sequencers on ONE clock; every factory patch (MODEL D … 808 SINE) vs the Electron app by ear (same algorithm; expect
+  the same sound, the drift texture differs by seed); MONO legato + glide on a held line; POLY chords; a SLIDE note; draw
+  a BEND lane then the wheel with ● REC; edit notes while playing (transpose ↑↓ — no stuck note); MPC pads as the bass
+  keyboard (pad 4 = root with LOCK); the roll's playhead + dim sounding keys; the Beat Finisher preview drives the bass
+  (the arranger timeline) and stop/seek re-schedules; STOP unbends. Known: dry to outs 1/2 (no mixer strip yet).
+
+### Next session (in order) — updated at the end of the seventh session
+0. `gh run list` — CI for the 3.4 trio (4 jobs; the universal probe asserts `seqPageOk` + `drumPageOk` + `bassPageOk`
+   with derived tolerances and the measured `snapshotAgeMs` in its output). CI for `ca9cd1a` (the cursor-tolerance fix)
+   was green on RTSan at hand-off; the other three jobs were still running — check them too.
+1. **3.5 MIDI clock in/out from the transport** (sample-exact OUT from the callback, IN follower on driver timestamps,
+   the unified learn store, note-out); bass MIDI notes with driver timestamps → `bassNote{atSample}`.
+2. 3.6 arp, metronome (through the mixer), count-in on the sample grid — the last Web Audio satellites.
+3. 3.7 live-record landing on the native clock. Then Phase 4 (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4
+   BRIEF" first) — routes pads / drum lanes / the bass into their strips.
 
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
 Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).
