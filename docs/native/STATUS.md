@@ -1360,6 +1360,57 @@ bytes and is a character stage, not a level change.
 - Nothing in the SHELL or the page calls this yet: there is no export verb wired to `RenderMixerSpec`, so the app's
   export buttons are unchanged. 4.5b joins them up.
 
+## Phase 4 — 4.5b DONE (THE PROJECT'S MIX IS IN THE PROJECT'S EXPORT), 2026-08-23 twelfth session
+
+4.5a made the RENDERER able to carry a mix; 4.5b makes a real PROJECT export use the one the user saved. The project
+file keeps the mixer as an opaque `var` blob (the page's `MixerPreset`: `channels` / `master` / `console`) — this
+turns it into a `RenderMixerSpec` and routes every pad into the strip its route names.
+
+**`StripNamer` (ProjectRenderer.h)** — the page's numbering (`nativeMixerShadow.ts` FIXED_STRIPS) as C++: sample 1 ·
+kick 2 · snare 3 · hat 4 · openhat 5 · perc 6 · bass 7 · send1..4 8..11 · click 12, everything else from 13 on first
+sight and stable after. **This is a compatibility contract, not a convenience**: a saved chain has to land on the
+strip it was saved on. Gated name by name.
+**`padRouteName(project, pad)`** — the page's `padRoute`: the pad's own override, else its source's route, else
+`'sample'`. Gated including the source-route case.
+**`buildMixerSpec(project, namer, extraChannels, stemChannels, masterLimiter)`** — the blob → strips. Faders, pan,
+mute, solo, the four sends (always wired to the send returns, as the page wires them), the master strip, and the
+console (on / flavour / amount). Each strip's CONSOLE seed is `fnv1a(name)`, the page's own seeding. A serialized
+insert becomes a real device through the SAME lookups the live bridge uses (`fxTypeFromId` / `fxParamIndex` /
+`fxOptionIndex`), so page KEYS and enum OPTION STRINGS both resolve; **an SC COMP's `SOURCE` is a channel NAME on the
+page and a strip INDEX natively**, converted here exactly as `nativeMixerShadow.fxValue()` does it. A device this
+build does not know is SKIPPED rather than shifting every slot after it. A channel the blob never mentions still gets
+a default strip when a pad routes to it.
+**`ProjectRenderOptions`:** `useMixer` (default **false**, so every existing project render is byte-unchanged —
+gated), `stemChannels` (names → hardware pairs 1, 2, 3 …), `masterLimiter` (default true; **off = an unlimited master
+bounce**, which is also the only way the master is EXACTLY the sum of its trackouts).
+
+**Tests — `tests/engine/test_export_project.cpp` (8 cases):** the strip numbering name by name; `padRouteName`'s
+three fallbacks; the blob → spec (fader / seed / send targets / the master / console flavour / a channel the blob
+never mentioned); a serialized chain → real devices with keys and enum options resolved; SC COMP `SOURCE` name →
+index; the render really carries the project's fader (pull the kick strip to −60 and the kick leaves the bytes);
+**trackouts out of the same render** — cross-correlation lag 0 against the master AND, with the limiter off, equal
+sample for sample to 1e-6; the limiter is in the bounce by default and can be taken out.
+
+**Two test premises I had to fix, both worth remembering:**
+- An ONSET-THRESHOLD alignment check is not a valid measure once a limiter is in the path — its transient shaping
+  moves the crossing (the master read 15 where the stems read 6, with nothing actually misaligned). **Measure
+  alignment by cross-correlation lag; it is immune to level shaping.**
+- The master is NOT the sum of its trackouts while the safety limiter is in — the makeup alone lifts +0.57 dB. That
+  is correct behaviour (a trackout is post-strip, pre-master), not a bug to tolerate: the exact null test needs
+  `masterLimiter = false`.
+
+**Gates (4.5b):** mac-debug 0 warnings + ctest **256/256** (248 + 8) · RTSan 257/257 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 256/256 · probe OK on universal · clang-format clean.
+
+**Honest boundary after 4.5b — still owed by 4.5:**
+- **Nothing in the SHELL or the page calls this yet.** There is no export verb wired to `useMixer` / `stemChannels`,
+  so the app's export buttons still produce the old bytes. That is the next step (4.5c) and it is the one the user
+  can actually hear.
+- No dither (TPDF with the fixed xorshift seeds, WAV == FLAC bit-identity) — `writeWav` still truncates.
+- The legacy chopper chain for the single-chop bake is untouched.
+- Drums / bass / the CLICK do not have their sources routed into strips in the offline path yet (the chop pads do);
+  they still take the Phase-3 direct path in a bounce.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
