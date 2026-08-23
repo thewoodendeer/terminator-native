@@ -101,6 +101,42 @@ TEST_CASE(
                 }) == 0);
 }
 
+TEST_CASE("RT: the MIDI clock OUT on the callback allocates nothing (enable, play, tempo change, pause/resume, stop)",
+          "[rt]")
+{
+    Engine e;
+    e.prepare({48000.0, 64, 2});
+    std::vector<float> l(64), r(64);
+    float* outs[2] = {l.data(), r.data()};
+    e.commands().push(Command::midiClockEnable(true));
+    e.commands().push(Command::seqSetBpm(240.0));
+    e.commands().push(Command::seqPlay(0));
+    REQUIRE(test::allocationsDuring(
+                [&]
+                {
+                    for (int i = 0; i < 400; ++i)
+                    {
+                        if (i == 100)
+                            e.commands().push(Command::seqSetBpm(90.0));
+                        if (i == 200)
+                            e.commands().push(Command::seqPause());
+                        if (i == 250)
+                            e.commands().push(Command::seqResume());
+                        if (i == 350)
+                            e.commands().push(Command::seqStop());
+                        e.process(nullptr, 0, outs, 2, 64,
+                                  1'000'000'000ull + static_cast<std::uint64_t>(i) * 1'333'333ull);
+                    }
+                }) == 0);
+    REQUIRE(e.snapshot().midiClockTicks > 0);
+    REQUIRE(e.snapshot().midiClockRunning == 0);
+    MidiOutEvent oe;
+    int n = 0;
+    while (e.midiOut().pop(oe))
+        ++n;
+    REQUIRE(n > 0);
+}
+
 TEST_CASE("RT: process before prepare and after release allocates nothing", "[rt]")
 {
     Engine e;

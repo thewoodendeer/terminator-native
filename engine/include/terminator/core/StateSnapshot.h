@@ -94,6 +94,14 @@ struct StateSnapshot
     std::uint32_t calibrationState =
         0; // 0 idle · 1 running · 2 done (buffer readable) · 3 failed (channel out of range)
     std::uint32_t calibrationId = 0;
+
+    // MIDI clock OUT (Phase 3.5, core/MidiClock.h)
+    std::uint32_t midiClockEnabled = 0;  // the preference (midiClockEnable)
+    std::uint32_t midiClockRunning = 0;  // between START and STOP
+    std::uint64_t midiClockTicks = 0;    // ticks generated since prepare (lifetime)
+    std::uint64_t midiClockPosition = 0; // ticks since the last START (the song position × 6)
+    std::uint64_t midiOutDropped = 0;    // out-queue refusals (the pump fell behind — should stay 0)
+    std::uint32_t midiNotesToPads = 1;   // setMidiRouting
 };
 static_assert(std::is_trivially_copyable_v<StateSnapshot>, "StateSnapshot must be trivially copyable");
 

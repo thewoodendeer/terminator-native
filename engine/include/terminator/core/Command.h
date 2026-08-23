@@ -72,6 +72,11 @@ enum class CommandType : std::uint32_t
     bassMod,            // bass.value — the mod wheel 0..1
     bassClear,          // bass.tag (0 = all) + bass.flag = release — drop pending events of a tag
     bassPanic,          // — kill every bass voice, drop every event
+    // ---- MIDI (Phase 3.5, core/MidiClock.h) ----
+    midiClockEnable, // midi.flag — Preferences "MIDI Clock (send)": the clock OUT follows the transport (off while
+                     // running = STOP now); the ticks go to io/MidiHub's pump through Engine::midiOut()
+    setMidiRouting,  // midi.flag — 1 = MIDI notes play pads on the direct path (default); 0 = the page owns the notes
+                     // (bass MIDI IN / DRUM PADS mode / MIDI OFF / pad learn) — the engine only mirrors them
 };
 
 enum class PadMode : std::uint8_t
@@ -216,6 +221,11 @@ struct Command
             std::uint8_t tag;         // BassTag
             std::uint8_t flag;        // on/off · release · arranger-driven · bend lane
         } bass;
+
+        struct Midi
+        {
+            std::uint8_t flag;
+        } midi;
 
         struct Calibration
         {
@@ -573,6 +583,21 @@ struct Command
         return c;
     }
     static Command bassPanic() noexcept { return bassCmd(CommandType::bassPanic); }
+    // ---- MIDI (Phase 3.5) ----
+    static Command midiClockEnable(bool on) noexcept
+    {
+        Command c;
+        c.type = CommandType::midiClockEnable;
+        c.payload.midi.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command setMidiRouting(bool notesToPads) noexcept
+    {
+        Command c;
+        c.type = CommandType::setMidiRouting;
+        c.payload.midi.flag = notesToPads ? 1 : 0;
+        return c;
+    }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,
                                     std::uint32_t id) noexcept
     {

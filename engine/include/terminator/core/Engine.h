@@ -14,6 +14,7 @@
 #include "terminator/core/DrumSequencer.h"
 #include "terminator/core/CommandQueue.h"
 #include "terminator/core/HostClock.h"
+#include "terminator/core/MidiClock.h"
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/Sampler.h"
 #include "terminator/core/StateSnapshot.h"
@@ -31,6 +32,19 @@ struct MidiEvent
 };
 static_assert(std::is_trivially_copyable_v<MidiEvent>);
 
+/// A MIDI message the ENGINE sends (Phase 3.5: the clock OUT — SPP/START/CONTINUE/STOP/ticks), produced on the
+/// audio thread at its exact engine sample, stamped with the host time that sample is HEARD (block entry + offset +
+/// the device's output latency). Consumed by io/MidiHub's pump thread, which sends it at that host time (0 = send
+/// at once: no host clock — tests / offline).
+struct MidiOutEvent
+{
+    std::uint64_t hostTimeNs = 0;
+    std::uint64_t sample = 0;
+    std::uint8_t data[3] = {0, 0, 0};
+    std::uint8_t size = 0;
+};
+static_assert(std::is_trivially_copyable_v<MidiOutEvent>);
+
 class Engine
 {
   public:
@@ -40,10 +54,12 @@ class Engine
         int maxBlockSize = 512;
         int numOutputChannels = 2;
         int numInputChannels = 0;
+        int outputLatencySamples = 0; // the device's reported output latency — MIDI OUT stamps "heard at" with it
     };
 
     static constexpr std::size_t kCommandQueueCapacity = 1024;
     static constexpr std::size_t kMidiQueueCapacity = 1024;
+    static constexpr std::size_t kMidiOutQueueCapacity = 1024;
     static constexpr int kMaxMidiPorts = 16;
     static constexpr int kMaxPendingTriggers = 64; // live hits booked past the current block (quantized live record)
     static constexpr std::uint32_t kCalibrationMaxFrames = 2 * 192000; // 2 s at 192 kHz
@@ -51,6 +67,7 @@ class Engine
 
     using Commands = SpscQueue<Command, kCommandQueueCapacity>;
     using MidiQueue = SpscQueue<MidiEvent, kMidiQueueCapacity>;
+    using MidiOutQueue = SpscQueue<MidiOutEvent, kMidiOutQueueCapacity>;
 
     Engine();
     Engine(const Engine&) = delete;
@@ -70,6 +87,9 @@ class Engine
         const int clamped = port < 0 ? 0 : (port >= kMaxMidiPorts ? kMaxMidiPorts - 1 : port);
         return midiQueues_[static_cast<std::size_t>(clamped)];
     }
+
+    /// MIDI the engine SENDS (the clock OUT, Phase 3.5) — consumer = io/MidiHub's pump thread (any one non-RT thread).
+    MidiOutQueue& midiOut() noexcept { return *midiOut_; }
 
     /// Latest engine state — message thread only.
     const StateSnapshot& snapshot() noexcept { return snapshot_.read(); }
@@ -119,12 +139,17 @@ class Engine
     // small enough for any stack (Windows threads default to 1 MB; the capture buffer alone is 1.5 MB).
     std::unique_ptr<Commands> commands_;
     std::vector<MidiQueue> midiQueues_;
+    std::unique_ptr<MidiOutQueue> midiOut_;
     SnapshotPublisher<StateSnapshot> snapshot_;
     Sampler sampler_;
     ChopSequencer seq_;     // the chop sequencer on the sample clock (Phase 3.1)
     DrumSequencer drums_;   // the drum sequencer on the same clock (Phase 3.3) — lanes = pads kDrumPadBase..
     BassSynth bass_;        // the bass synth (Phase 3.4) — dry into outs 1/2 until Phase 4 routes it to its strip
     BassSequencer bassSeq_; // its pattern player on the same clock
+    MidiClockOut clockOut_; // MIDI clock OUT from the transport (Phase 3.5) — anchored with seqPlay / drumPlay
+    MidiClockOut::Event clockEvents_[MidiClockOut::kMaxEventsPerBlock] = {};
+    bool midiNotesToPads_ = true; // setMidiRouting: MIDI notes play pads on the direct path (off while the page
+                                  // routes notes elsewhere — bass MIDI IN, DRUM PADS mode, MIDI OFF, learn)
 
     // RT state (owned by the audio thread after prepare)
     float masterGainTarget_ = 1.0f;

@@ -205,6 +205,7 @@ void AudioIO::audioDeviceAboutToStart(juce::AudioIODevice* device)
     cfg.maxBlockSize = device->getCurrentBufferSizeSamples();
     cfg.numOutputChannels = device->getActiveOutputChannels().countNumberOfSetBits();
     cfg.numInputChannels = device->getActiveInputChannels().countNumberOfSetBits();
+    cfg.outputLatencySamples = device->getOutputLatencyInSamples(); // MIDI OUT stamps "heard at" with it (3.5)
     engine_.prepare(cfg);
 }
 

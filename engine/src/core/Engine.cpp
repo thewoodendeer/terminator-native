@@ -38,7 +38,8 @@ const float* Engine::calibrationClick() noexcept
 }
 
 Engine::Engine()
-    : commands_(std::make_unique<Commands>()), midiQueues_(kMaxMidiPorts), calibCapture_(kCalibrationMaxFrames, 0.0f)
+    : commands_(std::make_unique<Commands>()), midiQueues_(kMaxMidiPorts), midiOut_(std::make_unique<MidiOutQueue>()),
+      calibCapture_(kCalibrationMaxFrames, 0.0f)
 {
     for (int n = 0; n < 128; ++n)
         noteToPad_[n] = static_cast<std::int16_t>(n >= 36 && n - 36 < kChopPads ? n - 36 : -1); // A01 = C1 (note 36)
@@ -66,6 +67,7 @@ void Engine::prepare(const Config& config)
     drums_.prepare(config_.sampleRate);
     bass_.prepare(config_.sampleRate);
     bassSeq_.prepare(config_.sampleRate);
+    clockOut_.prepare(config_.sampleRate);
     for (auto& t : liveHitSample_)
         t = -1.0e12;
     for (auto& t : pendingTrig_)
@@ -83,6 +85,7 @@ void Engine::release()
     drums_.reset();
     bass_.reset();
     bassSeq_.reset();
+    clockOut_.reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -143,6 +146,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         sampler_.stopAll();
         bassSeq_.stop(bass_);
         bass_.panic();
+        clockOut_.stop(samplesProcessed_);
         for (auto& t : pendingTrig_)
             t.used = false;
         break;
@@ -196,21 +200,28 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::seqPlay:
         seq_.play(c.payload.seq.atSample, samplesProcessed_);
         playing_ = true;
+        // the MIDI clock rides the SAME anchor (the TS seqStartHook → MidiClockSender.start(at)); a restart re-sends
+        // STOP + SPP 0 + START
+        clockOut_.start(c.payload.seq.atSample != 0 ? c.payload.seq.atSample : samplesProcessed_, samplesProcessed_);
         break;
     case CommandType::seqStop:
         seq_.stop();
         playing_ = false;
+        clockOut_.stop(samplesProcessed_);
         break;
     case CommandType::seqPause:
         seq_.pause(samplesProcessed_, sampler_);
+        clockOut_.pause(samplesProcessed_);
         break;
     case CommandType::seqResume:
         seq_.resume(samplesProcessed_);
+        clockOut_.resume(samplesProcessed_);
         break;
     case CommandType::seqSetBpm:
         seq_.setBpm(c.payload.seq.value);
         drums_.setBpm(c.payload.seq.value); // one BPM for every sequencer (getMasterBpm)
         bassSeq_.setBpm(c.payload.seq.value);
+        clockOut_.setBpm(c.payload.seq.value); // the tick spacing follows at the next tick
         break;
     case CommandType::seqSetLoop:
         seq_.setLoop(c.payload.seq.value != 0.0);
@@ -237,9 +248,16 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::drumPlay:
         drums_.play(c.payload.drum.atSample, c.payload.drum.stepOffset, samplesProcessed_);
         playing_ = true;
+        // drums alone (no sample loaded: the page's PLAY starts only the drums) still clock the outboard gear — the
+        // first transport to start anchors the clock; a seqPlay in the same run already did
+        if (!clockOut_.running())
+            clockOut_.start(c.payload.drum.atSample != 0 ? c.payload.drum.atSample : samplesProcessed_,
+                            samplesProcessed_);
         break;
     case CommandType::drumStop:
         drums_.stop(sampler_);
+        if (!seq_.playing())
+            clockOut_.stop(samplesProcessed_);
         break;
     case CommandType::bassSetPatch:
         bass_.setPatch(static_cast<const BassPatch*>(c.payload.bass.ptr));
@@ -290,6 +308,12 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::bassPanic:
         bass_.panic();
+        break;
+    case CommandType::midiClockEnable:
+        clockOut_.setEnabled(c.payload.midi.flag != 0, samplesProcessed_);
+        break;
+    case CommandType::setMidiRouting:
+        midiNotesToPads_ = c.payload.midi.flag != 0;
         break;
     case CommandType::startCalibration:
     {
@@ -394,8 +418,9 @@ void Engine::drainMidi(int numSamples) noexcept TERMINATOR_NONBLOCKING
     {
         for (std::size_t n = 0; n < MidiQueue::capacity() && q.pop(e); ++n)
         {
-            if (e.size < 2)
-                continue;
+            if (e.size < 2 || !midiNotesToPads_)
+                continue; // the page owns the notes (bass MIDI IN / DRUM PADS / MIDI OFF / learn) — mirrored, not
+                          // played
             const std::uint8_t status = e.data[0] & 0xF0u;
             const std::uint8_t note = e.data[1] & 0x7Fu;
             const std::uint8_t vel = e.size > 2 ? (e.data[2] & 0x7Fu) : 0;
@@ -480,6 +505,12 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.bassBend = bass_.pitchBend();
     s.calibrationState = calibState_;
     s.calibrationId = calibId_;
+    s.midiClockEnabled = clockOut_.enabled() ? 1u : 0u;
+    s.midiClockRunning = clockOut_.running() ? 1u : 0u;
+    s.midiClockTicks = clockOut_.ticksSent();
+    s.midiClockPosition = clockOut_.tickCount();
+    s.midiOutDropped = midiOut_->droppedCount();
+    s.midiNotesToPads = midiNotesToPads_ ? 1u : 0u;
     snapshot_.publish(s);
 }
 
@@ -507,8 +538,32 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     bassSeq_.process(samplesProcessed_, numSamples, bass_);                  // this block's bass ticks / timeline
     if (playing_ && !seq_.playing() && !drums_.playing() && (seqWasPlaying_ || drumsWasPlaying_))
         playing_ = false; // the sequencers stopped themselves (loop off): the transport follows
+    if (clockOut_.running() && !seq_.playing() && !drums_.playing())
+        clockOut_.stop(samplesProcessed_); // … and so does the MIDI clock (STOP to the gear)
     seqWasPlaying_ = seq_.playing();
     drumsWasPlaying_ = drums_.playing();
+    // MIDI clock OUT (3.5): this block's SPP/START/CONTINUE/STOP/ticks at their exact samples → the out queue, stamped
+    // with the host time the sample is HEARD (block entry + offset + output latency); the MidiHub pump sends them then
+    {
+        const int n = clockOut_.process(samplesProcessed_, numSamples, clockEvents_, MidiClockOut::kMaxEventsPerBlock);
+        for (int i = 0; i < n; ++i)
+        {
+            const auto& ce = clockEvents_[i];
+            MidiOutEvent oe;
+            oe.sample = ce.sample;
+            oe.data[0] = ce.data[0];
+            oe.data[1] = ce.data[1];
+            oe.data[2] = ce.data[2];
+            oe.size = ce.size;
+            if (blockHostNs_ != 0 && config_.sampleRate > 0.0)
+            {
+                const double offSamples = static_cast<double>(ce.sample - samplesProcessed_) +
+                                          static_cast<double>(config_.outputLatencySamples);
+                oe.hostTimeNs = blockHostNs_ + static_cast<std::uint64_t>(offSamples / config_.sampleRate * 1e9);
+            }
+            midiOut_->push(oe);
+        }
+    }
 
     // ---- input peaks + calibration capture ----
     const int nIn = std::min(numIn, kMaxInputChannels);
