@@ -40,10 +40,13 @@ inline bool sameReadSet(const Voice& v, const SampleBuffer* const* set, int n) n
 }
 } // namespace
 
-void Sampler::prepare(double sampleRate, int /*maxBlockSize*/, int numOutputChannels) noexcept
+void Sampler::prepare(double sampleRate, int maxBlockSize, int numOutputChannels) noexcept
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
     numOutputChannels_ = numOutputChannels;
+    maxBlock_ = maxBlockSize > 0 ? maxBlockSize : 0;
+    scratchL_.assign(static_cast<std::size_t>(maxBlock_), 0.0f); // non-RT (prepare)
+    scratchR_.assign(static_cast<std::size_t>(maxBlock_), 0.0f);
     reset();
 }
 
@@ -355,6 +358,7 @@ void Sampler::triggerEx(std::uint16_t pad, float velocity, std::int32_t offsetIn
                            : static_cast<float>(static_cast<double>(p.params.fadeOutSec) * p.sample->sampleRate);
     v->interpolation = p.params.interpolation;
     v->outputPair = p.params.outputPair;
+    v->strip = p.params.strip;
     v->chokeGroup = p.params.chokeGroup;
     v->velocity = std::clamp(velocity, 0.0f, 1.0f);
     v->gain = v->velocity * p.params.gain;
@@ -481,17 +485,9 @@ void Sampler::stopPadRange(std::uint16_t first, std::uint16_t count) noexcept TE
             beginFade(v, pads_[v.pad].params.chokeFadeSec);
 }
 
-void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels,
-                          int numSamples) noexcept TERMINATOR_NONBLOCKING
+void Sampler::renderVoice(Voice& v, float* l, float* r, int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
-    const int outL = static_cast<int>(v.outputPair) * 2;
-    const int outR = outL + 1;
-    float* l = outL < numOutputChannels ? outputs[outL] : nullptr;
-    float* r = outR < numOutputChannels ? outputs[outR] : nullptr;
-    if (l == nullptr && r == nullptr)
-    {
-        // output pair not available on this device: keep the voice running silently
-    }
+    // l / r may be null (the output pair is not on this device): the voice keeps running silently
     const auto* s = v.sample;
     const std::int64_t nFrames = s->numFrames;
     // the read set: 1 buffer (base / loop render) or the lit stem planes, summed per tap; a mono plane among
@@ -648,11 +644,37 @@ void Sampler::renderVoice(Voice& v, float* const* outputs, int numOutputChannels
     }
 }
 
-void Sampler::render(float* const* outputs, int numOutputChannels, int numSamples) noexcept TERMINATOR_NONBLOCKING
+void Sampler::render(float* const* outputs, int numOutputChannels, int numSamples, double* const* stripInputs,
+                     int numStrips) noexcept TERMINATOR_NONBLOCKING
 {
+    const int n = std::min(numSamples, maxBlock_ > 0 ? maxBlock_ : numSamples);
     for (auto& v : voices_)
-        if (v.active())
-            renderVoice(v, outputs, numOutputChannels, numSamples);
+    {
+        if (!v.active())
+            continue;
+        if (stripInputs != nullptr && v.strip >= 0 && v.strip < numStrips && maxBlock_ >= numSamples)
+        {
+            // into a mixer strip: render alone into the scratch, then accumulate in 64-bit (the strip's input)
+            float* sl = scratchL_.data();
+            float* sr = scratchR_.data();
+            std::fill_n(sl, n, 0.0f);
+            std::fill_n(sr, n, 0.0f);
+            renderVoice(v, sl, sr, n);
+            double* L = stripInputs[static_cast<std::size_t>(v.strip) * 2];
+            double* R = stripInputs[static_cast<std::size_t>(v.strip) * 2 + 1];
+            for (int i = 0; i < n; ++i)
+            {
+                L[i] += static_cast<double>(sl[i]);
+                R[i] += static_cast<double>(sr[i]);
+            }
+            continue;
+        }
+        const int outL = static_cast<int>(v.outputPair) * 2;
+        const int outR = outL + 1;
+        float* l = outL < numOutputChannels ? outputs[outL] : nullptr;
+        float* r = outR < numOutputChannels ? outputs[outR] : nullptr;
+        renderVoice(v, l, r, numSamples);
+    }
 }
 
 std::uint64_t Sampler::padActiveMask() const noexcept TERMINATOR_NONBLOCKING

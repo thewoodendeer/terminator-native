@@ -17,6 +17,7 @@
 #include "terminator/core/HostClock.h"
 #include "terminator/core/Metronome.h"
 #include "terminator/core/MidiClock.h"
+#include "terminator/core/Mixer.h"
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/Sampler.h"
 #include "terminator/core/StateSnapshot.h"
@@ -106,6 +107,8 @@ class Engine
     const Pad& pad(int i) const noexcept { return sampler_.pad(i); }
     /// The bass synth (tests render it directly; the app only talks to it through commands).
     BassSynth& bassSynth() noexcept { return bass_; }
+    /// The mixer's read-back (settings / meters / masks) — tests; the app reads the snapshot.
+    const Mixer& mixer() const noexcept { return mixer_; }
 
     // --- RT ------------------------------------------------------------------------------------
     /// Renders numSamples into outputs[0..numOut). Always overwrites. inputs may be null / numIn 0. Safe to call
@@ -156,6 +159,11 @@ class Engine
     MidiClockOut::Event clockEvents_[MidiClockOut::kMaxEventsPerBlock] = {};
     Metronome metro_; // the click + count-in (Phase 3.6) — beats on the driving sequencer's grid
     Arp arp_;         // the arp (Phase 3.6) — steps on the sample clock
+    Mixer mixer_;     // the strips / sends / buses / master (Phase 4.1) — pads, drum lanes, the bass and the click
+                      // with a strip sum into it in 64-bit; the direct paths (strip −1) stay as in Phase 3
+    std::vector<float> scratchL_, scratchR_; // a source's block on its way into a strip (prepare-sized)
+    int bassStrip_ = -1;                     // setSourceStrip 0: the bass synth's strip (−1 = dry into outs 1/2)
+    int clickStrip_ = -1;                    // setSourceStrip 1: the metronome's strip (−1 = direct, post master gain)
     GridStep gridLog_[kMaxGridLog] = {};
     bool midiNotesToPads_ = true; // setMidiRouting: MIDI notes play pads on the direct path (off while the page
                                   // routes notes elsewhere — bass MIDI IN, DRUM PADS mode, MIDI OFF, learn)

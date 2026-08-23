@@ -23,6 +23,7 @@ inline constexpr int kMaxPads = kDrumPadBase + kDrumLanes; // 128
 inline constexpr int kMaxOutputChannels = 32;
 inline constexpr int kMaxInputChannels = 32;
 inline constexpr int kMaxVoices = 256;
+inline constexpr int kMaxStrips = 64; // mixer strips (Phase 4.1, core/Mixer.h): 0 = master, 1..63 the page's strips
 
 struct StateSnapshot
 {
@@ -120,6 +121,20 @@ struct StateSnapshot
     std::int32_t arpStep = 0;     // steps fired since the hold
     std::int32_t arpLastPad = -1; // the pad the last step fired
     std::uint64_t arpHits = 0;    // lifetime arp steps fired
+
+    // the mixer (Phase 4.1, core/Mixer.h)
+    std::uint64_t mixerActiveMask = 0;       // bit k = strip k is live (kind ≠ off)
+    std::uint64_t mixerSilentMask = 0;       // bit k = strip k is silenced by mute / the solo law (the target)
+    std::uint32_t mixerRoutesRejected = 0;   // lifetime routes refused by the cycle guard
+    std::uint32_t mixerOrderValid = 1;       // 0 = the graph had a loop and the fallback order runs (cannot happen)
+    std::int32_t mixerMainOut = 0;           // the master's hardware pair
+    std::int32_t bassStrip = -1;             // the bass synth's strip (−1 = direct to outs 1/2, the Phase-3 path)
+    std::int32_t clickStrip = -1;            // the metronome's strip (−1 = direct, post master gain, the Phase-3 path)
+    float stripPeakPre[kMaxStrips][2] = {};  // per strip: input peak over the 4096-sample window, L/R
+    float stripPeakPost[kMaxStrips][2] = {}; // … output peak (post fader/mute/pan)
+    float stripRmsPre[kMaxStrips] = {};      // … input RMS over the window (both channels pooled)
+    float stripRmsPost[kMaxStrips] = {};
+    float stripGain[kMaxStrips] = {}; // … the smoothed fader × mute gain at the block end (1 = unity)
 };
 static_assert(std::is_trivially_copyable_v<StateSnapshot>, "StateSnapshot must be trivially copyable");
 

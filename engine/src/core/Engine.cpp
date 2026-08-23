@@ -70,6 +70,9 @@ void Engine::prepare(const Config& config)
     clockOut_.prepare(config_.sampleRate);
     metro_.prepare(config_.sampleRate);
     arp_.prepare(config_.sampleRate);
+    mixer_.prepare(config_.sampleRate, config_.maxBlockSize);
+    scratchL_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
+    scratchR_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     for (auto& t : liveHitSample_)
         t = -1.0e12;
     for (auto& t : pendingTrig_)
@@ -90,6 +93,7 @@ void Engine::release()
     clockOut_.reset();
     metro_.reset();
     arp_.reset();
+    mixer_.reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;
@@ -332,6 +336,48 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::setMidiRouting:
         midiNotesToPads_ = c.payload.midi.flag != 0;
         break;
+    // ---- the mixer (Phase 4.1) ----
+    case CommandType::mixerSetStrip:
+        mixer_.setStripKind(c.payload.strip.strip,
+                            static_cast<StripKind>(c.payload.strip.kind > 4 ? 0 : c.payload.strip.kind));
+        break;
+    case CommandType::mixerSetFader:
+        mixer_.setFader(c.payload.strip.strip, c.payload.strip.value);
+        break;
+    case CommandType::mixerSetPan:
+        mixer_.setPan(c.payload.strip.strip, c.payload.strip.value);
+        break;
+    case CommandType::mixerSetWidth:
+        mixer_.setWidth(c.payload.strip.strip, c.payload.strip.value);
+        break;
+    case CommandType::mixerSetMute:
+        mixer_.setMute(c.payload.strip.strip, c.payload.strip.flag != 0);
+        break;
+    case CommandType::mixerSetSolo:
+        mixer_.setSolo(c.payload.strip.strip, c.payload.strip.flag != 0);
+        break;
+    case CommandType::mixerSetSend:
+        (void)mixer_.setSend(c.payload.strip.strip, c.payload.strip.index, c.payload.strip.value,
+                             c.payload.strip.target);
+        break;
+    case CommandType::mixerSetOutput:
+        (void)mixer_.setOutput(c.payload.strip.strip,
+                               static_cast<StripOutput>(c.payload.strip.kind > 3 ? 0 : c.payload.strip.kind),
+                               c.payload.strip.index);
+        break;
+    case CommandType::mixerSetMainOut:
+        mixer_.setMainOut(c.payload.strip.index);
+        break;
+    case CommandType::setSourceStrip:
+    {
+        const int strip =
+            c.payload.strip.target >= 0 && c.payload.strip.target < kMaxStrips ? c.payload.strip.target : -1;
+        if (c.payload.strip.kind == 0)
+            bassStrip_ = strip;
+        else if (c.payload.strip.kind == 1)
+            clickStrip_ = strip;
+        break;
+    }
     case CommandType::setMetronome:
         metro_.setEnabled(c.payload.metro.enabled != 0);
         metro_.setSound(static_cast<ClickSound>(c.payload.metro.sound > 4 ? 0 : c.payload.metro.sound));
@@ -588,6 +634,25 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.arpStep = arp_.step();
     s.arpLastPad = arp_.lastPad();
     s.arpHits = arp_.hits();
+    // the mixer (4.1)
+    s.mixerActiveMask = mixer_.activeMask();
+    s.mixerSilentMask = mixer_.silentMask();
+    s.mixerRoutesRejected = mixer_.routesRejected();
+    s.mixerOrderValid = mixer_.orderValid() ? 1u : 0u;
+    s.mixerMainOut = mixer_.mainOut();
+    s.bassStrip = bassStrip_;
+    s.clickStrip = clickStrip_;
+    for (int i = 0; i < kMaxStrips; ++i)
+    {
+        const auto& m = mixer_.meter(i);
+        s.stripPeakPre[i][0] = m.peakPre[0];
+        s.stripPeakPre[i][1] = m.peakPre[1];
+        s.stripPeakPost[i][0] = m.peakPost[0];
+        s.stripPeakPost[i][1] = m.peakPost[1];
+        s.stripRmsPre[i] = m.rmsPre;
+        s.stripRmsPost[i] = m.rmsPost;
+        s.stripGain[i] = mixer_.currentGain(i);
+    }
     snapshot_.publish(s);
 }
 
@@ -688,8 +753,28 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     }
 
     // ---- sources ----
-    sampler_.render(outputs, numOut, numSamples);
-    bass_.render(outputs[0], numOut > 1 ? outputs[1] : nullptr, numSamples, samplesProcessed_); // dry, outs 1/2
+    // the mixer (4.1): pads / drum lanes with a strip sum into the strip's 64-bit accumulator (the sampler renders
+    // them alone into a scratch first); the bass and the click follow their setSourceStrip; everything with strip −1
+    // keeps the direct path (outputs[pair], dry)
+    mixer_.clearInputs(numSamples);
+    sampler_.render(outputs, numOut, numSamples, mixer_.inputs(), kMaxStrips);
+    if (bassStrip_ >= 0 && mixer_.isActive(bassStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
+    {
+        std::fill_n(scratchL_.data(), numSamples, 0.0f);
+        std::fill_n(scratchR_.data(), numSamples, 0.0f);
+        bass_.render(scratchL_.data(), scratchR_.data(), numSamples, samplesProcessed_);
+        mixer_.addToStrip(bassStrip_, scratchL_.data(), scratchR_.data(), numSamples);
+    }
+    else
+        bass_.render(outputs[0], numOut > 1 ? outputs[1] : nullptr, numSamples, samplesProcessed_); // dry, outs 1/2
+    float clickPeak = -1.0f; // ≥ 0 = the click was rendered into its strip this block (not post-master below)
+    if (clickStrip_ >= 0 && mixer_.isActive(clickStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
+    {
+        std::fill_n(scratchL_.data(), numSamples, 0.0f);
+        std::fill_n(scratchR_.data(), numSamples, 0.0f);
+        clickPeak = metro_.process(samplesProcessed_, numSamples, scratchL_.data(), scratchR_.data());
+        mixer_.addToStrip(clickStrip_, scratchL_.data(), scratchR_.data(), numSamples);
+    }
 
     if (toneEnabled_)
     {
@@ -727,6 +812,9 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
             out[i] += click[calibClickPos_] * 0.5f;
     }
 
+    // ---- the mixer: strips → sends → buses → master → the hardware outs (4.1) ----
+    mixer_.process(outputs, numOut, numSamples);
+
     // ---- master gain (one-block ramp) + peaks ----
     const float gainStart = masterGainCurrent_;
     const float gainEnd = masterGainTarget_;
@@ -755,7 +843,9 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     masterGainCurrent_ = gainEnd;
 
     // the metronome + count-in clicks (3.6): synthesised at their samples, added AFTER the master gain — the TS clicks
-    // went straight to the destination past the mixer; Phase 4 routes them to the mixer's CLICK bus
+    // went straight to the destination past the mixer. With a CLICK strip (setSourceStrip 1, Phase 4.1) they were
+    // rendered into that strip above instead and ride the mix
+    if (clickPeak < 0.0f)
     {
         float* l = numOut > 0 ? outputs[0] : nullptr;
         float* r = numOut > 1 ? outputs[1] : nullptr;

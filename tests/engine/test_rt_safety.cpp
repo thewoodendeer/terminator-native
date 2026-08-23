@@ -7,7 +7,9 @@
 #include <vector>
 
 #include "AllocationCounter.h"
+#include "TestSamples.h"
 #include "terminator/core/Engine.h"
+#include "terminator/core/Mixer.h"
 
 using namespace terminator;
 
@@ -190,6 +192,59 @@ TEST_CASE("RT: the metronome + count-in + arp on the callback allocate nothing (
                 }) == 0);
     REQUIRE(e.snapshot().metronomeClicks > 4);
     REQUIRE(e.snapshot().arpHits > 4);
+}
+
+TEST_CASE("RT: the mixer on the callback allocates nothing (strips, routing, sends, pads + the bass + the click "
+          "through strips, meters)",
+          "[rt]")
+{
+    Engine e;
+    e.prepare({48000.0, 512, 4});
+    std::vector<float> o0(512), o1(512), o2(512), o3(512);
+    float* outs[4] = {o0.data(), o1.data(), o2.data(), o3.data()};
+    auto s = test::dc(48000, 0.5f);
+    PadParams p;
+    p.pad = 0;
+    p.attackSec = 0.0f;
+    p.strip = 1;
+    e.commands().push(Command::setPadParams(p));
+    e.commands().push(Command::setPadSample(0, s.get()));
+    for (int i = 1; i <= 8; ++i)
+        e.commands().push(Command::mixerSetStrip(i, static_cast<std::uint8_t>(i <= 4   ? StripKind::channel
+                                                                              : i <= 6 ? StripKind::send
+                                                                                       : StripKind::bus)));
+    e.commands().push(Command::mixerSetOutput(1, static_cast<std::uint8_t>(StripOutput::strip), 7));
+    e.commands().push(Command::mixerSetOutput(7, static_cast<std::uint8_t>(StripOutput::strip), 8));
+    e.commands().push(Command::mixerSetSend(1, 0, -6.0f, 5));
+    e.commands().push(Command::mixerSetSend(2, 1, 0.0f, 6));
+    e.commands().push(Command::mixerSetOutput(3, static_cast<std::uint8_t>(StripOutput::hardware), 1));
+    e.commands().push(Command::mixerSetOutput(8, static_cast<std::uint8_t>(StripOutput::strip), 1)); // a loop (refused)
+    e.commands().push(Command::mixerSetMainOut(0));
+    e.commands().push(Command::setSourceStrip(0, 2));
+    e.commands().push(Command::setSourceStrip(1, 3));
+    e.commands().push(Command::bassNote(true, 40, 1.0f));
+    e.commands().push(Command::seqSetBpm(240.0));
+    e.commands().push(Command::countIn(4));
+    e.commands().push(Command::triggerPad(0, 1.0f));
+    REQUIRE(test::allocationsDuring(
+                [&]
+                {
+                    for (int i = 0; i < 50; ++i)
+                    {
+                        if (i == 10)
+                        {
+                            e.commands().push(Command::mixerSetFader(1, -12.0f));
+                            e.commands().push(Command::mixerSetPan(1, 0.5f));
+                            e.commands().push(Command::mixerSetWidth(7, 0.5f));
+                            e.commands().push(Command::mixerSetMute(2, true));
+                            e.commands().push(Command::mixerSetSolo(3, true));
+                            e.commands().push(Command::mixerSetStrip(4, static_cast<std::uint8_t>(StripKind::off)));
+                        }
+                        e.process(outs, 4, 512);
+                    }
+                }) == 0);
+    REQUIRE(e.snapshot().mixerRoutesRejected == 1u);
+    REQUIRE(e.snapshot().mixerOrderValid == 1u);
 }
 
 TEST_CASE("RT: process before prepare and after release allocates nothing", "[rt]")

@@ -3,6 +3,7 @@
 // Everything here is RT: no allocation after construction, no locks. Parameters arrive through Commands
 // (Engine::apply), sample memory through SampleBuffer pointers owned elsewhere.
 #include <cstdint>
+#include <vector>
 
 #include "terminator/core/Command.h"
 #include "terminator/core/RtAssert.h"
@@ -69,6 +70,7 @@ struct Voice
     std::int32_t fadeOffset = -1;    // ≥0: the stop/choke fade begins at this sample of the current block …
     float fadeSeconds = 0.003f;      // … and lasts this long (the cutter's chokeFadeSec: pads 3 ms, drum lanes 4 ms)
     std::uint8_t outputPair = 0;
+    std::int16_t strip = -1; // the mixer strip this voice sums into (Phase 4.1); −1 = outputs[outputPair·2..]
     std::uint8_t reverse = 0;
     PadMode mode = PadMode::oneShot;
     Interpolation interpolation = Interpolation::hermite;
@@ -148,8 +150,11 @@ class Sampler
     void stopPadRange(std::uint16_t first, std::uint16_t count) noexcept TERMINATOR_NONBLOCKING;
 
     /// Adds every active voice into outputs[0..numOutputChannels). Outputs must already hold whatever the
-    /// caller wants to sum with (the engine clears/fills them first).
-    void render(float* const* outputs, int numOutputChannels, int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    /// caller wants to sum with (the engine clears/fills them first). A voice whose pad has a mixer `strip` ≥ 0 (and
+    /// < numStrips) is rendered into a float scratch and ADDED into stripInputs[2·strip] / [2·strip+1] (the mixer's
+    /// 64-bit accumulators — Mixer::inputs()) instead; the direct pads still go to outputs[outputPair·2..].
+    void render(float* const* outputs, int numOutputChannels, int numSamples, double* const* stripInputs = nullptr,
+                int numStrips = 0) noexcept TERMINATOR_NONBLOCKING;
 
     // --- read-back for the snapshot (audio thread) ---
     std::uint32_t activeVoices() const noexcept { return activeVoices_; }
@@ -173,11 +178,12 @@ class Sampler
     /// documented "same instant = layer" rule — the lane's own retrigger still cuts); sub-hits are never cut here.
     void chokeGroupOf(std::uint16_t pad, std::int16_t group, const Voice* keep, std::int32_t offsetInBlock,
                       float fadeSec) noexcept TERMINATOR_NONBLOCKING;
-    void renderVoice(Voice& v, float* const* outputs, int numOutputChannels,
-                     int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    void renderVoice(Voice& v, float* l, float* r, int numSamples) noexcept TERMINATOR_NONBLOCKING;
 
     double sampleRate_ = 48000.0;
     int numOutputChannels_ = 2;
+    int maxBlock_ = 0;
+    std::vector<float> scratchL_, scratchR_; // one voice's block on its way into a mixer strip (prepare-sized)
     Pad pads_[kMaxPads]{};
     Voice voices_[kMaxVoices]{};
     std::uint32_t nextSerial_ = 1;

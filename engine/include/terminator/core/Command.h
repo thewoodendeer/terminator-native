@@ -86,6 +86,22 @@ enum class CommandType : std::uint32_t
     arpHold,       // arp.pad + arp.velocity + arp.atSample (0 = the next block) — hold: the arp steps from there; with
                    // the arp off it is a plain trigger
     arpRelease,    // arp.pad — release: stops the arp when it is the held pad (−1 = whatever is held)
+    // ---- the mixer (Phase 4.1, core/Mixer.h) ----
+    mixerSetStrip,   // strip.strip + strip.kind (StripKind: 0 off · 1 channel · 2 send · 3 bus) — activate / retype /
+                     // deactivate a strip (strip 0 = the master, always)
+    mixerSetFader,   // strip.strip + strip.value — dB, −60 (= −∞) .. +6 (τ 8 ms)
+    mixerSetPan,     // strip.strip + strip.value — −1..1 (τ 8 ms); the master has no pan
+    mixerSetWidth,   // strip.strip + strip.value — M/S width 0 (mono) .. 1 (as is) .. 2
+    mixerSetMute,    // strip.strip + strip.flag
+    mixerSetSolo,    // strip.strip + strip.flag — the solo law: silent = mute || (anySolo && !solo)
+    mixerSetSend,    // strip.strip + strip.index (send 0..3) + strip.value (dB) + strip.target (strip, −1 = unwired);
+                     // a target that closes a loop / the strip itself / the master is refused (snapshot
+                     // mixerRoutesRejected++), the level still applies
+    mixerSetOutput,  // strip.strip + strip.kind (StripOutput: 0 master · 1 strip · 2 hardware pair · 3 none) +
+                     // strip.index (the strip / the pair) — a loop / itself is refused
+    mixerSetMainOut, // strip.index — the master's hardware pair (0 = outs 1/2)
+    setSourceStrip,  // strip.kind = the source (0 bass · 1 click) + strip.target = its strip (−1 = the direct
+                     // Phase-3 path: bass dry into outs 1/2, the click post master gain)
 };
 
 enum class PadMode : std::uint8_t
@@ -124,8 +140,10 @@ struct PadParams
                       // exactly 0 = NO panner (a mono source plays on both outs at unity — the TS inserts the node only
                       // when pan ≠ 0). A drum hit's PAN graph overrides it per hit (Sampler::triggerEx)
     float chokeFadeSec =
-        0.003f; // the fade a hit of THIS pad applies when it cuts (retrigger / mute group) and the
-                // fade stopPad gives its voices: pads 3 ms (kStopFadeSec), drum lanes 4 ms (DRUM_CHOKE_S)
+        0.003f;              // the fade a hit of THIS pad applies when it cuts (retrigger / mute group) and the
+                             // fade stopPad gives its voices: pads 3 ms (kStopFadeSec), drum lanes 4 ms (DRUM_CHOKE_S)
+    std::int16_t strip = -1; // the MIXER strip the pad's voices sum into (Phase 4.1); −1 = the direct path (the
+                             // hardware pair `outputPair`, no mixer — the Phase-1..3 behaviour and the offline tests)
 };
 
 struct Command
@@ -255,6 +273,16 @@ struct Command
             std::uint8_t down;      // setArp: direction DOWN (else UP)
             std::uint8_t random;    // setArp
         } arp;
+
+        struct Strip
+        {
+            float value;         // dB / pan / width
+            std::int16_t strip;  // the strip 0..kMaxStrips−1
+            std::int16_t index;  // send index / hardware pair / output strip
+            std::int16_t target; // a send's destination strip / a source's strip (−1 = none)
+            std::uint8_t kind;   // StripKind / StripOutput / the source id
+            std::uint8_t flag;   // mute / solo on
+        } strip;
 
         struct Calibration
         {
@@ -689,6 +717,84 @@ struct Command
     {
         Command c = arpCmd(CommandType::arpRelease);
         c.payload.arp.pad = pad;
+        return c;
+    }
+    // ---- the mixer (Phase 4.1) ----
+    static Command stripCmd(CommandType t, int strip) noexcept
+    {
+        Command c;
+        c.type = t;
+        c.payload.strip.value = 0.0f;
+        c.payload.strip.strip = static_cast<std::int16_t>(strip);
+        c.payload.strip.index = 0;
+        c.payload.strip.target = -1;
+        c.payload.strip.kind = 0;
+        c.payload.strip.flag = 0;
+        return c;
+    }
+    static Command mixerSetStrip(int strip, std::uint8_t kind) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetStrip, strip);
+        c.payload.strip.kind = kind;
+        return c;
+    }
+    static Command mixerSetFader(int strip, float db) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetFader, strip);
+        c.payload.strip.value = db;
+        return c;
+    }
+    static Command mixerSetPan(int strip, float pan) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetPan, strip);
+        c.payload.strip.value = pan;
+        return c;
+    }
+    static Command mixerSetWidth(int strip, float width) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetWidth, strip);
+        c.payload.strip.value = width;
+        return c;
+    }
+    static Command mixerSetMute(int strip, bool on) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetMute, strip);
+        c.payload.strip.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command mixerSetSolo(int strip, bool on) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetSolo, strip);
+        c.payload.strip.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command mixerSetSend(int strip, int send, float db, int target) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetSend, strip);
+        c.payload.strip.index = static_cast<std::int16_t>(send);
+        c.payload.strip.value = db;
+        c.payload.strip.target = static_cast<std::int16_t>(target);
+        return c;
+    }
+    static Command mixerSetOutput(int strip, std::uint8_t outputKind, int index) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetOutput, strip);
+        c.payload.strip.kind = outputKind;
+        c.payload.strip.index = static_cast<std::int16_t>(index);
+        return c;
+    }
+    static Command mixerSetMainOut(int pair) noexcept
+    {
+        Command c = stripCmd(CommandType::mixerSetMainOut, 0);
+        c.payload.strip.index = static_cast<std::int16_t>(pair);
+        return c;
+    }
+    /// source 0 = the bass synth, 1 = the metronome (click + count-in); strip −1 = the direct path.
+    static Command setSourceStrip(std::uint8_t source, int strip) noexcept
+    {
+        Command c = stripCmd(CommandType::setSourceStrip, 0);
+        c.payload.strip.kind = source;
+        c.payload.strip.target = static_cast<std::int16_t>(strip);
         return c;
     }
     static Command startCalibration(std::uint16_t outputChannel, std::uint16_t inputChannel, std::uint32_t recordFrames,
