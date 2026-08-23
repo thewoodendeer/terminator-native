@@ -119,6 +119,10 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `fxAdd` (+ every param, immediate), the master = strip 0; `native/nativeEngineShadow.ts` — probe part 8 adds the
   EQ round trip (`mixerFxAdded/Removed/Rejected`); the self-tests' 50 ms polls race the next native snapshot
   (`tick()` — a hidden WebView's DOM timers crawl), per-part `timing` + the live `stats.stage`, part 7 retries once.
+- **Every page device is real natively (4.2b, 2026-08-23):** `native/nativeMixerShadow.ts` — `fxValue()`: the SC COMP's
+  SOURCE channel NAME → the key strip's INDEX (−1 = NONE) on `fxAdd` and `fxParam` (the shell refuses a string on a
+  numeric param); `native/nativeEngineShadow.ts` — probe part 8 adds the heavy round trip (`mixerFxHeavyAdded/Removed`:
+  an SC COMP keyed from 'kick', a DELAY, a REVERB; `mixerFxCmdErrors` 0).
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

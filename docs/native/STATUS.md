@@ -1062,21 +1062,127 @@ RETRY (a late clock re-anchor on the throttled page once booked a hit off the gr
 sample-exact landing is gated in C++, the probe checks the PATH). After the fixes: 6 consecutive probe runs green,
 the whole self-test 8.9–9.1 s every time.
 
-### Next session (in order) — updated at the end of the tenth session
-0. Push (Victor) → `gh run list` → the 4 jobs (the universal probe now also asserts `mixerPageOk` incl. the insert
-   round trip; the smoke cap is 150 s).
-1. **Phase 4.2b** — the remaining page devices as `Effect`s (the chain, the pool, the bridge and the page mirror are
-   DONE in 4.2a — each port = a class in `core/fx/`, a row in the type table with its FX_REGISTRY params, a
-   `capacityOf`, a `make`, a `[fx]` gate against dossier-mixer-fx.md §2): delay (damped feedback LP 7.5 k / HP 90, R =
-   1.02·TIME, PINGPONG), reverb (the seeded LCG IR + onset ramp + √-frac absorption + partitioned convolution, the 60 ms
-   A/B swap), comp (the Blink DynamicsCompressor kernel — its ~6 ms look-ahead = `latencySamples`), sccomp (the sc-comp
-   worklet + the sidechain tap from another strip's INPUT), clip / wave / sat / mbsat (4× with real polyphase halfbands,
-   `latencySamples` = the oversampler's group delay; MB SAT's LR4 split + AP dry leg), phaser / flanger / vinyl (their
-   LFOs + feedback), the console stage per strip (FNV-1a seeds by NAME → `mixerSetStrip` needs the name's seed), the
-   legacy chopper master chain; then 4.2c the B4 premium devices. Then 4.3 meters on the bridge (`levels(name)` is
-   ready), 4.4 PDC + offline parity (the chain latencies are plumbed), 4.5 exports.
-2. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
+## Phase 4 — 4.2b DONE (EVERY PAGE DEVICE IS REAL NATIVELY: THE ELEVEN HEAVY PORTS), 2026-08-23 eleventh session
+**Engine — the shared DSP (`core/fx/FxDsp.h/.cpp`):** `Halfband2x` / `Oversampler4x` = the WaveShaper's `'4x'` as two
+polyphase Kaiser-sinc halfband stages (stage 1 center 47 / 95 taps β 8, stage 2 center 16 = a 31-tap halfband padded by
+one zero so the two decimators read the right phase; the cascade's group delay is a WHOLE base sample = **55**,
+reported by `latencySamples()` and asserted by the gate — Blink's was measured at 192, ours is leaner; the PDC plan
+reads the number); `DelayLine` (the DelayNode's linear interpolation; `readAt(d)` before the write for feedback loops);
+the OscillatorNode sine / triangle from phase 0; `Fft` (radix-2 complex, double). **`core/fx/ShaperFx.h`:** CLIP / WAVE
+/ SAT / MB SAT — the page's curves evaluated analytically (the curve DOMAIN clamps like the WaveShaper's: anything past
+±1 takes the endpoint; CLIP tops out at 0.9886 even at AMT 0; SAT's Doidic curve has its +3.5 dB small-signal gain at
+DRIVE 0 — the page's), at 4× through `OversampledShaper`; MB SAT = LR4 crossovers (Butterworth Q −3.0103 dB in the
+Web Audio LP/HP-in-dB convention, AP(HI_X) on the low band), per-band tanh(a·X)/a on X = clamp(band, ±4), makeup
+√(1+4d), and a phase- AND latency-matched dry leg (AP·AP → ±4 → the oversampler's delay) so it blends WET ITSELF
+(`wetParam = −1` in the table: the chain runs it fully wet). A drive change glides τ 10 ms (the page swaps the curve
+instantly). **`core/fx/ModFx.h`:** DELAY (per-sample loops, damping LP 7.5 k Q 0.5 dB → HP 90 Q 0.5 dB on the
+feedback, R = min(2 s, 1.02·TIME), PINGPONG = the mono sum → L → R → feedback → L), PHASER (n allpasses Q 0.6 spread
+±½ oct, the sine LFO's linear Hz offset capped at lowest − 40, ONE-sample feedback, coefficients every 16 samples),
+FLANGER (triangle LFO, DELAY ± 0.9·DEPTH·DELAY never under one sample, feedback through LP 9 k Q 0.5 dB), VINYL
+(Doidic at 4× → LP Q 0.3 dB 20 k − 1.2 k·AGE → HP 20 → wow 4 ms ± 0.3 ms·WOW at 0.1 + 0.07·WOW Hz → flutter 1 ms ±
+0.05 ms·FLUTTER at 3 + 0.5·FLUTTER Hz → peaking 200 Hz Q 0.7 +2 + 0.4·WARMTH; latency round(0.005·sr) + 55 = 295 at
+48 k). **`core/fx/DynamicsFx.h`:** COMP = `BlinkCompressorKernel`, a port of Chromium's DynamicsCompressorKernel in
+float (the knee curve + the 15-step k solver, the 4th-order adaptive-release polynomial, the 2.5 ms detector release,
+the sin(π/2·g) warp, the perceptual auto-makeup (1/saturate(1))^0.6, the metering with its 325 ms release, the
+`int(0.006·sr)`-frame look-ahead = `latencySamples()` = 288 at 48 k / 264 at 44.1 k, divisions of 32 frames with a
+short last division on odd blocks) + the STYLE presets (picking one sets the five knobs AND the blend; NY-PARALLEL =
+50 % dry through a look-ahead-matched dry leg, blended inside the device — `wetParam = −1`); SC COMP = the sc-comp
+worklet per sample (rectified key peak → soft knee 6 dB in dB → attack / hold / release on the GR → gain × makeup,
+k-rate params per block), its key through KEYHP (Butterworth) — **the sidechain hooks**: `Effect::sidechainSource()`
+/ `setSidechainKey(l, r)`; the Mixer keeps `keyMask_` (rebuilt on add / remove / clear / SOURCE change / strip off),
+copies a keyed strip's input aside at the top of `processStrip` (BEFORE its own inserts mutate it in place), and hands
+each SC COMP its key (the copy once the source ran this block — or is this strip; the live accumulator otherwise; a dead
+source = silence); SOURCE = the key strip's INDEX (−1 = NONE). **`core/fx/ReverbFx.h`:** the page's generator (the
+seeded LCG 1664525/1013904223 from 0x9e3779b9, one stream across both channels, the 1-pole LP along √frac from
+14 k − 6 k·room to 1.8 k, the onset ramp 2 + 30·room ms, exp(−6.9078 t/DECAY), Float32 like the AudioBuffer) +
+Blink's `normalize = true` (scale = 10^(−58/20) / rms · 44100 / sr, exactly) + PREDELAY as a DelayNode; the
+convolution = a ZERO-LATENCY non-uniform partitioned scheme: a 128-tap direct head, 128-sample partitions to lag 512,
+512-sample partitions to lag 8192, 4096-sample partitions for the rest with ONE partition of lead (their MAC is sliced
+across the 32 tier-1 ticks before the result is due — a 10 s tail never spikes the callback); the IR is generated AND
+its partitions transformed INCREMENTALLY on the audio thread (a bounded budget per block, ×4 while nothing is heard
+yet; every buffer pre-sized for DECAY 10 s at the rate, the big ones uninitialised + validity counters so the RSS only
+grows when a long tail is used: ~27 MB per instance at 48 k, 6 in the pool); a finished IR waits for a tier-3 boundary
+to ARM (its first big-tier job runs through that window), is PROMOTED at the next (so its long tail is complete from
+its first heard sample) and crossfades in 60 ms; a ROOM / DECAY move under a running build restarts it (the page's
+60 ms debounce, in effect). The `FxPool` caps: utility/eq/filter 64, the light devices 32, the delay-line devices 16,
+reverb 6; an UNKNOWN type still gets a pass-through placeholder (no page type is unported now).
+**Tests — `tests/engine/test_fx_devices.cpp` (12 cases, 599 assertions with the 4.2a ones):** the type table (every
+page device, keys / defaults / options / which WET the chain blends); the oversampler (an impulse lands at EXACTLY 55 =
+`latencySamples()`, unity DC gain, the passband flat ±0.02 dB at 1 k / ±0.1 at 10 k / ±0.5 at 16 k, a WAVE at DRIVE 30
+on a 14 kHz sine aliases at 6 kHz 70 dB below the naive curve (−81 vs −9.4 dB)); CLIP / WAVE / SAT (the curve values,
+the domain clamp, the small-signal gains 1/tanh(1) and 1.5 through the devices); MB SAT (0 drive sums flat ±0.05 dB at
+100 / 1 k / 10 k, WET 50 still flat — the matched dry leg — LOW 100 lifts 100 Hz by 5–7 dB and leaves 10 kHz, HIGH the
+mirror); DELAY (a left impulse echoes at sample 4800, the R line silent in dual mono, feedback's second echo damped
+between 0.2 and 0.5, ping-pong 0.5 at 4800 then 0.5 at 9696); PHASER (the cascade is unity ±0.05 dB at 200 / 1 k /
+5 k; 50/50 with the dry sweeps to a notch < −10 dB and never over 0 dB; 90 % feedback bounded); FLANGER (DEPTH 0 = a
+pure 144-sample delay, feedback's second pass damped, DEPTH 100 at the triangle's peak = 274 ± 5 samples); VINYL
+(latency 295, AGE 10 loses > 6 dB at 15 k, WARMTH 10 vs 0 = +4 dB at 200 Hz); COMP (latency 288; STYLE OFF passes an
+impulse at unity 288 late AFTER the kernel's start-up — Blink resets its detector average to 0 so a FRESH compressor
+dips its gain for ~100 ms then recovers, the page's node does the same, the gate checks both; PUNCHY lifts −30 dBFS
+by > 4 dB and compresses −6 dBFS by > 3 dB more; NY-PARALLEL's impulse comes out ONCE at 288 (the dry leg matched);
+20:1 compresses > 5 dB more than 1.5:1 measured as the −30-vs-−6 dBFS gain difference — Blink's auto-makeup nearly
+cancels the ratio's effect on the loud signal alone); SC COMP through the Mixer (keyed from strip 2's input: > 15 dB of
+ducking with the key, a UTILITY −20 dB INSERT on the key strip changes nothing — the key is pre-insert — SOURCE NONE
+= clean pass); REVERB (the generator's length / onset / determinism / decorrelation / tail, the normalisation formula,
+the device after its first build: the impulse response IS scale · ir within 1e-6 of peak in the head and 1e-5 across
+tier 1 / tier 2 / tier 3 (lags 8192+ come only through the sliced big tier) and silence past the end, PREDELAY 10 ms
+shifts it by 480, a DECAY move rebuilds / arms / promotes / crossfades to the new length); the chain (Σ latency 55 +
+288 + 295, minus a bypassed COMP; a DELAY's WET 0.3 read by the chain). `test_rt_safety`: the eleven heavy devices
+added (the SC COMP keyed), params moved (a REVERB DECAY rebuild, MB SAT, a COMP style), 50 blocks = 0 allocations.
+**Shell + page:** `nativeMixerShadow.fxValue()` maps the SC COMP's SOURCE channel NAME to the key strip's INDEX (−1 =
+NONE) on `fxAdd` / `fxParam` (the shell refuses a string on a numeric param, so a leak would surface as a command
+error); probe part 8 adds the heavy round trip (an SC COMP keyed from 'kick', a DELAY, a REVERB — `mixerFxHeavyAdded`
+/ `mixerFxHeavyRemoved`, `mixerFxCmdErrors` 0) into `mixerPageOk`.
+**Found on the way (fixed):** (1) `BlinkCompressorKernel::reset()` kept the previous `lastPreDelayFrames_`, so a
+RE-ACQUIRED COMP ran a 256-frame look-ahead while reporting 288 — the gate caught it (NY's dry leg landed 32 samples
+off); reset now returns the kernel to its constructed state. (2) **Windows CI for the 4.2a tip (run 32620283926) =
+16 tests died of STACK OVERFLOW on MSVC** — `sizeof(Engine)` had grown to 502 KB with the 4.1 Mixer's 64 strips of
+meter rings (177 KB) and the render-comparison gates hold two Engines on a 1 MB Windows stack; the Mixer now lives
+on the heap inside the Engine (325 KB again, the 3.7 size that passed) and `Engine.cpp` carries a
+`static_assert(sizeof(Engine) <= 384 KB)` so nobody grows it back silently. (3) Non-ASCII TEST_CASE names in
+`test_fx.cpp` (4.2a) and the new file — the STATUS gotcha (the Windows ctest discovery mangles them) — ASCII now.
+**Page quirks found while porting (flagged, NOT carried natively — the native device does what the page's own comment
+says it meant; fix them in the Electron app or accept the difference):** (a) DELAY: each DelayNode feeds a
+ChannelMerger INPUT, and merger inputs downmix to mono — the page's "independent L/R" mode actually mono-sums every
+repeat per side; native dual-mono is truly dual mono (ping-pong matches the page exactly, it is mono-summed by
+design). (b) PHASER: the feedback goes through a one-render-quantum DelayNode (128 frames — Web Audio's cycle rule),
+a 2.9 ms comb in the loop at FEEDBACK 30; native feedback is one sample. (c) FLANGER: a DelayNode inside a cycle is
+clamped to ≥ 128 frames, so the page never sweeps below 2.9 ms (DELAY < 2.9 ms and the DEPTH trough are clamped);
+native sweeps as labelled. (d) COMP: Blink's start-up dip (above) IS carried (a Blink trait, kept for parity —
+a one-line `detectorAverage_ = 1` in reset would remove it; Victor's call).
+**Gates (4.2b):** mac-debug 0 warnings + ctest **219/219** (207 + 12 `[fx]`) · RTSan **220/220** · universal
+(0 warnings) lipo `x86_64 arm64` + ctest 219/219 · ui gate (tsc baseline 5, 0 new) · probe OK on the debug AND the
+universal binary (`mixerPageOk` incl. the heavy round trip, the self-test 9.0–9.1 s).
+**Honest boundary after 4.2b:** every page insert device is native (the chain, the pool, the bridge, the page mirror,
+eleven heavy ports + six light ones). NOT in yet: the CONSOLE stage per strip (`ConsoleStage` / the `console-stage`
+worklet — needs the strip NAME's FNV-1a seed → a `mixerSetStrip` seed field) and the legacy chopper master chain
+(Filter / EQ3 / Compressor / Delay / Reverb / Clipper … the mobile path) → 4.2c with the B4 premium devices; the SC
+COMP's GR meter and the COMP's `reduction` are computed (`gainReductionDb()`) but not on the bridge (4.3 meters); gain
+match not ported; PDC (the chain latencies are plumbed and exact) is 4.4; the reverb's first IR after an insert lands
+in ~0.3 s and a ROOM / DECAY move in ~0.4 s + ≤ 170 ms (the page: 60 ms debounce + a synchronous build) — acceptable
+for a knob, could be faster with a worker; FX coefficient updates are per block while gliding (exact at rest), the
+PHASER's every 16 samples.
+**Victor's pass (4.2b):** on the desktop mixer: CLIP / WAVE / SAT / MB SAT drive a chop (no fizz on hats = the 4×),
+DELAY (dual mono is truly stereo now — a panned source echoes on its side; PING-PONG bounces), PHASER (tighter
+than the web — the one-sample feedback), FLANGER (sweeps all the way down now), VINYL/TAPE, COMP (styles; NY-PARALLEL
+blends clean — no comb), SC COMP (kick on SOURCE ducks the 808 / pad; the source's own fader / FX do not change the
+ducking), REVERB (ROOM / DECAY / PRE-DLY; a DECAY move crossfades with no click, ~half a second later). What you
+HEAR is the native device in every case; bypass is clean; the master's chain too.
 
+### Next session (in order) — updated at the end of the eleventh session
+0. Push (Victor) → `gh run list` → the 4 jobs (Windows: the stack fix + the ASCII names; the universal probe asserts
+   `mixerPageOk` incl. the heavy round trip; the smoke cap is 150 s).
+1. **Phase 4.2c** — the CONSOLE stage per strip (`ConsoleStage` / `console-stage` worklet: FNV-1a seed by strip NAME →
+   mulberry32 → six tolerances; a `mixerSetStrip` seed field or a `mixerSetConsole {strip, seed, flavour, amount}`
+   verb; the FLAVOURS table in dossier-mixer-fx.md §1.6; gate = the `scripts/console.test.mts` numbers), the legacy
+   chopper master chain (§2.2 — the mobile path), then the B4 premium devices (TERMINATOR-NATIVE-PLAN.md B4).
+2. 4.3 meters on the bridge (`levels(name)` is ready; add the SC COMP / COMP GR), 4.4 PDC + offline parity (the chain
+   latencies are plumbed and exact: 55 / 288 / 295), 4.5 exports.
+3. Decide the flagged page quirks (STATUS "4.2b DONE — page quirks"): fix the Electron DELAY merger downmix / PHASER
+   quantum feedback / FLANGER cycle clamp to match the native (recommended), and whether COMP keeps Blink's start-up dip.
+4. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
+
+### Next session (in order) — updated at the end of the tenth session (superseded — kept for the record)
 ### Next session (in order) — updated at the end of the ninth session (superseded — kept for the record)
 0. `gh run list` — CI for the 3.6 + 3.7 commits (4 jobs; the universal probe now also asserts `metroPageOk` +
    `liveRecOk`).
