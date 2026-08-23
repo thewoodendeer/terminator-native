@@ -618,6 +618,9 @@ void WebShell::closePreferences()
         prefsWindow_->setVisible(false);
     if (browser_ == nullptr)
         return;
+    // Bring the APPLICATION forward first: on macOS toFront()/grabKeyboardFocus() do nothing at all while Terminator
+    // is not the frontmost app, which is why closing Preferences still needed a click on the main window.
+    juce::Process::makeForegroundProcess();
     // Make the main window key again and put the focus back inside it…
     if (auto* top = browser_->getTopLevelComponent())
         top->toFront(true);

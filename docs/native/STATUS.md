@@ -1471,8 +1471,11 @@ stale Terminator holds the single-instance lock and the next launch exits 0 in 0
    quantum feedback / FLANGER cycle clamp to match the native (recommended), and whether COMP keeps Blink's start-up dip.
 4. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
 5. The popup's spectrum on the bridge (see "4.3 DONE — honest boundary").
-6. BUG E's remaining one-liner: `juce::Process::makeForegroundProcess()` in `WebShell::closePreferences()` before
-   `toFront(true)` — he deprioritised it; do it, let him confirm, do not spend a session on it.
+6. BUG E's remaining piece is IN (`juce::Process::makeForegroundProcess()` first thing in
+   `WebShell::closePreferences()` — on macOS `toFront()`/`grabKeyboardFocus()` are no-ops while the app is not
+   frontmost, which is exactly what he hit). Never headlessly testable: **ask him to confirm** that changing a
+   setting, closing Preferences and typing now triggers pads with no click on the main window. If it still needs a
+   click, the next step is making the Preferences window a child/owned window of the main one.
 
 ### Next session (in order) — updated at the end of the eleventh session (superseded — kept for the record)
 -1. **BUG B above (the device-change resync)** — it silently eats his FX chains; do it before 4.4.
