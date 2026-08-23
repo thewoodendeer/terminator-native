@@ -41,13 +41,13 @@ headless smoke mode (see tools/ci/probe-app.sh) — the probe also reports `uiMo
 | `setTestTone` | `enabled`, `frequencyHz` (440), `amplitude` 0..1 (0.25), `outputPair` (0) | sine on outs 2p+1/2p+2 |
 | `transportPlay` / `transportStop` | — | playhead counter |
 | `panic` | — | stop + 3 ms fade on every voice, tone off |
-| `triggerPad` | `pad`, `velocity` 0..1 | starts a voice at the next block (one-block latency; MIDI keeps intra-block offsets) |
-| `releasePad` | `pad` | note-off (gate pads release over max(5 ms, release); one-shots ignore) |
+| `triggerPad` | `pad`, `velocity` 0..1, `atSample`? (an ENGINE sample position — the page's `NativeClock` maps a ctx time to it) | starts a voice at the next block (one-block latency; MIDI keeps intra-block offsets); with `atSample` it fires sample-exact at that position — inside the current block at its offset, past it the engine BOOKS it (a 64-slot RT ring, `Engine::bookTrigger`) and fires it in the block that contains it (Phase 3.2: quantized live-record hits, "quantize what I hear" with no timer jitter). Every live trigger (this, MIDI) also stamps the pad's `liveHitSample` for the chop sequencer's one-owner rule |
+| `releasePad` | `pad`, `atSample`? | note-off (gate pads release over max(5 ms, release); one-shots ignore); `atSample` books it like `triggerPad` |
 | `stopPad` | `pad` | 3 ms fade on that pad's voices |
 | `setNoteMap` | `note` 0..127, `pad` (−1 = unmapped) | MIDI note → pad table (default note−36) |
 | `setPadParams` | `pad`, `pitch` ±48 (pad PITCH ±24 + its source's PITCH ±24, summed by the UI), `fine` ±50, `attack` 0..0.5, `release` 0..0.5, `fadeOut` (one-shot/gate: linear to silence over the LAST fadeOut seconds of the region, buffer time; LOOP pads ignore it — their fades are in the render), `gain` 0..4, `outputPair`, `mode` oneshot|gate|loop, `gate` bool (NOTE ON: note-off ends the voice in ANY mode — a gated LOOP loops while held; `mode: gate` implies it), `reverse`, `chokeGroup` (−1 own pad · −2 poly · ≥0 group), `interpolation` hermite|linear | RT pad params |
 | `setPadSample` | `pad`, `key` (a `terminatorSamples` key; "" / missing = clear), `startSec`, `endSec` (≤ 0 = to the end) — seconds of THAT buffer | binds the pad to a region of an uploaded/loaded buffer (`SampleRegistry` → `Command::setPadSample`); clearing also drops the pad's loop render |
-| `setSequence` / `queueSequence` | `index`, `bars` 1..4, `resolution` (stored steps/bar), `grid` [[pads]…] per stored step (null/[] = empty), `velGrid` [[0.05..1]…] aligned, `loop`, `swing` 0..1 | the chop sequencer on the sample clock (Phase 3.1, `core/ChopSequencer.h`): the shell builds a `SeqPattern` (grid bit masks + per-cell velocity) and hands it by pointer (a ring keeps the last 8 alive). `setSequence` = live replace (steps not fired yet read it); `queueSequence` = switch at the next step 0 |
+| `setSequence` / `queueSequence` | `index`, `bars` 1..4, `resolution` (stored steps/bar), `grid` [[pads]…] per stored step (null/[] = empty), `velGrid` [[0.05..1]…] aligned, `loop`, `swing` 0..1 | the chop sequencer on the sample clock (Phase 3.1, `core/ChopSequencer.h`): the shell builds a `SeqPattern` (grid bit masks + per-cell velocity) and hands it by pointer (a ring keeps the last 8 alive). `setSequence` = live replace (steps not fired yet read it); `queueSequence` = switch at the next step 0; `queueSequence {cancel: true}` = drop a pending switch (the UI re-selected the playing pattern; no-op when stopped). **One owner per hit** (Phase 3.2): a pattern hit whose pad was LIVE-triggered within 120 ms of it (before or after — `Engine::liveHitSample_`, stamped by `triggerPad`/MIDI) is skipped at fire time (`seqHitsSkipped` counts them) — the TS `lastLivePadHit` rule, in RT code |
 | `seqPlay` {`atSample`? 0 = next block} · `seqStop` · `seqPause` · `seqResume` · `setBpm` {`bpm` 20..300, applies at the next step} · `seqLoop` {`on`} | — | transport of the native chop sequencer; swing is applied LIVE (= export); a hit ends (3 ms fade ending AT it) at the next same-mute-group hit (choke group ≥ 0) or its own next hit (own-pad / poly), else the pattern end; pause fades the sequencer's notes and keeps the unfired hits; loop off stops after the last slot |
 | `setPadLoop` | `pad`, `key`, `startSec`, `endSec`, `fadeInSec`, `fadeOutSec`, `reverse` — or `clear: true` | the shell renders the region's crossfade loop (`render::renderPadLoop`, reverse baked in — the same code the offline renderer uses) into a fresh store buffer and attaches it (`setPadLoopBuffer`); no fades → detached (raw hard-wrap). The old render is retired through the quarantine |
 | `setPadLoopBuffer` *(engine-internal, not a JSON verb)* | `pad`, loop buffer + steady `[loopStart,loopEnd)` frames | attaches a pre-rendered crossfade loop (`loop::renderCrossfadeLoop`) so a LOOP pad plays a seamless period; the shell renders it on the loader thread when a pad's fades/region change (Phase 2.3). Null clears it → raw hard-wrap of the region |
@@ -62,7 +62,10 @@ a UI bug, never expected).
 settings.json) · `enableAll` (every channel of the current devices) · `default` (default output, no inputs) ·
 `calibrate` {`outputChannel`, `inputChannel`} → emits a 64-frame click, records 1 s, cross-correlates on the
 message thread, result arrives in the snapshot (`calibrationState` 2 + `calibrationSamples/Ms`) and in the
-Device object; stored in settings `calibration.*`.
+Device object; stored in settings `calibration.*` · `clock` → `{ ok, hostNs, clockHostNs, clockSample,
+sampleRate, prepared, outputLatencyMs }` — the page's `NativeClock` (Phase 3.2, `ui/src/renderer/native/nativeClock.ts`)
+calibrates host time ↔ `performance.now()` by round trip (best RTT wins; `hostNs` = `juce::Time::getHighResolutionTicks`
+in ns, the clock the audio callback stamps every block with) and reads the last block's host ↔ sample anchor.
 Reply: `{ ok, error?, deviceTypes[], currentType, listType, inputDevices[], outputDevices[], device }`.
 
 ### Device object
@@ -184,14 +187,20 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
 ### `terminator.snapshot` (20 Hz)
 ```json
 { "prepared": true, "sampleRate": 48000, "blockSize": 64, "outputs": 2, "inputs": 2, "playing": false,
-  "playheadSamples": 0, "blocksProcessed": 1234, "masterGain": 0.5, "testToneEnabled": false, "testToneFrequencyHz": 440,
+  "playheadSamples": 0, "blocksProcessed": 1234, "samplesProcessed": 78976, "masterGain": 0.5, "testToneEnabled": false, "testToneFrequencyHz": 440,
+  "clockHostNs": 123456789012345, "clockSample": 78464, "clockBlockSize": 512, "emitHostNs": 123456791234567,
   "peakL": 0.0, "peakR": 0.0, "outputPeaks": [0,0], "inputPeaks": [0,0], "commandsApplied": 3, "commandsDropped": 0,
   "cpuLoad": 0.01, "xruns": 0, "activeVoices": 0, "voiceStealing": 0, "padActiveMask": 0, "activePads": [], "lastTriggeredPad": -1,
   "seqPlaying": false, "seqPaused": false, "seqLoop": true, "seqStep": -1, "seqStepCount": 0, "seqPatternIndex": -1,
-  "seqStepPhase": 0, "seqBpm": 120, "seqLoopStartSample": 0, "seqHitsFired": 0,
+  "seqStepPhase": 0, "seqBpm": 120, "seqLoopStartSample": 0, "seqHitsFired": 0, "seqHitsSkipped": 0,
   "lastTriggeredPadPositionSec": 0, "calibrationState": 0, "calibrationSamples": -1, "calibrationMs": -1,
   "midiMessages": 0, "midiLagMs": 0, "midiLast": "" }
 ```
+`clockHostNs`/`clockSample`/`clockBlockSize` = the last processed block's host-time ↔ engine-sample anchor (callback
+entry); `emitHostNs` = the host time this snapshot was emitted (a one-way upper bound for the page's host ↔
+performance.now offset: receive ≥ emit). With the `clock` verb's round trip these let the page map engine samples ↔
+`performance.now()` ↔ AudioContext time at the ear (the chop-seq cursor, the drums/bass/MIDI-clock drift nudge,
+`triggerPad{atSample}`) — Phase 3.2, `NativeClock`. `seqHitsSkipped` = pattern hits the one-owner rule skipped.
 ### `terminator.devicesChanged` (Device object) — hot-plug / device error · `terminator.midiChanged` (MIDI reply) · `terminator.settingsChanged` (the `app` settings object, after a `set`)
 ### `terminator.midiNote` {note, velocity, on, channel} — every note on/off a device sent (2.5e)
 The engine already played it on the direct MidiHub → engine path (driver thread → lock-free queue → audio thread,

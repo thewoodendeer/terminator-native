@@ -450,8 +450,9 @@ streaming + RSS gate, analysis thread, peaks via resource URLs, packaged build #
 0. `gh run list` — confirm CI green for tip `9c37f7c` (mac-universal: probe incl. the real YouTube pull; Windows:
    ProvisionTools on Windows + MSVC compile of ProcessHub/readBinary + the library test with backslash paths).
 0b. Victor's passes (pads native / library / YouTube / projects with assets / controller) — see each section.
-0c. **Phase 3** per the DESIGN below — 3.1 (C++ ChopSequencer + bridge) is DONE; start with **3.2** (the page
-    binding: playSeq → seqPlay, mute the TS scheduled voices, cursor from the snapshot, the drums/bass re-anchor).
+0c. **Phase 3** per the DESIGN below — 3.1 (C++ ChopSequencer + bridge) and **3.2 (the page binding) are DONE**
+    (fifth session); next = **3.3 DrumSequencer native** (96-step EventSource + drum voices on the Sampler, pads
+    64..127 or a second bank), then 3.4 bass, 3.5 MIDI clock, 3.6 metronome/count-in, 3.7 live-record landing.
 (The older list follows for reference.)
 1. `gh run list` — confirm CI is green for the 2.5a commits (mac-universal probe asserts the shadow; Windows/MSVC
    compiles SampleRegistry + the gate flag). Then Victor's pad pass above (his latency verdict decides how much
@@ -492,8 +493,68 @@ seqBpm/seqLoopStartSample/seqHitsFired`.
   hits and ends now share one time-ordered ring); pause/resume phase; **10 minutes at 120 BPM/16ths: 4800 hits,
   loop starts exactly on multiples of 96000**. ctest **122/122**, RTSan **123/123**, ui gate green; the probe runs
   a 16-step pattern at 240 BPM through the bridge (`seqAdvances`, `seqStopped`).
-- **Not yet (3.2):** the page still plays its own chop-seq voices (Web Audio); binding = `playSeq` → `seqPlay`,
-  mute the TS scheduled voices, the cursor from the snapshot, the two-clock bridge for drums/bass — see the design.
+- 3.2 (below) bound the page to it.
+
+## Phase 3 — 3.2 DONE (the page's chop sequencer IS the native one), 2026-08-22 fifth session
+**What changed:** `ChopperEngine.seqSink` (ui) — when set (the shadow sets it), PLAY/STOP/PAUSE/RESUME go to the C++
+ChopSequencer (`seqPlay{atSample}`/`seqStop`/`seqPause`/`seqResume`), the TS look-ahead scheduler does NOT run (no
+Web Audio sequencer voices at all — not even muted ones), and the native position comes back at 20 Hz
+(`nativeSeqUpdate`) into the SAME fields every TS consumer already reads (`seqCurrentLoopStart`, `seqStepDuration`,
+`playingSeqIdx`, `seqPausedElapsed`) — so the Timeline cursor (`getSeqCursorStep/Phase`), the live-record landing,
+the metronome and the queued-switch bookkeeping work unchanged; a non-loop run ends when the engine stops itself.
+The shadow (`nativeEngineShadow.ts`) diffs the audible pattern / a queued switch (`queueSequence`, `{cancel}` when
+the playing tab is re-selected) / BPM / swing from the engine state (`setSequence` is de-duplicated by bytes; JS→C++
+is not quadratic, whole patterns are fine), serialises everything through one promise chain, and sends PLAY with
+`atSample` = the page's anchor as an ENGINE SAMPLE.
+- **`NativeClock`** (`ui/src/renderer/native/nativeClock.ts`, pure math, gate `npm run test:clock` = 23 cases):
+  engine samples ↔ host ns (the snapshot's last-block anchor `clockHostNs/clockSample`, new) ↔ `performance.now()`
+  (round-trip calibration through the new `terminatorAudio {verb:'clock'}`, best RTT wins; every snapshot's
+  `emitHostNs` is a one-way upper bound that only tightens) ↔ AudioContext time (`ctxPair`: the context's heard-pair —
+  **WebKit's `getOutputTimestamp()` carries NO latency** (measured: contextTime == currentTime while `outputLatency`
+  = 16 ms), so the pair is built from `currentTime` + `outputLatency`), **at the ear** (the native device's
+  `outputLatencyMs` from the `clock` verb is added on the native side). WebKit's `performance.now()` is 1 ms coarse
+  → the mapping is ≈ 1 ms; RTT reads exactly 1.
+- **Lead:** PLAY's anchor lead in native mode = native output latency + 1.5 blocks + 4 ms − the ctx latency the
+  pair knows, never under the TS 20 ms (`seqSink.leadSec`) — the engine must RENDER the anchor's sample before it is
+  heard; on this Mac it lands on the 20 ms floor (18 ms native out-latency, 16 ms ctx latency). The satellites
+  (drums/bass/MIDI clock) take the same anchor, so nothing starts out of phase.
+- **The two-clock bridge (drums/bass/metronome stay Web Audio until 3.3/3.4/3.6):** the shadow measures, every
+  snapshot, where the native grid is HEARD in ctx time vs where the ctx-clocked satellites expect it (`driftMs` in
+  the shadow stats), low-passes it (the 1 ms clock) and nudges `drumEngine.nudge(d)` / `bassEngine.nudge(d)` /
+  `MidiClockSender.nudge(d)` / the metronome's next click by the residual when it exceeds 2 ms — **phase-preserving
+  (no restart; already-booked hits keep their times, the next bookings land on the corrected grid)**, not the design's
+  "re-anchor start() every loop" (which would reset a 4-bar drum pattern against a 2-bar chop loop). Musical drift
+  (0.6–3 ms/min) means a nudge every minute or so. `setTransportHooks(onStart, onStop, onNudge)`.
+- **Quantized live hits are sample-exact:** `triggerPadAt(lineT)` → the shadow maps `lineT` to an engine sample →
+  `triggerPad{atSample}`; the Engine fires it at its offset when inside the block, else BOOKS it (a 64-slot RT ring,
+  `Engine::bookTrigger` / `firePendingTriggers`; `releasePad{atSample}` the same) — no timer jitter any more (the
+  old path was `setTimeout` → `triggerPad`).
+- **One owner per hit, in RT code:** every live trigger (command / MIDI) stamps `Engine::liveHitSample_[pad]`; the
+  ChopSequencer skips a pattern hit (at FIRE time, so a hit booked a few ms past the grid counts too) whose pad was
+  live-triggered within 120 ms (`kLiveOwnerWindowSec` = the TS `lastLivePadHit` window); `seqHitsSkipped` in the
+  snapshot. The page's `booked = wasOn` in native mode (the engine fires the pattern's copy itself).
+  `queuePattern(nullptr)` = cancel (was: would clear the pattern).
+- **Gates:** Catch2 `[seq]` +3 cases (one-owner before/after/far/other-pad at 0-sample tolerance; queue cancel +
+  control; a trigger booked 1 s ahead fires sample-exact, a booked release ends a gate pad there): ctest
+  **125/125**, RTSan **126/126**; ui gate = tsc baseline 5 + library 39 + **clock 23** + vite build; the probe
+  (`selfTest` part 3, asserted by `probe-app.sh` → `seqPageOk`): a 1-bar/16-step pattern hitting pad 62 every 4th
+  step at 240 BPM, **`engine.playSeq()` → native `seqPlaying` with the page's pattern index, 4 hits in 800 ms, the
+  TS cursor == the native step at two instants (7/7, 12/12), `engine.stopSeq()` stops it natively**; measured
+  start offset native-vs-satellites **1.1 ms, 0 nudges** (it was 9.2 ms before the lead + the WebKit latency fix); the probe's
+  async budget grew (kProbeDelayTicksReact 11 s / lead 7 s) because the self-test runs ~4 s now.
+- **Honest boundary after 3.2:** what you hear = live pads + the chop sequencer natively (dry, outs 1/2); drums +
+  bass + metronome + count-in clicks through the WebView's AudioContext (system default output), phase-locked by the
+  nudge — their ear-alignment is as good as the clock mapping (≈ 1 ms) + the two devices' latency reports (JUCE's
+  `getOutputLatencyInSamples`, WebKit's `outputLatency`). When the clock is not calibrated yet (the first ~100 ms
+  after attach) PLAY sends `atSample 0` (next block) and the drift nudge pulls the satellites in. Pause/resume: the
+  engine pauses/resumes at a block boundary; the page's frozen phase is refined from the snapshot
+  (`seqStep + seqStepPhase`). Live-record landing + count-in stay in the page (3.7). A 4-bar/192-res pattern is
+  ~0.3 MB of JSON per `setSequence` — fine through the JS→C++ direction.
+- **Victor's pass (3.2):** a chop pattern + the drum machine at 90 BPM for 10 minutes against a DAW click — no
+  drift between chops and drums (a ≤ 2 ms step is expected every minute or two, not a creep); pattern switch at the
+  loop boundary (tab click while playing; click the playing tab again = cancel); pause/resume; BPM change mid-loop
+  (applies at the next step in both); live-record a hit onto a playing pattern — it must sound ONCE, the next loop
+  plays it from the grid; PLAY must still feel instant.
 
 ## Phase 3 — DESIGN (written at the end of the fourth session, 2026-08-22; the next session starts here)
 Read B2/B3 + dossier-sequencing-midi.md first (the dossier's §5 timing table + §8 "easy to break" are the contract).
