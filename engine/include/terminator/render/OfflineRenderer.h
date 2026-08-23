@@ -23,6 +23,7 @@
 #include <juce_core/juce_core.h>
 
 #include "terminator/core/Command.h"
+#include "terminator/core/Mixer.h"
 #include "terminator/core/SampleBuffer.h"
 
 namespace terminator
@@ -60,6 +61,52 @@ struct RenderEvent
     Type type = Type::on;
 };
 
+/// One insert in an exported chain: the device and the params it is carrying (by the type's param INDEX, the same
+/// order FxPool publishes). Anything not listed keeps the device's default.
+struct RenderFxSpec
+{
+    FxType type = FxType::none;
+    bool bypass = false;
+    std::vector<std::pair<int, float>> params;
+};
+
+/// One strip of the exported mix — the same settings the live mixer is running.
+struct RenderStripSpec
+{
+    int index = 0;
+    StripKind kind = StripKind::channel;
+    std::uint32_t seed = 0; // the CONSOLE seed (FNV-1a of the page's strip name); 0 = leave
+    float faderDb = 0.0f;
+    float pan = 0.0f;
+    float width = 1.0f;
+    bool mute = false;
+    bool solo = false;
+    float sendDb[kMaxSends] = {kFaderMinDb, kFaderMinDb, kFaderMinDb, kFaderMinDb};
+    int sendTarget[kMaxSends] = {-1, -1, -1, -1};
+    StripOutput outKind = StripOutput::master;
+    int outIndex = 0;
+    std::vector<RenderFxSpec> fx;
+    /// TRACKOUTS: also copy this strip's output to this hardware pair (−1 = not a stem). Pair 0 is the master's, so
+    /// stems start at pair 1 and `numChannels` must cover them.
+    int stemTap = -1;
+};
+
+/// The mixer for an export (Phase 4.5). `enabled` false = the Phase-3 direct path: pads go straight to their output
+/// pair and nothing else runs, which is what every pre-4.5 render did and still does.
+struct RenderMixerSpec
+{
+    bool enabled = false;
+    bool consoleOn = false;
+    ConsoleFlavour consoleFlavour = ConsoleFlavour::ssl;
+    float consoleAmount = 50.0f;
+    bool limiter = false; // the master's −1 dBFS safety limiter (the page always has it in)
+    bool pdc = true;
+    /// Drop each output pair's own latency off the head, so the master and every stem start on the SAME sample.
+    /// Off = the raw render including the alignment delay (what a null test against the live engine wants).
+    bool trimLatency = true;
+    std::vector<RenderStripSpec> strips;
+};
+
 struct RenderSpec
 {
     double sampleRate = 48000.0;
@@ -72,6 +119,7 @@ struct RenderSpec
     float testToneAmplitude = 0.5f;
     std::vector<RenderPadSpec> pads;
     std::vector<RenderEvent> events;
+    RenderMixerSpec mixer;
 
     std::int64_t totalSamples() const noexcept { return static_cast<std::int64_t>(lengthSeconds * sampleRate + 0.5); }
 };
@@ -82,6 +130,9 @@ struct RenderResult
     std::uint64_t blocksProcessed = 0;
     double sampleRate = 0.0;
     std::uint32_t voiceSteals = 0;
+    /// Phase 4.5: how many samples were dropped off each output pair's head to align them (0 with no mixer / no
+    /// latency / trimLatency off). Index = hardware pair.
+    std::vector<int> pairLatency;
 };
 
 /// Parses a project v0 JSON value. On failure returns false and fills `error`. Missing fields keep defaults.

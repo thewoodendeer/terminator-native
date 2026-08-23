@@ -371,6 +371,9 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::mixerSetPdc:
         mixer_->setPdc(c.payload.strip.flag != 0);
         break;
+    case CommandType::mixerSetStemTap:
+        mixer_->setStemTap(c.payload.strip.strip, c.payload.strip.index);
+        break;
     case CommandType::mixerSetConsole:
         mixer_->setConsole(c.payload.strip.flag != 0,
                            static_cast<ConsoleFlavour>(c.payload.strip.kind > 2 ? 0 : c.payload.strip.kind),

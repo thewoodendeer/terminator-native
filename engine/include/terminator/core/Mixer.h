@@ -150,6 +150,18 @@ class Mixer
     /// The output target. strip/master targets that would close a loop (or the strip itself) are REFUSED.
     bool setOutput(int strip, StripOutput kind, int index) noexcept TERMINATOR_NONBLOCKING;
     /// The master's hardware pair (0 = outs 1/2).
+    /// EXPORTS (4.5): ALSO copy this strip's output to a hardware pair, without changing where it normally goes — so
+    /// ONE offline render produces the master AND every trackout stem, aligned by construction. pair < 0 = off.
+    /// The tap is post insert / PDC / width / fader / mute / pan (what the strip contributes), pre the master's own
+    /// chain and limiter — a trackout is a post-strip stem.
+    void setStemTap(int strip, int pair) noexcept TERMINATOR_NONBLOCKING;
+    int stemTap(int strip) const noexcept { return strips_[clampIdx(strip)].stemTap; }
+    /// EXPORTS (4.5): how late this strip's output runs against true zero, in whole samples — everything the
+    /// alignment plan and the chains put in front of it. A channel tap carries maxChan, a send/bus tap maxChan +
+    /// maxBus, and the master additionally its own chain and the limiter's look-ahead. The offline renderer renders
+    /// this many extra samples and drops them off the head of each pair, so the master and every stem start on the
+    /// same sample ("master impulse == stem impulse"). With PDC off this is just the strip's own chain latency.
+    int outputLatencySamples(int strip) const noexcept;
     void setMainOut(int pair) noexcept TERMINATOR_NONBLOCKING;
 
     // --- the insert chain (Phase 4.2) --------------------------------------------------------------
@@ -244,6 +256,8 @@ class Mixer
         // PDC (4.4): this strip's delay before its fader (samples) + its lines
         int pdc = 0;
         IntDelay pdcL, pdcR;
+        // exports (4.5): an extra hardware pair this strip's output is copied to (−1 = none)
+        int stemTap = -1;
     };
 
     static int clampIdx(int i) noexcept { return i < 0 ? 0 : (i >= kMaxStrips ? kMaxStrips - 1 : i); }

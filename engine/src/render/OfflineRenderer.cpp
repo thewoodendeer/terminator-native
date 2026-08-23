@@ -287,6 +287,45 @@ RenderResult renderOffline(const RenderSpec& spec)
     engine.prepare(cfg);
 
     // Same commands the UI would send; the queue is drained at the first process() call.
+    // The MIXER first (Phase 4.5): a pad's `strip` only means something once the strip is live, and a chain's
+    // latency only enters the PDC plan once its devices are in. Export == what you hear because this is the same
+    // Mixer, the same devices, the same console and the same limiter the live engine runs.
+    if (spec.mixer.enabled)
+    {
+        for (const auto& st : spec.mixer.strips)
+        {
+            // ORDER MATTERS, and it is an export-correctness rule: every smoothed value (fader / pan / width / mute /
+            // the sends) is set BEFORE the strip is activated, because activating a strip snaps its smoothers to
+            // whatever the settings say. Set them after and the export GLIDES IN from unity over the 8 ms tau — the
+            // first note of every render would play at the wrong level. Live that glide is the point; in a bounce it
+            // is a bug.
+            engine.commands().push(Command::mixerSetFader(st.index, st.faderDb));
+            engine.commands().push(Command::mixerSetPan(st.index, st.pan));
+            engine.commands().push(Command::mixerSetWidth(st.index, st.width));
+            engine.commands().push(Command::mixerSetMute(st.index, st.mute));
+            engine.commands().push(Command::mixerSetSolo(st.index, st.solo));
+            for (int k = 0; k < kMaxSends; ++k)
+                engine.commands().push(Command::mixerSetSend(st.index, k, st.sendDb[k], st.sendTarget[k]));
+            engine.commands().push(Command::mixerSetStrip(st.index, static_cast<std::uint8_t>(st.kind), st.seed));
+            engine.commands().push(
+                Command::mixerSetOutput(st.index, static_cast<std::uint8_t>(st.outKind), st.outIndex));
+            if (st.stemTap >= 0)
+                engine.commands().push(Command::mixerSetStemTap(st.index, st.stemTap));
+            for (int slot = 0; slot < static_cast<int>(st.fx.size()); ++slot)
+            {
+                const auto& f = st.fx[static_cast<std::size_t>(slot)];
+                engine.commands().push(Command::mixerAddFx(st.index, static_cast<std::uint8_t>(f.type)));
+                for (const auto& kv : f.params)
+                    engine.commands().push(Command::mixerSetFxParam(st.index, slot, kv.first, kv.second, true));
+                if (f.bypass)
+                    engine.commands().push(Command::mixerSetFxBypass(st.index, slot, true));
+            }
+        }
+        engine.commands().push(Command::mixerSetConsole(
+            spec.mixer.consoleOn, static_cast<std::uint8_t>(spec.mixer.consoleFlavour), spec.mixer.consoleAmount));
+        engine.commands().push(Command::mixerSetLimiter(spec.mixer.limiter));
+        engine.commands().push(Command::mixerSetPdc(spec.mixer.pdc));
+    }
     engine.commands().push(Command::setMasterGain(spec.masterGain));
     engine.commands().push(
         Command::setTestTone(spec.testToneEnabled, spec.testToneFrequencyHz, spec.testToneAmplitude));
@@ -316,11 +355,20 @@ RenderResult renderOffline(const RenderSpec& spec)
                      [](const RenderEvent* a, const RenderEvent* b) { return a->timeSec < b->timeSec; });
     std::size_t nextEvent = 0;
 
+    // Phase 4.5: with a mixer in front, everything is late by the alignment plan and the chains (and the master
+    // additionally by its own chain + the limiter's look-ahead). Render PAST the end by an upper bound, then drop
+    // each output pair's own latency off its head — the master and every stem then start on the same sample.
+    const bool trim = spec.mixer.enabled && spec.mixer.trimLatency;
+    const int headroom = trim ? 2 * Mixer::kMaxPdcSamples + spec.blockSize : 0;
+    juce::AudioBuffer<float> work;
+    work.setSize(spec.numChannels, total + headroom, false, true, false);
+    const int renderTo = total + headroom;
+
     std::vector<float*> ptrs(static_cast<std::size_t>(spec.numChannels));
     int pos = 0;
-    while (pos < total)
+    while (pos < renderTo)
     {
-        const int n = std::min(spec.blockSize, total - pos);
+        const int n = std::min(spec.blockSize, renderTo - pos);
         const auto blockStart = static_cast<std::uint64_t>(pos);
         const auto blockEnd = blockStart + static_cast<std::uint64_t>(n);
         while (nextEvent < events.size())
@@ -345,12 +393,37 @@ RenderResult renderOffline(const RenderSpec& spec)
             ++nextEvent;
         }
         for (int ch = 0; ch < spec.numChannels; ++ch)
-            ptrs[static_cast<std::size_t>(ch)] = result.buffer.getWritePointer(ch, pos);
+            ptrs[static_cast<std::size_t>(ch)] = work.getWritePointer(ch, pos);
         engine.process(ptrs.data(), spec.numChannels, n);
         pos += n;
     }
     result.blocksProcessed = engine.snapshot().blocksProcessed;
     result.voiceSteals = engine.snapshot().voiceStealing;
+
+    // which strip feeds each hardware pair: the master its mainOut, a stem strip its tap
+    const int numPairs = (spec.numChannels + 1) / 2;
+    result.pairLatency.assign(static_cast<std::size_t>(std::max(0, numPairs)), 0);
+    if (trim)
+    {
+        const auto& mix = engine.mixer();
+        std::vector<int> pairStrip(static_cast<std::size_t>(numPairs), -1);
+        if (mix.mainOut() >= 0 && mix.mainOut() < numPairs)
+            pairStrip[static_cast<std::size_t>(mix.mainOut())] = kMasterStrip;
+        for (const auto& st : spec.mixer.strips)
+            if (st.stemTap >= 0 && st.stemTap < numPairs)
+                pairStrip[static_cast<std::size_t>(st.stemTap)] = st.index;
+        for (int p = 0; p < numPairs; ++p)
+        {
+            const int strip = pairStrip[static_cast<std::size_t>(p)];
+            result.pairLatency[static_cast<std::size_t>(p)] =
+                strip >= 0 ? std::min(mix.outputLatencySamples(strip), headroom) : 0;
+        }
+    }
+    for (int ch = 0; ch < spec.numChannels; ++ch)
+    {
+        const int off = result.pairLatency[static_cast<std::size_t>(ch / 2)];
+        result.buffer.copyFrom(ch, 0, work, ch, off, total);
+    }
     engine.release();
     return result;
 }

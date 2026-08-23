@@ -254,6 +254,7 @@ void Mixer::setStripKind(int strip, StripKind kind) noexcept TERMINATOR_NONBLOCK
     if (!live)
     {
         s.meter = StripMeter{};
+        s.stemTap = -1;
         clearFx(strip); // the devices go back to the pool (the page re-adds them with the channel)
     }
     updateSilence();
@@ -499,6 +500,28 @@ void Mixer::rebuildPdc() noexcept TERMINATOR_NONBLOCKING
 void Mixer::setPdc(bool on) noexcept TERMINATOR_NONBLOCKING
 {
     pdcOn_ = on;
+}
+
+void Mixer::setStemTap(int strip, int pair) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return;
+    strips_[strip].stemTap = pair < 0 ? -1 : pair;
+}
+
+int Mixer::outputLatencySamples(int strip) const noexcept
+{
+    const int i = clampIdx(strip);
+    const auto& s = strips_[i];
+    // the strip's own chain plus the alignment delay behind it: for a live strip with PDC on those add up to the
+    // TIER (maxChan for a channel, maxBus for a send/bus on top of maxChan), which is the point of the plan
+    const int own = std::min(chainLatencySamples(i), kMaxPdcSamples);
+    const int aligned = own + (pdcOn_ ? s.pdc : 0);
+    if (i != kMasterStrip)
+        return aligned;
+    // the master: what reached its INPUT (tier 1 + tier 2), then its own chain, then the limiter's look-ahead
+    const int upstream = pdcOn_ ? pdcMaxChan_ + pdcMaxBus_ : 0;
+    return upstream + own + masterLatencySamples();
 }
 
 void Mixer::rebuildKeyMask() noexcept TERMINATOR_NONBLOCKING
@@ -981,6 +1004,18 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
         s.post.push(pl, pr, ss, n);
         s.pre.read(s.meter.peakPre[0], s.meter.peakPre[1], s.meter.rmsPre);
         s.post.read(s.meter.peakPost[0], s.meter.peakPost[1], s.meter.rmsPost);
+    }
+
+    // ---- the stem tap (4.5): an EXTRA copy to a hardware pair; the normal output target still happens ----
+    if (s.stemTap >= 0)
+    {
+        const int cl = s.stemTap * 2, cr = s.stemTap * 2 + 1;
+        if (cl >= 0 && cl < numOut && outputs[cl] != nullptr)
+            for (int i = 0; i < n; ++i)
+                outputs[cl][i] += static_cast<float>(oL[i]);
+        if (cr >= 0 && cr < numOut && outputs[cr] != nullptr)
+            for (int i = 0; i < n; ++i)
+                outputs[cr][i] += static_cast<float>(oR[i]);
     }
 
     // ---- sends (post-fader/mute/pan taps, each with its own τ-8 ms level) ----
