@@ -105,6 +105,14 @@ cd ui && npm ci && npm run gate      # = baseline tsc + node scripts/test-librar
   `liveHit` takes the intent from the engine clock, `playLive(..., atSample?)` → `playHit(..., atSample?)`.
   `native/nativeEngineShadow.ts` — the hook, `onStart(..., atSampleExact)`, probe part 7 (`liveRecOk`);
   `native/nativeDrumShadow.ts` — `hitElapsedSec` / `loopSampleAt`, `hit(..., atSampleExact)`.
+- **The mixer is native (4.1, 2026-08-23):** `src/mixer/MixerEngine.ts` — `MixerNativeSink` + `setMixerNativeSink()`;
+  `ChannelStrip.setFaderDb/setPan/setSend/setMuted/setSoloed`, `MasterStrip.setFaderDb`, `MixerEngine.addChannel/
+  removeChannel` report to it (null in Electron = no-op). `native/nativeMixerShadow.ts` (NEW) — the page's strips →
+  `mixerSetStrip/Fader/Pan/Mute/Solo/Send` by index (fixed names → fixed indices, `sampleN`/lanes 13.. on demand), the
+  CLICK strip 12 + `setSourceStrip` bass/click, `levels(name)` from the snapshot's `mixer` object. `native/
+  nativeEngineShadow.ts` — builds it first, `PadDesc.strip = stripFor(engine.padRoute(i))` → `setPadParams.strip`,
+  probe part 8 (`mixerPageOk`), stats `mixerCommands/mixerStrips`; `native/nativeDrumShadow.ts` — `DrumShadowHost.
+  stripForDrumTrack?`, `LaneDesc.strip` → the lane pad's `setPadParams.strip`.
 - Everything else is byte-identical to the Electron source at the commit above. Re-sync = `rsync` the same
   exclusions, re-apply this list, re-run the gate.
 

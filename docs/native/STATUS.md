@@ -916,7 +916,98 @@ hear IS what the next loop plays (no early/late drift between the take and the p
 recorded; the same on the drum LIVE surface; the LATENCY pill reads the interface's output latency (not ~16 ms
 "browser").
 
-### Next session (in order) — updated at the end of the ninth session
+## CI for the 3.7 tip `54d4fe9` (run 32616902875, 2026-08-23): RTSan ✅ · Intel ✅ · Windows/MSVC ✅ · **universal ❌ — not
+the code: the smoke step's 60 s cap killed the app mid-self-test** ("app did not quit within 60 s": page loaded at +4 s,
+the async checks started at +17 s on the starved runner — the 20 Hz probe countdown itself ran slow — and the
+real-time parts 1–7 did not finish inside the cap). The same binary's probe passes here in 24 s. Fix in this session's
+app+ui commit: `tools/ci/probe-app.sh` waits 150 s (the cap only has to catch "the page never loaded").
+
+## Phase 4 — 4.1 DONE (THE MIXER IS NATIVE: STRIPS / SENDS / BUSES / MASTER, 64-BIT SUMMING, THE FREE ROUTING GRAPH), 2026-08-23 tenth session
+**Engine — `core/Mixer.h/.cpp` (JUCE-free, RT; every buffer sized in `prepare`):** a fixed pool of `kMaxStrips` = 64
+strips by index (0 = the MASTER, always; the page names the rest), each `StripKind` off · channel · send · bus · master.
+A strip = its 64-bit input accumulator (the sources ADD into it: `Mixer::inputs()` is the per-strip `double*` table,
+`addToStrip` for float blocks) → [inserts — 4.2] → M/S width (M = (L+R)/2, S = (L−R)/2·width; 1 = identity, bit-exact,
+skipped) → fader (`10^(dB/20)`, ≤ −59.5 dB snaps to 0 — the TS fader's own rule, −60 = exact silence) → mute → pan (the
+Web Audio StereoPanner STEREO law — the strip input is explicit 2-ch so it is the only law; pan 0 = identity, bit-exact;
+the master has no pan) → output; the output feeds the strip's 4 post-fader/mute/pan sends (each its own level + target
+strip) and its OUTPUT TARGET: the master / another strip (a bus; chains of buses) / a hardware PAIR direct (post-fader,
+never the master) / none. **The free routing graph:** strips process in dependency order (Kahn over outputs + sends,
+rebuilt on every routing change, dead strips skipped); the CYCLE GUARD refuses a send or an output that is the strip
+itself, the master through a send, or would close a loop (`reaches()` DFS over ≤ 64 nodes; `routesRejected` counts,
+the level of a refused send still applies); a loop can therefore never exist (a fallback index order is kept anyway,
+`orderValid`). The master → `mainOut` pair (`setMainOut`). **The solo law** is the engine's (the TS applySolo: silent =
+mute || (anySolo && !solo), over every non-master strip; the master mutes everything and has no solo). **Smoothing** =
+the TS `setTargetAtTime` constants (fader / pan / send / mute τ 8 ms): the one-pole in closed form at the block end
+(`a = exp(−n/(τ·sr))`, one `exp` per strip per block) + a linear ramp inside the block (the pan ramps the 2×2 law
+matrix between its block-end values, so a sweep through 0 is continuous); **snapped within 1e-6** so a fader at −60 dB
+IS silence and a fader back at 0 dB IS unity (a strip at unity is BIT-IDENTICAL to the direct path, test). **64-bit
+summing:** N strips into the master equal one double accumulator cast once (test), the Sampler renders each strip voice
+alone into a float scratch and accumulates in double. **Meters** per strip in the callback: pre (input) / post
+(output) peak per channel + pooled RMS over a 4096-sample window (a 64-entry ring of per-block partials — the TS
+peak-meter worklet's window), in the snapshot (`stripPeakPre/Post[64][2]`, `stripRmsPre/Post`, `stripGain` = the
+smoothed fader × mute at the block end, `mixerActiveMask`, `mixerSilentMask`, `mixerRoutesRejected`, `mixerOrderValid`,
+`mixerMainOut`, `bassStrip`, `clickStrip`). **Sources:** `PadParams::strip` (−1 = the direct path — the Phase-1..3
+behaviour, every older test and the offline renderer unchanged; ≥ 0 = that strip — `Voice::strip`, `Sampler::render(…,
+stripInputs, numStrips)`), `setSourceStrip` 0 bass / 1 click (−1 = direct: the bass dry into outs 1/2, the click post
+master gain as in 3.6; ≥ 0 = rendered into the engine's scratch and added to the strip — the click now rides the mix
+BEFORE the master gain when routed). Engine order: clear the strip inputs → sampler (direct + strips) → bass → click
+(if routed) → `mixer_.process` (strips → sends → buses → master → hardware outs, ADDED under whatever was there) → master
+gain + peaks → the click direct (if not routed) → publish. Commands `mixerSetStrip` · `mixerSetFader` · `mixerSetPan` ·
+`mixerSetWidth` · `mixerSetMute` · `mixerSetSolo` · `mixerSetSend` · `mixerSetOutput` · `mixerSetMainOut` ·
+`setSourceStrip` (+ `setPadParams.strip`); the `Command::Payload::Strip` union member (value / strip / index / target /
+kind / flag); `Command` still ≤ 64 bytes. **Tests** `tests/engine/test_mixer.cpp` (11 cases, ASCII names): the default
+topology + unity = bit-identical to direct + a dead strip drops its input; 64-bit summing = one double accumulator;
+the fader taper (−60 = silence, −6.02 = 0.5, +6 = 1.995, the τ check at exactly 8 ms = 1/e); the mute/solo law incl.
+the master and the mute ramp; the pan law at −1 / +1 / ±0.5 / back to 0 bit-exact / the master ignores pan; width 0 /
+2 / 1 bit-exact; sends post-fader/mute + the return's fader + the guard (itself / the master / a loop → 3 rejections,
+targets untouched); strip → bus → master, a chain of buses, the guard on outputs, hardware pair 1 = outs 3/4, mainOut
+1, `none`, the direct pad on pair 1 untouched; the bass and the click through their strips and back to direct; a
+STATIC mix block-size invariant 64 vs 512 (a live master fader would ramp, and a ramp's intra-block shape is block-size
+dependent by design) + the meters read the window; `test_rt_safety` gets the mixer case (strips, routing, a refused
+loop, sends, pads + bass + click through strips, live moves — 0 allocations).
+**Shell + page:** `WebShell` verbs (BRIDGE-PROTOCOL rows) + the snapshot's `mixer` object (`active` / `silent` /
+`strips["<idx>"] = [preL, preR, postL, postR, rmsPre, rmsPost, gain]` for the LIVE strips only / `rejected` /
+`orderValid` / `mainOut` / `bassStrip` / `clickStrip`). `src/mixer/MixerEngine.ts` — `MixerNativeSink` +
+`setMixerNativeSink()`: `setFaderDb` / `setPan` / `setSend` / `setMuted` / `setSoloed` / the master's `setFaderDb` /
+`addChannel` / `removeChannel` report to it (null in Electron). `native/nativeMixerShadow.ts` (NEW): the page's strips
+→ indices (fixed names → fixed indices: sample 1 · kick 2 · snare 3 · hat 4 · openhat 5 · perc 6 · bass 7 · send1..4
+8..11 · CLICK 12; `sampleN` / user lanes 13.. on demand — a pad or a lane can ask for its strip BEFORE the view's
+effect creates the page strip, the index is the same; the slot goes back when the page removes the channel), the whole
+mixer mirrored on attach, every setter → its command, the 4 sends → the send1..4 returns, `setSourceStrip` bass →
+'bass' and click → 12 (a native-only CLICK strip at 0 dB until the UI grows its fader), `levels(name)` from the
+snapshot. `nativeEngineShadow` builds it FIRST; `PadDesc.strip = stripFor(engine.padRoute(i))` rides every
+`setPadParams` (main chops → 'sample', a pad source → its 'sampleN'); `nativeDrumShadow` — `DrumShadowHost.
+stripForDrumTrack?` (kick/snare/hihat→hat/openhat/perc, a user lane = its key) → `LaneDesc.strip` → the lane pad's
+`setPadParams.strip`. Probe part 8 **`mixerPageOk`**: the master + 'sample' + CLICK + 'bass' strips live, the sources
+on them, 'sample' fader −60 → `gain` 0 → back → 1, mute on → in `silent` → off, every bound pad's strip == its route's
+strip and live, `rejected` 0, `orderValid`. `tools/ci/probe-app.sh` asserts it (and now waits 150 s).
+**Gates (tenth session):** mac-debug 0 warnings + ctest **200/200** (188 + 11 `[mixer]` + 1 RT) · RTSan **201/201** ·
+universal (0 warnings) lipo `x86_64 arm64` on the app + terminator-render + ctest 200/200 · ui gate (tsc baseline 5,
+zero new) · probe OK on the debug AND the universal binary (`mixerPageOk: true`, 14 live strips = master + 11 fixed +
+CLICK + the probe's `sample2`; the whole probe 24 s).
+**Honest boundary after 4.1:** the native mix is DRY — inserts / the console stage / PDC / the master limiter are still
+the page's Web Audio graph, which is NOT what is heard natively (the sources are in the engine): Phase 4.2 ports the
+FX (utility/eq/filter/… in the plan's order, each with its golden gate), 4.3 binds the meters (the snapshot already
+carries them — the MixerSection still reads its worklet), 4.4 the two-tier integer PDC + the offline renderer's stem
+decomposition, 4.5 the export pipeline. No CLICK strip in the UI yet (native strip 12 at 0 dB). Gain match (a live
+trim) not ported. MIDI note OUT per strip not started (the 3.5 pump is ready). The mobile HardwareView has no mixer →
+its pads stay on the direct path (strip −1), as in Phase 3. The Electron app is untouched (the sink is null there).
+**Victor's pass (4.1):** on the desktop app: the MIXER's faders/pans/mutes/solos/sends move what you HEAR (the engine),
+the 'sample' strip against the drum strips against the bass; solo a strip; a −60 dB fader is silent; the click rides
+the mix (mute the master → no click); a pad re-routed to SAMPLE 2 follows its strip.
+
+### Next session (in order) — updated at the end of the tenth session
+0. Push (Victor) → `gh run list` → the 4 jobs (the universal probe now also asserts `mixerPageOk`; the smoke cap is
+   150 s).
+1. **Phase 4.2** — the FX ports, in the plan's order (utility, eq, filter, pan, wide, mseq, delay, reverb, comp (the
+   Blink DynamicsCompressor kernel), sccomp, clip/wave/sat/mbsat with real polyphase oversampling, phaser, flanger,
+   vinyl; the console stage; the legacy chopper master chain) as `Effect` objects in each strip's insert chain (≤ 8,
+   `latencySamples()` for 4.4), each with its golden gate against the TS numbers in dossier-mixer-fx.md §2 — AND the
+   premium devices of B4 ("VICTOR'S PHASE-4 BRIEF") on top. Then 4.3 meters on the bridge (`levels(name)` is ready),
+   4.4 PDC + offline parity, 4.5 exports.
+2. Phase 8 folds the two page MIDI-learn stores into the one native store (import `midi-map.json` + the localStorage map).
+
+### Next session (in order) — updated at the end of the ninth session (superseded — kept for the record)
 0. `gh run list` — CI for the 3.6 + 3.7 commits (4 jobs; the universal probe now also asserts `metroPageOk` +
    `liveRecOk`).
 1. **Phase 4** (read TERMINATOR-NATIVE-PLAN.md B4 "VICTOR'S PHASE-4 BRIEF" first) — 4.1 strips / master / sends / the
