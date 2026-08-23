@@ -60,10 +60,13 @@ class ChopSequencer
     /// never double-triggered (the group choke would restart the chop from its head — his "cut short" report).
     static constexpr double kLiveOwnerWindowSec = 0.12;
 
-    /// `keepState` = a device change at the SAME rate: re-size for the new block, keep the music
-    /// (pattern, position, playing) exactly where it was.
-    void prepare(double sampleRate, bool keepState = false) noexcept;
-    void reset() noexcept; // stop, forget patterns (non-RT use: prepare/release)
+    /// A device change: `keepClock` (same sample rate) keeps the music exactly where it was — pattern, position,
+    /// playing. Otherwise the clock resets, and `keepData` still keeps the pattern so the page does not have to
+    /// re-send it (it never does).
+    void prepare(double sampleRate, bool keepClock = false, bool keepData = false) noexcept;
+    /// `keepData` keeps the shell-owned pattern pointers (rate-independent data the page never re-sends);
+    /// everything else — playing, positions, pending hits — is cleared.
+    void reset(bool keepData = false) noexcept; // stop, forget patterns (non-RT use: prepare/release)
 
     // --- commands (audio thread, from Engine::apply) ---
     void setPattern(const SeqPattern* p) noexcept TERMINATOR_NONBLOCKING; // live: the steps not fired yet read it

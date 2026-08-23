@@ -250,11 +250,51 @@ TEST_CASE("Engine: a buffer-size change is invisible - transport, sequencer, voi
     REQUIRE(e.mixer().fx(1, 0)->param(0) == Approx(7.5f)); // …with its params
     REQUIRE(e.mixer().fxBypassed(1, 1));                   // …and its bypass
 
-    // a genuine SAMPLE-RATE change is a different story: rate-bound state cannot carry over, so it resets
+    // A SAMPLE-RATE change cannot carry the CLOCK over (positions are in samples, coefficients are rate-derived), so
+    // the transport stops and rewinds — but the DATA is rate-independent and must survive, or the user is left with a
+    // silent app: the page owns patterns / patches / chains and never re-sends them (every shadow's diff cache says
+    // it already did).
     e.release();
     e.prepare({44100.0, 128, 2, 0});
     for (int i = 0; i < 4; ++i)
         e.process(outs2, 2, 128);
+    REQUIRE(e.snapshot().seqPlaying == 0u);      // the clock stops
+    REQUIRE(e.snapshot().playheadSamples == 0u); // …and rewinds
+    REQUIRE(e.snapshot().stripFxCount[1] == 2);  // …but the mix survives
+    REQUIRE(e.mixer().fx(1, 0)->param(0) == Approx(7.5f));
+    REQUIRE(e.mixer().fxBypassed(1, 1));
+}
+
+TEST_CASE("Engine: a sample-rate change keeps the pattern (the page never re-sends it)", "[engine][devicechange]")
+{
+    Engine e;
+    e.prepare({44100.0, 256, 2, 0});
+    SeqPattern pat;
+    pat.clear();
+    pat.index = 3;
+    pat.bars = 1;
+    pat.resolution = 16;
+    pat.stepCount = 16;
+    pat.loop = true;
+    pat.grid[0] = 1ull; // pad 0 on step 0
+    e.commands().push(Command::seqSetPattern(&pat));
+    e.commands().push(Command::seqSetBpm(90.0));
+    e.commands().push(Command::seqPlay(true));
+    std::vector<float> a(256), b(256);
+    float* outs[2] = {a.data(), b.data()};
+    for (int i = 0; i < 20; ++i)
+        e.process(outs, 2, 256);
+    REQUIRE(e.snapshot().seqPatternIndex == 3);
+
+    e.release();
+    e.prepare({48000.0, 256, 2, 0});
+    for (int i = 0; i < 4; ++i)
+        e.process(outs, 2, 256);
+    // the pattern is still loaded — pressing PLAY makes sound again instead of silence
+    REQUIRE(e.snapshot().seqPatternIndex == 3);
     REQUIRE(e.snapshot().seqPlaying == 0u);
-    REQUIRE(e.snapshot().playheadSamples == 0u);
+    e.commands().push(Command::seqPlay(true));
+    for (int i = 0; i < 4; ++i)
+        e.process(outs, 2, 256);
+    REQUIRE(e.snapshot().seqPlaying == 1u);
 }

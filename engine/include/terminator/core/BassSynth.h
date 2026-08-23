@@ -243,9 +243,12 @@ class BassSynth
     BassSynth() = default;
 
     // --- non-RT ---
-    /// `keepState` = a device change at the SAME rate: keep the voices, the patch and the phases.
-    void prepare(double sampleRate, std::uint64_t seed = 0x9e3779b97f4a7c15ull, bool keepState = false) noexcept;
-    void reset() noexcept;
+    /// A device change: `keepClock` (same sample rate) keeps the voices, patch and phases untouched; otherwise the
+    /// synth restarts, and `keepData` still keeps the patch the page set.
+    void prepare(double sampleRate, std::uint64_t seed = 0x9e3779b97f4a7c15ull, bool keepClock = false,
+                 bool keepData = false) noexcept;
+    /// `keepData` keeps the shell-owned patch pointer (rate-independent; the page never re-sends it).
+    void reset(bool keepData = false) noexcept;
 
     // --- commands (audio thread) ---
     void setPatch(const BassPatch* p) noexcept TERMINATOR_NONBLOCKING; // nullptr = defaults

@@ -84,10 +84,13 @@ class DrumSequencer
     static constexpr double kLiveOwnerWindowSec = 0.12;
     static constexpr double kSubHitGuardSec = 0.001; // TS: a roll fills the slot up to `next − 1 ms`
 
-    /// `keepState` = a device change at the SAME rate: re-size for the new block, keep the music
-    /// (pattern, position, playing) exactly where it was.
-    void prepare(double sampleRate, bool keepState = false) noexcept;
-    void reset() noexcept; // stop, forget patterns/graphs (non-RT use: prepare/release)
+    /// A device change: `keepClock` (same sample rate) keeps the music exactly where it was — pattern, position,
+    /// playing. Otherwise the clock resets, and `keepData` still keeps the pattern so the page does not have to
+    /// re-send it (it never does).
+    void prepare(double sampleRate, bool keepClock = false, bool keepData = false) noexcept;
+    /// `keepData` keeps the shell-owned pattern pointers (rate-independent data the page never re-sends);
+    /// everything else — playing, positions, pending hits — is cleared.
+    void reset(bool keepData = false) noexcept; // stop, forget patterns/graphs (non-RT use: prepare/release)
 
     // --- commands (audio thread, from Engine::apply) ---
     void setPattern(const DrumPattern* p) noexcept TERMINATOR_NONBLOCKING; // live: the steps not scheduled yet read it

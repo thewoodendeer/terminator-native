@@ -9,15 +9,16 @@
 namespace terminator
 {
 
-void DrumSequencer::prepare(double sampleRate, bool keepState) noexcept
+void DrumSequencer::prepare(double sampleRate, bool keepClock, bool keepData) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    if (!keepState)
-        reset();
+    if (!keepClock)
+        reset(keepData);
 }
 
-void DrumSequencer::reset() noexcept
+void DrumSequencer::reset(bool keepData) noexcept
 {
+    const auto* keptPat = keepData ? pat_ : nullptr;
     playing_ = false;
     pat_ = nullptr;
     graphs_ = nullptr;
@@ -30,6 +31,7 @@ void DrumSequencer::reset() noexcept
     for (auto& h : pending_)
         h.used = false;
     gridLogCount_ = 0;
+    pat_ = keptPat;
 }
 
 int DrumSequencer::takeGridLog(GridStep* out, int maxOut) noexcept TERMINATOR_NONBLOCKING

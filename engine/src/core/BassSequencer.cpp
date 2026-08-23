@@ -51,15 +51,16 @@ bool BassTimeline::add(BassSynth::EventKind kind, std::uint64_t sample, int note
 }
 
 // ───────────────────────────────── BassSequencer ─────────────────────────────────
-void BassSequencer::prepare(double sampleRate, bool keepState) noexcept
+void BassSequencer::prepare(double sampleRate, bool keepClock, bool keepData) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    if (!keepState)
-        reset();
+    if (!keepClock)
+        reset(keepData);
 }
 
-void BassSequencer::reset() noexcept
+void BassSequencer::reset(bool keepData) noexcept
 {
+    const auto* keptPat = keepData ? pat_ : nullptr;
     playing_ = false;
     arrangerDriven_ = false;
     bendLane_ = true;
@@ -73,6 +74,7 @@ void BassSequencer::reset() noexcept
     soundingCount_ = 0;
     ticks_ = 0;
     timelineFired_ = 0;
+    pat_ = keptPat;
 }
 
 void BassSequencer::soundingAdd(std::int32_t id, std::uint8_t note) noexcept TERMINATOR_NONBLOCKING

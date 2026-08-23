@@ -91,10 +91,13 @@ struct BassTimeline
 class BassSequencer
 {
   public:
-    /// `keepState` = a device change at the SAME rate: re-size for the new block, keep the music
-    /// (pattern, position, playing) exactly where it was.
-    void prepare(double sampleRate, bool keepState = false) noexcept;
-    void reset() noexcept;
+    /// A device change: `keepClock` (same sample rate) keeps the music exactly where it was — pattern, position,
+    /// playing. Otherwise the clock resets, and `keepData` still keeps the pattern so the page does not have to
+    /// re-send it (it never does).
+    void prepare(double sampleRate, bool keepClock = false, bool keepData = false) noexcept;
+    /// `keepData` keeps the shell-owned pattern pointers (rate-independent data the page never re-sends);
+    /// everything else — playing, positions, pending hits — is cleared.
+    void reset(bool keepData = false) noexcept;
 
     // --- commands (audio thread, from Engine::apply) ---
     void setPattern(const BassPattern* p, BassSynth& synth) noexcept TERMINATOR_NONBLOCKING; // live replace

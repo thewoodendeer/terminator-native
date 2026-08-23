@@ -61,10 +61,14 @@ void Engine::prepare(const Config& config)
     // A DEVICE CHANGE at the same rate (Preferences -> buffer size, a hot-plug) is not a new song: re-size every
     // buffer for the new block and keep the music — transport, patterns, voices, insert chains. Only a genuine
     // SAMPLE-RATE change resets, because positions and every filter coefficient below are rate-bound.
-    const bool keep = everPrepared_ && config.sampleRate == config_.sampleRate;
+    const bool keepClock = everPrepared_ && config.sampleRate == config_.sampleRate;
+    // Rate-INDEPENDENT data (patterns, the bass patch, insert chains) survives ANY device change: the page owns it
+    // and never re-sends it — every shadow's diff cache believes the engine still has it — so throwing it away on a
+    // sample-rate change left the app loaded but silent.
+    const bool keepData = everPrepared_;
     config_ = config;
     masterGainCurrent_ = masterGainTarget_;
-    if (!keep)
+    if (!keepClock)
     {
         playheadSamples_ = 0;
         blocksProcessed_ = 0;
@@ -83,19 +87,19 @@ void Engine::prepare(const Config& config)
     toneRe_ = 1.0;
     toneIm_ = 0.0;
     setTestToneFrequency(toneFrequencyHz_);
-    sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels, keep);
-    seq_.prepare(config_.sampleRate, keep);
-    drums_.prepare(config_.sampleRate, keep);
-    bass_.prepare(config_.sampleRate, 0x9e3779b97f4a7c15ull, keep);
-    bassSeq_.prepare(config_.sampleRate, keep);
-    clockOut_.prepare(config_.sampleRate, keep);
-    metro_.prepare(config_.sampleRate, keep);
-    arp_.prepare(config_.sampleRate, keep);
-    if (keep)
+    sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels, keepClock);
+    seq_.prepare(config_.sampleRate, keepClock, keepData);
+    drums_.prepare(config_.sampleRate, keepClock, keepData);
+    bass_.prepare(config_.sampleRate, 0x9e3779b97f4a7c15ull, keepClock, keepData);
+    bassSeq_.prepare(config_.sampleRate, keepClock, keepData);
+    clockOut_.prepare(config_.sampleRate, keepClock);
+    metro_.prepare(config_.sampleRate, keepClock);
+    arp_.prepare(config_.sampleRate, keepClock);
+    if (keepData)
         mixer_->saveChains(); // BEFORE the pool re-prepares: that resets every device's params
     fxPool_.prepare(config_.sampleRate, config_.maxBlockSize);
     mixer_->setPool(&fxPool_);
-    mixer_->prepare(config_.sampleRate, config_.maxBlockSize, keep);
+    mixer_->prepare(config_.sampleRate, config_.maxBlockSize, keepData);
     scratchL_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     scratchR_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     prepared_ = true;

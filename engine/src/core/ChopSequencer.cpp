@@ -8,15 +8,17 @@
 namespace terminator
 {
 
-void ChopSequencer::prepare(double sampleRate, bool keepState) noexcept
+void ChopSequencer::prepare(double sampleRate, bool keepClock, bool keepData) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    if (!keepState)
-        reset();
+    if (!keepClock)
+        reset(keepData);
 }
 
-void ChopSequencer::reset() noexcept
+void ChopSequencer::reset(bool keepData) noexcept
 {
+    const auto* keptPat = keepData ? pat_ : nullptr;
+    const auto* keptQueued = keepData ? queued_ : nullptr;
     playing_ = paused_ = false;
     pat_ = queued_ = nullptr;
     nextStep_ = 0;
@@ -28,6 +30,8 @@ void ChopSequencer::reset() noexcept
     for (auto& h : pending_)
         h.used = false;
     gridLogCount_ = 0;
+    pat_ = keptPat;
+    queued_ = keptQueued;
 }
 
 int ChopSequencer::takeGridLog(GridStep* out, int maxOut) noexcept TERMINATOR_NONBLOCKING

@@ -506,11 +506,12 @@ void BassSynth::Voice::kill() noexcept TERMINATOR_NONBLOCKING
 }
 
 // ───────────────────────────────── lifecycle ─────────────────────────────────
-void BassSynth::prepare(double sampleRate, std::uint64_t seed, bool keepState) noexcept
+void BassSynth::prepare(double sampleRate, std::uint64_t seed, bool keepClock, bool keepData) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    if (keepState) // same rate, new block size: every coefficient below is rate-derived and still valid
+    if (keepClock) // same rate, new block size: every coefficient below is rate-derived and still valid
         return;
+    const auto* keptPatch = keepData ? patch_ : nullptr;
     rng_ = seed != 0 ? seed : 0x9e3779b97f4a7c15ull;
     reset();
     // the worklet constructs 8 voices: each Osc draws its start phase, each Voice its three offsets
@@ -527,10 +528,12 @@ void BassSynth::prepare(double sampleRate, std::uint64_t seed, bool keepState) n
         v.ampEnv.set(0.005, 0.2, 0.7, 0.2, sr_);
         v.filtEnv.set(0.005, 0.2, 0.7, 0.2, sr_);
     }
+    patch_ = keptPatch;
 }
 
-void BassSynth::reset() noexcept
+void BassSynth::reset(bool keepData) noexcept
 {
+    const auto* keptPatch = keepData ? patch_ : nullptr;
     pos_ = 0;
     nextOrder_ = 0;
     patch_ = nullptr;
@@ -562,6 +565,7 @@ void BassSynth::reset() noexcept
     meterVoices_ = 0;
     notesFired_ = 0;
     eventsDropped_ = 0;
+    patch_ = keptPatch;
 }
 
 void BassSynth::setPatch(const BassPatch* p) noexcept TERMINATOR_NONBLOCKING
