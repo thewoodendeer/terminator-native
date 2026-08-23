@@ -47,7 +47,7 @@ class MidiClockOut
     static constexpr int kMaxEventsPerBlock = 128; // 400 BPM = 160 ticks/s; a 4096-sample block at 44.1 k = 15 ticks
     static constexpr int kMaxControl = 16;         // SPP/START/CONTINUE/STOP waiting for their sample
 
-    void prepare(double sampleRate) noexcept;
+    void prepare(double sampleRate, bool keepState = false) noexcept;
     void reset() noexcept;
 
     // --- commands (audio thread, from Engine::apply) ---

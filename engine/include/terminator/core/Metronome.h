@@ -57,7 +57,7 @@ class Metronome
     static constexpr int kMaxNoiseFrames = 38400; // 0.2 s at 192 kHz
     static constexpr double kDedupeSec = 0.001;   // two beat clicks within 1 ms = the same beat (driver hand-over)
 
-    void prepare(double sampleRate) noexcept; // allocates nothing at run time — the noise table is a fixed member
+    void prepare(double sampleRate, bool keepState = false) noexcept; // allocates nothing at run time
     void reset() noexcept;
 
     // --- commands (audio thread, from Engine::apply) ---

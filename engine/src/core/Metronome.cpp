@@ -12,7 +12,7 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kDownbeatToleranceSec = 0.005; // a beat within 5 ms before the count-in's downbeat IS the downbeat
 } // namespace
 
-void Metronome::prepare(double sampleRate) noexcept
+void Metronome::prepare(double sampleRate, bool keepState) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
     // the TS noiseBuffer: 0.2 s of white noise, played from frame 0 on every click — a fixed seeded table here so a
@@ -27,7 +27,8 @@ void Metronome::prepare(double sampleRate) noexcept
         const std::uint64_t r = x * 0x2545F4914F6CDD1Dull;
         noise_[i] = static_cast<float>(static_cast<double>(r >> 11) * (1.0 / 9007199254740992.0) * 2.0 - 1.0);
     }
-    reset();
+    if (!keepState)
+        reset();
 }
 
 void Metronome::reset() noexcept

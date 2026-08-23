@@ -40,14 +40,15 @@ inline bool sameReadSet(const Voice& v, const SampleBuffer* const* set, int n) n
 }
 } // namespace
 
-void Sampler::prepare(double sampleRate, int maxBlockSize, int numOutputChannels) noexcept
+void Sampler::prepare(double sampleRate, int maxBlockSize, int numOutputChannels, bool keepState) noexcept
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
     numOutputChannels_ = numOutputChannels;
     maxBlock_ = maxBlockSize > 0 ? maxBlockSize : 0;
     scratchL_.assign(static_cast<std::size_t>(maxBlock_), 0.0f); // non-RT (prepare)
     scratchR_.assign(static_cast<std::size_t>(maxBlock_), 0.0f);
-    reset();
+    if (!keepState)
+        reset();
 }
 
 void Sampler::reset() noexcept

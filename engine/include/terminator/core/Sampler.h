@@ -115,7 +115,8 @@ class Sampler
 
     Sampler() = default;
 
-    void prepare(double sampleRate, int maxBlockSize, int numOutputChannels) noexcept;
+    /// `keepState` = a device change at the SAME rate: re-size the scratch for the new block, keep the voices.
+    void prepare(double sampleRate, int maxBlockSize, int numOutputChannels, bool keepState = false) noexcept;
     void reset() noexcept; // stop every voice instantly (non-RT use only: prepare/release)
 
     // --- commands (called from Engine::apply on the audio thread) ---

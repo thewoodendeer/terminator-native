@@ -15,10 +15,11 @@ double midiClockSecondsPerTick(double bpm) noexcept
 
 // ───────────────────────────────── OUT ─────────────────────────────────
 
-void MidiClockOut::prepare(double sampleRate) noexcept
+void MidiClockOut::prepare(double sampleRate, bool keepState) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    reset();
+    if (!keepState)
+        reset();
 }
 
 void MidiClockOut::reset() noexcept

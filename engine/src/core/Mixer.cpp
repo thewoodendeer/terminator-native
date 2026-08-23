@@ -85,8 +85,33 @@ float Mixer::dbToGain(float db) noexcept
     return std::exp(std::min(db, kFaderMaxDb) * 0.11512925464970229f); // ln(10)/20
 }
 
-void Mixer::prepare(double sampleRate, int maxBlockSize)
+void Mixer::saveChains()
 {
+    savedChains_.assign(static_cast<std::size_t>(kMaxStrips) * kMaxInserts, SavedSlot{});
+    savedChainCount_.assign(static_cast<std::size_t>(kMaxStrips), 0);
+    for (int i = 0; i < kMaxStrips; ++i)
+    {
+        const auto& st = strips_[i];
+        savedChainCount_[static_cast<std::size_t>(i)] = st.fxCount;
+        for (int k = 0; k < st.fxCount; ++k)
+        {
+            if (st.fx[k] == nullptr)
+                continue;
+            auto& sv = savedChains_[static_cast<std::size_t>(i) * kMaxInserts + static_cast<std::size_t>(k)];
+            sv.type = st.fx[k]->type();
+            sv.bypass = st.fxBypass[k];
+            sv.numParams = std::min(st.fx[k]->numParams(), kMaxFxParams);
+            for (int q = 0; q < sv.numParams; ++q)
+                sv.params[q] = st.fx[k]->param(q);
+        }
+    }
+    haveSavedChains_ = true;
+}
+
+void Mixer::prepare(double sampleRate, int maxBlockSize, bool keepState)
+{
+    const bool restoreChains = keepState && haveSavedChains_;
+
     TERMINATOR_RT_ASSERT(sampleRate > 0.0 && maxBlockSize > 0);
     sampleRate_ = sampleRate;
     maxBlock_ = maxBlockSize;
@@ -145,6 +170,25 @@ void Mixer::prepare(double sampleRate, int maxBlockSize)
     updateSilence();
     for (int i = 0; i < kMaxStrips; ++i)
         strips_[i].muteCur = ((silentMask_ >> i) & 1u) ? 0.0f : 1.0f;
+    if (restoreChains)
+    {
+        haveSavedChains_ = false;
+        // the pool is prepared and every chain was just dropped — put each strip's devices back, in order, with
+        // their params and bypass (the page never learns the device changed)
+        for (int i = 0; i < kMaxStrips; ++i)
+        {
+            for (int k = 0; k < savedChainCount_[static_cast<std::size_t>(i)]; ++k)
+            {
+                const auto& sv = savedChains_[static_cast<std::size_t>(i) * kMaxInserts + static_cast<std::size_t>(k)];
+                if (sv.type == FxType::none || !addFx(i, sv.type))
+                    continue;
+                const int slot = strips_[i].fxCount - 1;
+                for (int q = 0; q < sv.numParams; ++q)
+                    setFxParam(i, slot, q, sv.params[q], true);
+                setFxBypass(i, slot, sv.bypass);
+            }
+        }
+    }
     rebuildOrder();
 }
 

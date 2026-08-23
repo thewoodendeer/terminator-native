@@ -506,9 +506,11 @@ void BassSynth::Voice::kill() noexcept TERMINATOR_NONBLOCKING
 }
 
 // ───────────────────────────────── lifecycle ─────────────────────────────────
-void BassSynth::prepare(double sampleRate, std::uint64_t seed) noexcept
+void BassSynth::prepare(double sampleRate, std::uint64_t seed, bool keepState) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
+    if (keepState) // same rate, new block size: every coefficient below is rate-derived and still valid
+        return;
     rng_ = seed != 0 ? seed : 0x9e3779b97f4a7c15ull;
     reset();
     // the worklet constructs 8 voices: each Osc draws its start phase, each Voice its three offsets

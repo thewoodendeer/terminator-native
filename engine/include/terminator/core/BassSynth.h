@@ -243,7 +243,8 @@ class BassSynth
     BassSynth() = default;
 
     // --- non-RT ---
-    void prepare(double sampleRate, std::uint64_t seed = 0x9e3779b97f4a7c15ull) noexcept;
+    /// `keepState` = a device change at the SAME rate: keep the voices, the patch and the phases.
+    void prepare(double sampleRate, std::uint64_t seed = 0x9e3779b97f4a7c15ull, bool keepState = false) noexcept;
     void reset() noexcept;
 
     // --- commands (audio thread) ---

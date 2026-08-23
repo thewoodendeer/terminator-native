@@ -9,10 +9,11 @@
 namespace terminator
 {
 
-void DrumSequencer::prepare(double sampleRate) noexcept
+void DrumSequencer::prepare(double sampleRate, bool keepState) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    reset();
+    if (!keepState)
+        reset();
 }
 
 void DrumSequencer::reset() noexcept

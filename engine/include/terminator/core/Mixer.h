@@ -90,7 +90,13 @@ class Mixer
     Mixer& operator=(const Mixer&) = delete;
 
     /// Non-RT: sizes every buffer for maxBlockSize; (re)sets the topology to the default (master alone, → pair 0).
-    void prepare(double sampleRate, int maxBlockSize);
+    /// `keepState` = a device change at the SAME rate: re-size the buffers for the new block and rebuild each
+    /// strip's insert chain from the snapshot `saveChains()` took (see below).
+    void prepare(double sampleRate, int maxBlockSize, bool keepState = false);
+    /// Non-RT, call BEFORE the FxPool re-prepares: snapshot every strip's chain (type, params, bypass, order). The
+    /// pool's re-prepare resets each device's params, so the snapshot must be taken while they are still live;
+    /// `prepare(…, keepState = true)` then puts the chains back.
+    void saveChains();
     /// Non-RT: drop the topology + smoothed state (release()).
     void reset() noexcept;
 
@@ -244,6 +250,16 @@ class Mixer
     std::uint32_t rejected_ = 0;
     std::uint32_t fxRejected_ = 0;
     FxPool* pool_ = nullptr;
+    struct SavedSlot
+    {
+        FxType type = FxType::none;
+        bool bypass = false;
+        int numParams = 0;
+        float params[kMaxFxParams] = {};
+    };
+    std::vector<SavedSlot> savedChains_; // kMaxStrips × kMaxInserts, filled by saveChains()
+    std::vector<int> savedChainCount_;   // per strip
+    bool haveSavedChains_ = false;
     bool limiterOn_ = false;
     BlinkCompressorKernel limiter_;
     LoudnessMeter loudness_;

@@ -91,7 +91,9 @@ struct BassTimeline
 class BassSequencer
 {
   public:
-    void prepare(double sampleRate) noexcept;
+    /// `keepState` = a device change at the SAME rate: re-size for the new block, keep the music
+    /// (pattern, position, playing) exactly where it was.
+    void prepare(double sampleRate, bool keepState = false) noexcept;
     void reset() noexcept;
 
     // --- commands (audio thread, from Engine::apply) ---

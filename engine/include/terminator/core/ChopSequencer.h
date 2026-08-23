@@ -60,7 +60,9 @@ class ChopSequencer
     /// never double-triggered (the group choke would restart the chop from its head — his "cut short" report).
     static constexpr double kLiveOwnerWindowSec = 0.12;
 
-    void prepare(double sampleRate) noexcept;
+    /// `keepState` = a device change at the SAME rate: re-size for the new block, keep the music
+    /// (pattern, position, playing) exactly where it was.
+    void prepare(double sampleRate, bool keepState = false) noexcept;
     void reset() noexcept; // stop, forget patterns (non-RT use: prepare/release)
 
     // --- commands (audio thread, from Engine::apply) ---

@@ -51,10 +51,11 @@ bool BassTimeline::add(BassSynth::EventKind kind, std::uint64_t sample, int note
 }
 
 // ───────────────────────────────── BassSequencer ─────────────────────────────────
-void BassSequencer::prepare(double sampleRate) noexcept
+void BassSequencer::prepare(double sampleRate, bool keepState) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    reset();
+    if (!keepState)
+        reset();
 }
 
 void BassSequencer::reset() noexcept

@@ -210,3 +210,51 @@ TEST_CASE("Engine: the snapshot publishes the last LIVE hit's pad + sample (a bo
     CHECK(e.snapshot().lastLiveHitPad == 5);
     CHECK(e.snapshot().lastLiveHitSample == 48000);
 }
+
+TEST_CASE("Engine: a buffer-size change is invisible - transport, sequencer, voices and insert chains all survive",
+          "[engine][devicechange]")
+{
+    // Preferences -> buffer size is release() + prepare() at the SAME sample rate. The device restarts; the song
+    // must not. Everything below is musical state, not device state: it survives, and playback resumes where it was.
+    Engine e;
+    e.prepare({48000.0, 512, 2, 0});
+    e.commands().push(Command::mixerSetStrip(1, static_cast<std::uint8_t>(StripKind::channel)));
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::eq)));
+    e.commands().push(Command::mixerAddFx(1, static_cast<std::uint8_t>(FxType::comp)));
+    e.commands().push(Command::mixerSetFxParam(1, 0, 0, 7.5f, true)); // EQ LOW +7.5 dB
+    e.commands().push(Command::mixerSetFxBypass(1, 1, true));         // the COMP bypassed
+    e.commands().push(Command::seqSetBpm(90.0));
+    e.commands().push(Command::seqPlay(true));
+    std::vector<float> a(512), b(512);
+    float* outs[2] = {a.data(), b.data()};
+    for (int i = 0; i < 100; ++i)
+        e.process(outs, 2, 512);
+    const auto beforePlayhead = e.snapshot().playheadSamples;
+    REQUIRE(beforePlayhead > 0u);
+    REQUIRE(e.snapshot().seqPlaying == 1u);
+    REQUIRE(e.snapshot().stripFxCount[1] == 2);
+
+    // --- the buffer size changes ---
+    e.release();
+    e.prepare({48000.0, 128, 2, 0});
+    std::vector<float> c(128), d(128);
+    float* outs2[2] = {c.data(), d.data()};
+    for (int i = 0; i < 8; ++i)
+        e.process(outs2, 2, 128);
+
+    REQUIRE(e.snapshot().seqPlaying == 1u);                  // still playing
+    REQUIRE(e.snapshot().playheadSamples >= beforePlayhead); // did not rewind
+    REQUIRE(e.snapshot().stripFxCount[1] == 2);              // the chain is still there
+    REQUIRE(e.mixer().fxType(1, 0) == FxType::eq);           // …in the same order
+    REQUIRE(e.mixer().fxType(1, 1) == FxType::comp);
+    REQUIRE(e.mixer().fx(1, 0)->param(0) == Approx(7.5f)); // …with its params
+    REQUIRE(e.mixer().fxBypassed(1, 1));                   // …and its bypass
+
+    // a genuine SAMPLE-RATE change is a different story: rate-bound state cannot carry over, so it resets
+    e.release();
+    e.prepare({44100.0, 128, 2, 0});
+    for (int i = 0; i < 4; ++i)
+        e.process(outs2, 2, 128);
+    REQUIRE(e.snapshot().seqPlaying == 0u);
+    REQUIRE(e.snapshot().playheadSamples == 0u);
+}

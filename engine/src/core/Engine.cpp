@@ -58,49 +58,57 @@ void Engine::prepare(const Config& config)
     TERMINATOR_RT_ASSERT(config.sampleRate > 0.0);
     TERMINATOR_RT_ASSERT(config.maxBlockSize > 0);
     TERMINATOR_RT_ASSERT(config.numOutputChannels >= 0);
+    // A DEVICE CHANGE at the same rate (Preferences -> buffer size, a hot-plug) is not a new song: re-size every
+    // buffer for the new block and keep the music — transport, patterns, voices, insert chains. Only a genuine
+    // SAMPLE-RATE change resets, because positions and every filter coefficient below are rate-bound.
+    const bool keep = everPrepared_ && config.sampleRate == config_.sampleRate;
     config_ = config;
     masterGainCurrent_ = masterGainTarget_;
-    playheadSamples_ = 0;
-    blocksProcessed_ = 0;
-    samplesProcessed_ = 0;
-    blockHostNs_ = prevBlockHostNs_ = 0;
+    if (!keep)
+    {
+        playheadSamples_ = 0;
+        blocksProcessed_ = 0;
+        samplesProcessed_ = 0;
+        blockHostNs_ = prevBlockHostNs_ = 0;
+        for (auto& t : liveHitSample_)
+            t = -1.0e12;
+        for (auto& t : pendingTrig_)
+            t.used = false;
+        calibState_ = 0;
+    }
+    else
+    {
+        blockHostNs_ = prevBlockHostNs_ = 0; // the host clock restarts with the device; the sample clock does not
+    }
     toneRe_ = 1.0;
     toneIm_ = 0.0;
     setTestToneFrequency(toneFrequencyHz_);
-    sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels);
-    seq_.prepare(config_.sampleRate);
-    drums_.prepare(config_.sampleRate);
-    bass_.prepare(config_.sampleRate);
-    bassSeq_.prepare(config_.sampleRate);
-    clockOut_.prepare(config_.sampleRate);
-    metro_.prepare(config_.sampleRate);
-    arp_.prepare(config_.sampleRate);
+    sampler_.prepare(config_.sampleRate, config_.maxBlockSize, config_.numOutputChannels, keep);
+    seq_.prepare(config_.sampleRate, keep);
+    drums_.prepare(config_.sampleRate, keep);
+    bass_.prepare(config_.sampleRate, 0x9e3779b97f4a7c15ull, keep);
+    bassSeq_.prepare(config_.sampleRate, keep);
+    clockOut_.prepare(config_.sampleRate, keep);
+    metro_.prepare(config_.sampleRate, keep);
+    arp_.prepare(config_.sampleRate, keep);
+    if (keep)
+        mixer_->saveChains(); // BEFORE the pool re-prepares: that resets every device's params
     fxPool_.prepare(config_.sampleRate, config_.maxBlockSize);
     mixer_->setPool(&fxPool_);
-    mixer_->prepare(config_.sampleRate, config_.maxBlockSize);
+    mixer_->prepare(config_.sampleRate, config_.maxBlockSize, keep);
     scratchL_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
     scratchR_.assign(static_cast<std::size_t>(config_.maxBlockSize), 0.0f);
-    for (auto& t : liveHitSample_)
-        t = -1.0e12;
-    for (auto& t : pendingTrig_)
-        t.used = false;
-    calibState_ = 0;
     prepared_ = true;
+    everPrepared_ = true;
     publish(0);
 }
 
 void Engine::release()
 {
+    // The audio device stopped. That is ALL this means — it is the only caller (AudioIO::audioDeviceStopped), and it
+    // fires for a buffer-size change and a hot-plug as much as for shutting down. So stop pulling audio and leave the
+    // music alone; prepare() decides what to keep when the device comes back (same rate = everything).
     prepared_ = false;
-    sampler_.reset();
-    seq_.reset();
-    drums_.reset();
-    bass_.reset();
-    bassSeq_.reset();
-    clockOut_.reset();
-    metro_.reset();
-    arp_.reset();
-    mixer_->reset();
     StateSnapshot s{};
     s.prepared = 0;
     s.masterGain = masterGainCurrent_;

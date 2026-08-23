@@ -6,10 +6,11 @@
 namespace terminator
 {
 
-void Arp::prepare(double sampleRate) noexcept
+void Arp::prepare(double sampleRate, bool keepState) noexcept
 {
     sr_ = sampleRate > 0.0 ? sampleRate : 48000.0;
-    reset();
+    if (!keepState)
+        reset();
 }
 
 void Arp::reset() noexcept

@@ -21,7 +21,7 @@ namespace terminator
 class Arp
 {
   public:
-    void prepare(double sampleRate) noexcept;
+    void prepare(double sampleRate, bool keepState = false) noexcept;
     void reset() noexcept;
 
     // --- commands (audio thread, from Engine::apply) ---

@@ -78,7 +78,11 @@ class Engine
     Engine& operator=(const Engine&) = delete;
 
     // --- non-RT --------------------------------------------------------------------------------
+    /// Non-RT. The FIRST call sizes and clears everything. A LATER call is a device change: at the same sample rate
+    /// it re-sizes for the new block and keeps the music (transport, patterns, voices, insert chains); a different
+    /// sample rate resets, because positions and coefficients are rate-bound.
     void prepare(const Config& config);
+    /// Non-RT. The audio device stopped: stop pulling audio, keep the music (prepare() decides what survives).
     void release();
     bool isPrepared() const noexcept { return prepared_; }
     const Config& config() const noexcept { return config_; }
@@ -144,6 +148,7 @@ class Engine
 
     Config config_{};
     bool prepared_ = false;
+    bool everPrepared_ = false; // a later prepare() is a DEVICE CHANGE, not a fresh engine (see prepare())
 
     // The big fixed buffers live on the heap (allocated ONCE in the constructor — non-RT) so an Engine value is
     // small enough for any stack (Windows threads default to 1 MB; the capture buffer alone is 1.5 MB).
@@ -160,10 +165,11 @@ class Engine
     MidiClockOut::Event clockEvents_[MidiClockOut::kMaxEventsPerBlock] = {};
     Metronome metro_; // the click + count-in (Phase 3.6) — beats on the driving sequencer's grid
     Arp arp_;         // the arp (Phase 3.6) — steps on the sample clock
-    std::unique_ptr<Mixer> mixer_; // the strips / sends / buses / master (Phase 4.1) — pads, drum lanes, the bass and the click
-                      // (on the heap: 64 strips of meter rings are 177 KB — an Engine VALUE must fit a 1 MB Windows stack)
-                      // with a strip sum into it in 64-bit; the direct paths (strip −1) stay as in Phase 3
-    FxPool fxPool_;   // every insert device the chains can hold, built + prepared up front (Phase 4.2)
+    std::unique_ptr<Mixer>
+        mixer_; // the strips / sends / buses / master (Phase 4.1) — pads, drum lanes, the bass and the click
+                // (on the heap: 64 strips of meter rings are 177 KB — an Engine VALUE must fit a 1 MB Windows stack)
+                // with a strip sum into it in 64-bit; the direct paths (strip −1) stay as in Phase 3
+    FxPool fxPool_; // every insert device the chains can hold, built + prepared up front (Phase 4.2)
     std::vector<float> scratchL_, scratchR_; // a source's block on its way into a strip (prepare-sized)
     int bassStrip_ = -1;                     // setSourceStrip 0: the bass synth's strip (−1 = dry into outs 1/2)
     int clickStrip_ = -1;                    // setSourceStrip 1: the metronome's strip (−1 = direct, post master gain)
