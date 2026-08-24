@@ -26,6 +26,7 @@ const char* const kFetRatios[] = {"1:1", "2:1", "3:1", "4:1", "6:1", "10:1", "20
 const char* const kFetDetect[] = {"FLAT", "HP1", "HP2", "BAND"};
 const char* const kFetModes[] = {"CLEAN", "DIST 2", "DIST 3", "BRITISH"};
 const char* const kTapeHeads[] = {"H1", "H2", "H3", "H1+2", "H2+3", "H1+3", "H1+2+3"};
+const char* const kVerbPrograms[] = {"HALL", "CHAMBER", "PLATE", "ROOM", "AMBIENCE"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -132,6 +133,17 @@ const FxParamDef kTapeEchoParams[] = {
     {"SPRING", 0.0f, 100.0f, 0.0f},
     {"WET", 0.0f, 100.0f, 35.0f},
 };
+const FxParamDef kPlateVerbParams[] = {
+    {"PROGRAM", 0.0f, 4.0f, 0.0f, kVerbPrograms, 5},
+    {"PREDELAY", 0.0f, 250.0f, 0.0f},
+    {"DECAY", 0.2f, 20.0f, 2.0f}, // SECONDS — the loop gain is solved for this RT60
+    {"SIZE", 0.0f, 100.0f, 70.0f},
+    {"DIFFUSION", 0.0f, 100.0f, 70.0f},
+    {"BASS", 0.2f, 4.0f, 1.0f}, // the bass decay MULTIPLIER
+    {"DAMP", 0.0f, 100.0f, 40.0f},
+    {"MOD", 0.0f, 100.0f, 50.0f},
+    {"WET", 0.0f, 100.0f, 30.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -163,6 +175,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::ladder, "ladder", kLadderParams, 5, 4},
     {FxType::fetcomp, "fetcomp", kFetCompParams, 8, 7},
     {FxType::tapeecho, "tapeecho", kTapeEchoParams, 9, 8},
+    {FxType::plateverb, "plateverb", kPlateVerbParams, 9, 8},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -199,6 +212,8 @@ int capacityOf(FxType t) noexcept
         return 24;
     case FxType::tapeecho:
         return 12; // a 1.5 s tape at ×2.2 is a few MB of line per instance
+    case FxType::plateverb:
+        return 8; // the tank is a dozen delay lines, sized for SIZE 100
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -237,6 +252,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<FetCompFx>();
     case FxType::tapeecho:
         return std::make_unique<TapeEchoFx>();
+    case FxType::plateverb:
+        return std::make_unique<PlateVerbFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

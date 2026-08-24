@@ -717,4 +717,260 @@ void TapeEchoFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLO
     }
 }
 
+// ---- HALL 224 (the Lexicon programs on a Dattorro tank) -----------------------------------------------------
+
+namespace
+{
+/// Dattorro's plate, in samples at 29761 Hz. Everything is scaled from here by (sr / kRefSr) x SIZE.
+constexpr double kInDiffLen[PlateVerbFx::kInDiffusers] = {142.0, 107.0, 379.0, 277.0};
+constexpr double kApAmLen = 672.0, kA1Len = 4453.0, kApA2Len = 1800.0, kA2Len = 3720.0;
+constexpr double kApBmLen = 908.0, kB1Len = 4217.0, kApB2Len = 2656.0, kB2Len = 3163.0;
+/// The output taps, read out of the tank's delay lines — seven per side, taken from BOTH halves, which is what
+/// decorrelates L from R. A mono source has to come back as a stereo room or it is not a reverb.
+constexpr double kTapA[3] = {266.0, 2974.0, 1990.0};
+constexpr double kTapB[4] = {1913.0, 1996.0, 187.0, 1066.0};
+constexpr double kModHzA = 0.93, kModHzB = 1.31; // deliberately not related: the tail must never pulse in step
+
+/// PROGRAM presets: {size, diffusion, damping, modulation} as 0..1 starting points. The knobs move from here.
+struct VerbProgram
+{
+    double size, diffusion, damp, mod;
+};
+constexpr VerbProgram kPrograms[5] = {
+    {1.00, 0.85, 0.45, 0.60}, // HALL — big, smooth, moving
+    {0.75, 0.80, 0.55, 0.45}, // CHAMBER
+    {0.55, 0.95, 0.30, 0.80}, // PLATE — dense and bright, the most movement
+    {0.40, 0.70, 0.60, 0.30}, // ROOM
+    {0.22, 0.55, 0.70, 0.20}, // AMBIENCE — short, dark, barely moving
+};
+
+double apStep(DelayLine& dl, double x, double d, double g) noexcept TERMINATOR_NONBLOCKING
+{
+    const double z = dl.readAt(d);
+    const double v = x + g * z;
+    dl.write(v);
+    return z - g * v;
+}
+} // namespace
+
+void PlateVerbFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    const double k = sampleRate / kRefSr * kMaxSizeScale;
+    pre_.prepare(static_cast<int>(kMaxPredelaySec * sampleRate) + 8);
+    for (int i = 0; i < kInDiffusers; ++i)
+        inAp_[i].prepare(static_cast<int>(kInDiffLen[i] * k) + 8);
+    apAm_.prepare(static_cast<int>((kApAmLen + 32.0) * k) + 64); // + the modulation swing
+    delA1_.prepare(static_cast<int>(kA1Len * k) + 8);
+    apA2_.prepare(static_cast<int>(kApA2Len * k) + 8);
+    delA2_.prepare(static_cast<int>(kA2Len * k) + 8);
+    apBm_.prepare(static_cast<int>((kApBmLen + 32.0) * k) + 64);
+    delB1_.prepare(static_cast<int>(kB1Len * k) + 8);
+    apB2_.prepare(static_cast<int>(kApB2Len * k) + 8);
+    delB2_.prepare(static_cast<int>(kB2Len * k) + 8);
+    reset();
+}
+
+void PlateVerbFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    programIdx_ = 0.0f;
+    predelay_.set(0.0f, true);
+    decay_.set(2.0f, true);
+    size_.set(70.0f, true);
+    diffusion_.set(70.0f, true);
+    bassMult_.set(1.0f, true);
+    damp_.set(40.0f, true);
+    mod_.set(50.0f, true);
+    pre_.reset();
+    inLp_.reset();
+    for (auto& d : inAp_)
+        d.reset();
+    apAm_.reset();
+    delA1_.reset();
+    apA2_.reset();
+    delA2_.reset();
+    apBm_.reset();
+    delB1_.reset();
+    apB2_.reset();
+    delB2_.reset();
+    dampA_.reset();
+    dampB_.reset();
+    bassA_.reset();
+    bassB_.reset();
+    tankA_ = tankB_ = 0.0;
+    modPhaseA_ = 0.0;
+    modPhaseB_ = 0.37; // the two halves start out of step
+    inLp_.set(Biquad::Type::lowpass, 9000.0, 0.0, 0.0, sr_);
+    recompute();
+}
+
+void PlateVerbFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        programIdx_ = clampf(std::floor(value), 0.0f, 4.0f);
+        break;
+    case 1:
+        predelay_.set(clampf(value, 0.0f, 250.0f), immediate);
+        break;
+    case 2:
+        decay_.set(clampf(value, 0.2f, 20.0f), immediate);
+        break;
+    case 3:
+        size_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 4:
+        diffusion_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 5:
+        bassMult_.set(clampf(value, 0.2f, 4.0f), immediate);
+        break;
+    case 6:
+        damp_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 7:
+        mod_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    default:
+        break;
+    }
+    if (immediate)
+        recompute();
+}
+
+float PlateVerbFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return programIdx_;
+    case 1:
+        return predelay_.target;
+    case 2:
+        return decay_.target;
+    case 3:
+        return size_.target;
+    case 4:
+        return diffusion_.target;
+    case 5:
+        return bassMult_.target;
+    case 6:
+        return damp_.target;
+    case 7:
+        return mod_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+/// Resolve the tank for the current knobs. The one that matters: **DECAY is seconds**, so the loop gain is solved
+/// from the tank's own round-trip time — `g = 10^(-3·T/RT60)` — instead of being a feel knob the user has to learn.
+void PlateVerbFx::recompute() noexcept TERMINATOR_NONBLOCKING
+{
+    const VerbProgram& p = kPrograms[static_cast<int>(programIdx_)];
+    // SIZE 50 = the program's own size; the knob scales around it.
+    const double sizeScale = std::clamp(p.size * (0.4 + 0.012 * static_cast<double>(size_.cur)), 0.15, kMaxSizeScale);
+    const double k = sr_ / kRefSr * sizeScale;
+    for (int i = 0; i < kInDiffusers; ++i)
+        lenIn_[i] = std::max(1.0, kInDiffLen[i] * k);
+    lenApAm_ = std::max(1.0, kApAmLen * k);
+    lenA1_ = std::max(1.0, kA1Len * k);
+    lenApA2_ = std::max(1.0, kApA2Len * k);
+    lenA2_ = std::max(1.0, kA2Len * k);
+    lenApBm_ = std::max(1.0, kApBmLen * k);
+    lenB1_ = std::max(1.0, kB1Len * k);
+    lenApB2_ = std::max(1.0, kApB2Len * k);
+    lenB2_ = std::max(1.0, kB2Len * k);
+
+    // One trip round the tank, in seconds, then the gain that decays 60 dB in DECAY seconds.
+    const double loopSec = (lenA1_ + lenA2_ + lenB1_ + lenB2_) * 0.5 / sr_;
+    const double rt60 = std::max(0.05, static_cast<double>(decay_.cur));
+    decayGain_ = std::clamp(std::pow(10.0, -3.0 * loopSec / rt60), 0.05, 0.9995);
+
+    const double diff = std::clamp(p.diffusion * (0.35 + 0.0095 * static_cast<double>(diffusion_.cur)), 0.0, 0.85);
+    inDiff1_ = diff;
+    inDiff2_ = diff * 0.83;
+    modDepth_ = p.mod * static_cast<double>(mod_.cur) * 0.01 * 12.0 * (sr_ / kRefSr); // samples of swing
+
+    // DAMP is the treble decay; BASS is the 224's bass decay MULTIPLIER, applied as a shelf inside the loop so the
+    // bottom rings for a different length than the rest instead of just being louder.
+    const double dampHz = 18000.0 * std::pow(0.06, p.damp * static_cast<double>(damp_.cur) * 0.01);
+    dampA_.set(Biquad::Type::lowpass, std::clamp(dampHz, 400.0, 0.45 * sr_), 0.0, 0.0, sr_);
+    dampB_.set(Biquad::Type::lowpass, std::clamp(dampHz, 400.0, 0.45 * sr_), 0.0, 0.0, sr_);
+    // A multiplier of M on the RT60 of the bottom = M's worth of extra loop gain down there, in dB per trip.
+    const double bassDb =
+        std::clamp(-60.0 * loopSec / rt60 * (1.0 / static_cast<double>(bassMult_.cur) - 1.0), -12.0, 12.0);
+    bassA_.set(Biquad::Type::lowshelf, 350.0, 0.0, bassDb, sr_);
+    bassB_.set(Biquad::Type::lowshelf, 350.0, 0.0, bassDb, sr_);
+}
+
+void PlateVerbFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (predelay_.moving() || decay_.moving() || size_.moving() || diffusion_.moving() || bassMult_.moving() ||
+        damp_.moving() || mod_.moving())
+    {
+        predelay_.advance(n, sr_, kFxTau);
+        decay_.advance(n, sr_, kFxTau);
+        size_.advance(n, sr_, kFxTau);
+        diffusion_.advance(n, sr_, kFxTau);
+        bassMult_.advance(n, sr_, kFxTau);
+        damp_.advance(n, sr_, kFxTau);
+        mod_.advance(n, sr_, kFxTau);
+        recompute();
+    }
+    const double preSamples = std::max(1.0, static_cast<double>(predelay_.cur) * 0.001 * sr_);
+    const double sizeK = lenA1_ / kA1Len; // the scale the taps were resolved at
+
+    for (int i = 0; i < n; ++i)
+    {
+        modPhaseA_ = advancePhase(modPhaseA_, kModHzA, sr_);
+        modPhaseB_ = advancePhase(modPhaseB_, kModHzB, sr_);
+
+        // The tank is fed MONO — a plate has one input. The stereo comes back out of the taps.
+        double x = 0.5 * (l[i] + r[i]);
+        x = pre_.process(x, preSamples);
+        x = inLp_.process(x);
+        x = apStep(inAp_[0], x, lenIn_[0], inDiff1_);
+        x = apStep(inAp_[1], x, lenIn_[1], inDiff1_);
+        x = apStep(inAp_[2], x, lenIn_[2], inDiff2_);
+        x = apStep(inAp_[3], x, lenIn_[3], inDiff2_);
+
+        // Half A takes the input plus what half B handed over last sample (and vice versa) — the one-sample
+        // offset is what keeps the cross-coupled loop computable at all.
+        double a = x + tankB_;
+        a = apStep(apAm_, a, lenApAm_ + modDepth_ * lfoSine(modPhaseA_), 0.7);
+        delA1_.write(a);
+        a = delA1_.readAt(lenA1_);
+        a = bassA_.process(dampA_.process(a)) * decayGain_;
+        a = apStep(apA2_, a, lenApA2_, 0.5);
+        delA2_.write(a);
+        a = delA2_.readAt(lenA2_);
+
+        double b = x + tankA_;
+        b = apStep(apBm_, b, lenApBm_ + modDepth_ * lfoSine(modPhaseB_), 0.7);
+        delB1_.write(b);
+        b = delB1_.readAt(lenB1_);
+        b = bassB_.process(dampB_.process(b)) * decayGain_;
+        b = apStep(apB2_, b, lenApB2_, 0.5);
+        delB2_.write(b);
+        b = delB2_.readAt(lenB2_);
+
+        tankA_ = a * decayGain_;
+        tankB_ = b * decayGain_;
+
+        // Seven taps a side, taken from BOTH halves — the reason a mono source comes back as a room.
+        const double outL = delB1_.readAt(kTapB[0] * sizeK) + delB1_.readAt(kTapB[1] * sizeK) -
+                            apB2_.readAt(kTapB[2] * sizeK) + delB2_.readAt(kTapB[3] * sizeK) -
+                            delA1_.readAt(kTapA[0] * sizeK) - apA2_.readAt(kTapA[2] * sizeK) -
+                            delA2_.readAt(kTapA[1] * sizeK * 0.5);
+        const double outR = delA1_.readAt(kTapA[0] * sizeK) + delA1_.readAt(kTapA[1] * sizeK) -
+                            apA2_.readAt(kTapA[2] * sizeK) + delA2_.readAt(kTapA[1] * sizeK * 0.5) -
+                            delB1_.readAt(kTapB[0] * sizeK) - apB2_.readAt(kTapB[2] * sizeK) -
+                            delB2_.readAt(kTapB[3] * sizeK);
+        l[i] = outL * 0.6;
+        r[i] = outR * 0.6;
+    }
+}
+
 } // namespace terminator

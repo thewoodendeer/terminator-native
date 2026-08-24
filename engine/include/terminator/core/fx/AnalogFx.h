@@ -7,6 +7,9 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · PlateVerbFx — HALL 224: the Lexicon 224's programs on a Dattorro tank — a REAL algorithmic reverb (input
+//     diffusion into two cross-coupled modulated half-loops), where DECAY is in SECONDS because the loop gain is
+//     solved for the RT60 you asked for, not a feel knob.
 //   · TapeEchoFx — TAPE ECHO: the RE-201 Space Echo (three playback heads on one tape loop, motor-speed REPEAT
 //     RATE with real wow and flutter, tape saturation, a head bump, repeats that darken every pass, INTENSITY that
 //     runs away into self-oscillation, and the spring tank).
@@ -122,6 +125,55 @@ class FetCompFx final : public Effect
 
 /// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
 double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// HALL 224 — the Lexicon 224's programs on a Dattorro tank (Phase 4.6e).
+///   PROGRAM   HALL | CHAMBER | PLATE | ROOM | AMBIENCE — each sets the tank's size, diffusion, damping and how
+///             much the tail moves; the 224's character is that its tails MODULATE, which is why they never sit
+///             still and buzz the way a static tank does.
+///   PREDELAY  0..250 ms · DECAY 0.2..20 s — **DECAY is in SECONDS**: the loop gain is solved from the tank's own
+///             round-trip time for the RT60 asked for, so "3 s" measures 3 s rather than meaning "quite long".
+///   SIZE      0..100 (the tank scales, so the whole room changes size, not just the time)
+///   DIFFUSION 0..100 — smear on the input; low leaves the early reflections audible as separate events.
+///   BASS      0.2..4.0 — the 224's bass decay MULTIPLIER: how much longer (or shorter) the bottom rings than the
+///             rest. 2 is a hall, 0.5 keeps a mix clean.
+///   DAMP      0..100 — treble decay: the top goes first, as it does in a real room.
+///   MOD       0..100 · WET 0..100 (the CHAIN crossfades).
+class PlateVerbFx final : public Effect
+{
+  public:
+    static constexpr int kInDiffusers = 4;
+    static constexpr double kRefSr = 29761.0; // Dattorro's rate — every length below is scaled from it
+    static constexpr double kMaxPredelaySec = 0.25;
+    static constexpr double kMaxSizeScale = 2.0;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::plateverb; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    void recompute() noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    float programIdx_ = 0.0f;
+    Glide predelay_, decay_, size_, diffusion_, bassMult_, damp_, mod_;
+    // input path
+    DelayLine pre_;
+    Biquad inLp_;
+    DelayLine inAp_[kInDiffusers];
+    // the tank: two cross-coupled halves, each a modulated allpass → delay → damping → allpass → delay
+    DelayLine apAm_, delA1_, apA2_, delA2_;
+    DelayLine apBm_, delB1_, apB2_, delB2_;
+    Biquad dampA_, dampB_, bassA_, bassB_;
+    double tankA_ = 0.0, tankB_ = 0.0;
+    double modPhaseA_ = 0.0, modPhaseB_ = 0.0;
+    // resolved per block
+    double lenIn_[kInDiffusers] = {}, lenApAm_ = 0.0, lenA1_ = 0.0, lenApA2_ = 0.0, lenA2_ = 0.0;
+    double lenApBm_ = 0.0, lenB1_ = 0.0, lenApB2_ = 0.0, lenB2_ = 0.0;
+    double decayGain_ = 0.5, inDiff1_ = 0.75, inDiff2_ = 0.625, modDepth_ = 0.0;
+};
 
 /// TAPE ECHO — the RE-201 Space Echo (Phase 4.6d).
 ///   MODE      H1 | H2 | H3 | H1+2 | H2+3 | H1+3 | H1+2+3 — WHICH of the three playback heads are reading the loop.

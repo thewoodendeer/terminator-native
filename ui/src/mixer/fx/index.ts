@@ -23,6 +23,7 @@ import { SidechainFX } from './SidechainFX';
 import { LadderFX } from './LadderFX';
 import { FetCompFX } from './FetCompFX';
 import { TapeEchoFX } from './TapeEchoFX';
+import { PlateVerbFX } from './PlateVerbFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -30,7 +31,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -161,6 +162,22 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
     ],
     create: (c) => new LadderFX(c),
   },
+  plateverb: {
+    name: 'HALL 224',
+    desc: 'A real algorithmic reverb — the Lexicon 224 programs on a Dattorro tank. DECAY is in SECONDS (the loop is solved for the RT60 you ask for, so 3 s measures 3 s), BASS is the 224\'s bass decay MULTIPLIER rather than an EQ (2 = the bottom rings twice as long), DAMP is the treble decay, and MOD keeps the tail moving so a long decay never turns into a ringing buzz. A mono source comes back as a stereo room. Rendered by the app\'s engine',
+    params: [
+      sel('PROGRAM', 'PROGRAM', ['HALL', 'CHAMBER', 'PLATE', 'ROOM', 'AMBIENCE']),
+      { key: 'PREDELAY', label: 'PRE', kind: 'knob', min: 0, max: 250, step: 1, unit: 'ms' },
+      { key: 'DECAY', label: 'DECAY', kind: 'slider', min: 0.2, max: 20, step: 0.1, log: true, unit: 's' },
+      { key: 'SIZE', label: 'SIZE', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'DIFFUSION', label: 'DIFF', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'BASS', label: 'BASS x', kind: 'knob', min: 0.2, max: 4, step: 0.05 },
+      { key: 'DAMP', label: 'DAMP', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'MOD', label: 'MOD', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new PlateVerbFX(c),
+  },
   tapeecho: {
     name: 'TAPE ECHO',
     desc: 'The RE-201 Space Echo — one tape loop read by three heads at fixed spacings, which is why the multi-head MODES roll the way a single delay cannot. TIME is the MOTOR: moving it bends the pitch of what is already on the tape. The losses live inside the loop, so every repeat is darker and thicker than the last; INTENSITY past ~90 runs away into self-oscillation and the tape saturation is what keeps that musical. WOW is the worn transport, SPRING is the tank. Rendered by the app\'s engine',
@@ -277,7 +294,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'utility',
+  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

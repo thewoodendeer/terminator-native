@@ -1739,6 +1739,36 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6e DONE (THE FOURTH PREMIUM DEVICE: HALL 224 — A REAL ALGORITHMIC REVERB), 2026-08-24
+
+`PlateVerbFx` in `AnalogFx.{h,cpp}`, `FxType::plateverb` appended. The parity REVERB (a seeded IR through the
+partitioned convolver) is untouched — this is a different animal: a **Dattorro tank**, input diffusion into two
+cross-coupled half-loops, each a modulated allpass → delay → damping → allpass → delay, with seven output taps a
+side drawn from BOTH halves.
+
+**The design decision worth the whole device: DECAY IS IN SECONDS.** The loop gain is solved from the tank's own
+round-trip time — `g = 10^(−3·T/RT60)` — so the knob is a measurement, not a feel. Gated at 1 s, 3 s and 6 s
+against a real RT60 read off the decay slope (±35 %). Everything else follows from that:
+- **BASS is the 224's decay MULTIPLIER, not an EQ.** It is a low shelf INSIDE the loop whose gain is derived from
+  the same RT60 maths, so at 4 the bottom *rings longer*, at 0.25 it clears out of the way of a kick. The gate is
+  the one that tells the two apart: the low-band share of the tail must GROW from early to late, more so at 4 than
+  at 0.25 — an EQ would shift both windows equally and fail.
+- **DAMP** is treble decay (a damping LP in each half), gated as the tail being duller late, not quieter.
+- **MOD** — the 224's moving tails. Gated both ways: MOD 100 decorrelates from MOD 0 (< 0.9), and **MOD 0 is
+  deterministic to 1e-12** across two instances.
+- **A mono source comes back as a room:** feeding both channels the same impulse, L and R correlate < 0.5. That is
+  the line between a reverb and a mono delay played out of two speakers.
+- PROGRAM (HALL / CHAMBER / PLATE / ROOM / AMBIENCE) sets size, diffusion, damping and how much the tail moves;
+  SIZE scales the whole tank so the room changes size rather than just its time.
+
+**Gates (4.6e):** 8 more cases — DECAY in seconds at three lengths · stereo decorrelation · PREDELAY lands within
+10 ms of where it says · BASS as a multiplier · DAMP · DIFFUSION (crest factor over the first 60 ms) · MOD (moving
+AND deterministic at 0) · finite at 3 rates × 5 programs with everything maxed, and reset clearing the tank to
+below 1e-9. **mac-debug ctest 327/327 · RTSan 328/328 · ui typecheck 5 = baseline · vite build clean ·
+clang-format clean · ASCII grep silent.** Nothing went wrong in this one — the first device to gate green first try.
+
+Page side in the same commit: `plateverb` in `FX_REGISTRY` as **HALL 224** (pass-through stub) + the Help entry.
+
 ## Phase 4 — 4.6d DONE (THE THIRD PREMIUM DEVICE: TAPE ECHO, THE RE-201), 2026-08-24
 
 `TapeEchoFx` in `AnalogFx.{h,cpp}`, `FxType::tapeecho` appended. The parity DELAY is untouched.

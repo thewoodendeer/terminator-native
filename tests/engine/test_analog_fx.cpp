@@ -847,3 +847,238 @@ TEST_CASE("tape echo: finite everywhere, reset clears, blocks do not matter", "[
     for (std::size_t i = 0; i < ga.size(); ++i)
         REQUIRE(ga[i] == Approx(gb[i]).margin(1e-9));
 }
+
+// ---- HALL 224 (4.6e) -------------------------------------------------------------------------------------------
+// The Lexicon programs on a Dattorro tank. The headline claim is that **DECAY is in SECONDS** — the loop gain is
+// solved from the tank's round trip for the RT60 asked for — so that is the first thing gated. Then: PREDELAY lands
+// where it says, a mono source comes back DECORRELATED (otherwise it is not a room), BASS really is a decay
+// MULTIPLIER rather than an EQ, DAMP takes the top off the tail and not the front of it, DIFFUSION smears the early
+// reflections, MOD keeps the tail from sitting still, and it stays finite.
+
+namespace
+{
+enum
+{
+    kProgram = 0,
+    kPredelay,
+    kDecay,
+    kSize,
+    kDiffusion,
+    kVBass,
+    kDamp,
+    kVMod
+};
+
+std::unique_ptr<PlateVerbFx> makeVerb(int program, float decaySec, float predelayMs = 0.0f, float mod = 0.0f,
+                                      double sr = kSr)
+{
+    auto fx = std::make_unique<PlateVerbFx>();
+    fx->prepare(sr, kBlock);
+    fx->setParam(kProgram, static_cast<float>(program), true);
+    fx->setParam(kPredelay, predelayMs, true);
+    fx->setParam(kDecay, decaySec, true);
+    fx->setParam(kSize, 70.0f, true);
+    fx->setParam(kDiffusion, 70.0f, true);
+    fx->setParam(kVBass, 1.0f, true);
+    fx->setParam(kDamp, 40.0f, true);
+    fx->setParam(kVMod, mod, true);
+    return fx;
+}
+
+/// Seconds for the tail to fall 60 dB, measured off the decay slope: fit the level in 100 ms windows and read when
+/// it crosses −60 dB of the loudest window.
+double rt60Of(const std::vector<double>& out, double sr)
+{
+    const int win = static_cast<int>(sr * 0.1);
+    const int wins = static_cast<int>(out.size()) / win;
+    double top = 0.0;
+    std::vector<double> lv;
+    for (int w = 0; w < wins; ++w)
+    {
+        const double e = rms(out, w * win, (w + 1) * win);
+        lv.push_back(e);
+        top = std::max(top, e);
+    }
+    if (top <= 0.0)
+        return 0.0;
+    for (int w = 0; w < wins; ++w)
+        if (lv[static_cast<std::size_t>(w)] < top * 0.001) // −60 dB
+            return static_cast<double>(w) * 0.1;
+    return static_cast<double>(wins) * 0.1;
+}
+
+/// Normalised correlation between two channels over [from, to).
+double correlation(const std::vector<double>& a, const std::vector<double>& b, int from, int to)
+{
+    double ab = 0.0, aa = 0.0, bb = 0.0;
+    for (int i = from; i < to; ++i)
+    {
+        const double x = a[static_cast<std::size_t>(i)], y = b[static_cast<std::size_t>(i)];
+        ab += x * y;
+        aa += x * x;
+        bb += y * y;
+    }
+    return (aa > 0.0 && bb > 0.0) ? ab / std::sqrt(aa * bb) : 0.0;
+}
+
+/// Run an impulse through a stereo effect and return BOTH channels.
+std::pair<std::vector<double>, std::vector<double>> runStereo(Effect& e, int total, int block = kBlock)
+{
+    std::vector<double> outL(static_cast<std::size_t>(total)), outR(static_cast<std::size_t>(total));
+    std::vector<double> l(static_cast<std::size_t>(block)), r(static_cast<std::size_t>(block));
+    int done = 0;
+    while (done < total)
+    {
+        const int n = std::min(block, total - done);
+        for (int i = 0; i < n; ++i)
+        {
+            const double v = (done + i) == 0 ? 1.0 : 0.0;
+            l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = v;
+        }
+        e.process(l.data(), r.data(), n);
+        for (int i = 0; i < n; ++i)
+        {
+            outL[static_cast<std::size_t>(done + i)] = l[static_cast<std::size_t>(i)];
+            outR[static_cast<std::size_t>(done + i)] = r[static_cast<std::size_t>(i)];
+        }
+        done += n;
+    }
+    return {outL, outR};
+}
+} // namespace
+
+TEST_CASE("hall 224: DECAY is in seconds", "[fx][analog][verb]")
+{
+    REQUIRE(fxTypeFromId("plateverb") == FxType::plateverb);
+    const auto& info = fxTypeInfo(FxType::plateverb);
+    REQUIRE(info.numParams == 9);
+    REQUIRE(info.wetParam == 8);
+    REQUIRE(fxOptionIndex(FxType::plateverb, 0, "AMBIENCE") == 4);
+
+    // The whole point of solving the loop gain from the tank's round trip: what the knob says is what it measures.
+    for (const double want : {1.0, 3.0, 6.0})
+    {
+        auto fx = makeVerb(0, static_cast<float>(want));
+        const auto out = run(*fx, static_cast<int>(kSr * (want + 3.0)), impulse());
+        const double got = rt60Of(out, kSr);
+        INFO("asked " << want << " s, measured " << got << " s");
+        CHECK(got == Approx(want).epsilon(0.35));
+    }
+}
+
+TEST_CASE("hall 224: a mono source comes back as a room", "[fx][analog][verb]")
+{
+    // Fed the same signal on both channels, the two outputs have to be DIFFERENT — that is the difference between
+    // a reverb and a mono delay played out of two speakers.
+    auto fx = makeVerb(0, 3.0f);
+    const auto [outL, outR] = runStereo(*fx, static_cast<int>(kSr * 2.0));
+    const int from = static_cast<int>(kSr * 0.2), to = static_cast<int>(kSr * 1.5);
+    CHECK(std::abs(correlation(outL, outR, from, to)) < 0.5);
+    CHECK(rms(outL, from, to) > 1e-5);
+    CHECK(rms(outR, from, to) > 1e-5);
+}
+
+TEST_CASE("hall 224: PREDELAY holds the room back", "[fx][analog][verb]")
+{
+    auto none = makeVerb(0, 2.0f, 0.0f);
+    auto late = makeVerb(0, 2.0f, 120.0f);
+    const auto a = run(*none, static_cast<int>(kSr * 0.5), impulse());
+    const auto b = run(*late, static_cast<int>(kSr * 0.5), impulse());
+    const auto firstAbove = [](const std::vector<double>& v, double th)
+    {
+        for (int i = 0; i < static_cast<int>(v.size()); ++i)
+            if (std::abs(v[static_cast<std::size_t>(i)]) > th)
+                return i;
+        return -1;
+    };
+    const int ta = firstAbove(a, 1e-4), tb = firstAbove(b, 1e-4);
+    REQUIRE(ta >= 0);
+    REQUIRE(tb >= 0);
+    CHECK(tb - ta == Approx(static_cast<int>(kSr * 0.120)).margin(kSr * 0.01));
+}
+
+TEST_CASE("hall 224: BASS is a decay multiplier, not an EQ", "[fx][analog][verb]")
+{
+    // The test that separates the two: with BASS 4 the bottom must ring LONGER than the top, not merely louder.
+    // Measured as the low-band share of the energy EARLY vs LATE in the same tail.
+    const auto lowShareLate = [](float bass)
+    {
+        auto fx = makeVerb(0, 3.0f);
+        fx->setParam(kVBass, bass, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 4.0), impulse());
+        const int early = static_cast<int>(kSr * 0.3), late = static_cast<int>(kSr * 2.5);
+        const int win = static_cast<int>(kSr * 0.4);
+        // hfFraction is the high share; 1 − it is the low share.
+        const double lowEarly = 1.0 - hfFraction(out, early, early + win, 500.0, kSr);
+        const double lowLate = 1.0 - hfFraction(out, late, late + win, 500.0, kSr);
+        return lowLate - lowEarly; // how much MORE of the tail is bottom by the end
+    };
+    CHECK(lowShareLate(4.0f) > lowShareLate(0.25f));
+}
+
+TEST_CASE("hall 224: DAMP takes the top off the tail", "[fx][analog][verb]")
+{
+    const auto brightness = [](float damp)
+    {
+        auto fx = makeVerb(0, 3.0f);
+        fx->setParam(kDamp, damp, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 3.0), impulse());
+        const int late = static_cast<int>(kSr * 1.5), win = static_cast<int>(kSr * 0.5);
+        return hfFraction(out, late, late + win, 3000.0, kSr);
+    };
+    CHECK(brightness(100.0f) < brightness(0.0f));
+}
+
+TEST_CASE("hall 224: DIFFUSION smears the early reflections", "[fx][analog][verb]")
+{
+    // Low diffusion leaves distinct early events; high diffusion fills the gaps. Crest factor over the first
+    // 60 ms is the measurement — spiky vs smooth.
+    const auto crest = [](float diffusion)
+    {
+        auto fx = makeVerb(3, 2.0f); // ROOM: the early reflections are the audible part
+        fx->setParam(kDiffusion, diffusion, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.5), impulse());
+        const int to = static_cast<int>(kSr * 0.06);
+        return peak(out, 0, to) / std::max(1e-12, rms(out, 0, to));
+    };
+    CHECK(crest(100.0f) < crest(0.0f));
+}
+
+TEST_CASE("hall 224: MOD keeps the tail moving", "[fx][analog][verb]")
+{
+    // With MOD 0 the tank is a fixed network and the tail is identical run to run; with MOD up the tail is
+    // measurably different — which is what stops a long decay from turning into a ringing buzz.
+    auto still = makeVerb(0, 4.0f, 0.0f, 0.0f);
+    auto moving = makeVerb(0, 4.0f, 0.0f, 100.0f);
+    const auto a = run(*still, static_cast<int>(kSr * 2.0), impulse());
+    const auto b = run(*moving, static_cast<int>(kSr * 2.0), impulse());
+    const int from = static_cast<int>(kSr * 1.0), to = static_cast<int>(kSr * 2.0);
+    CHECK(std::abs(correlation(a, b, from, to)) < 0.9);
+    // MOD 0 is deterministic — two instances agree sample for sample.
+    auto still2 = makeVerb(0, 4.0f, 0.0f, 0.0f);
+    const auto c = run(*still2, static_cast<int>(kSr * 0.5), impulse());
+    for (int i = 0; i < static_cast<int>(kSr * 0.5); ++i)
+        REQUIRE(a[static_cast<std::size_t>(i)] == Approx(c[static_cast<std::size_t>(i)]).margin(1e-12));
+}
+
+TEST_CASE("hall 224: every program is finite, and reset clears the tank", "[fx][analog][verb]")
+{
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int prog = 0; prog < 5; ++prog)
+        {
+            auto fx = makeVerb(prog, 20.0f, 250.0f, 100.0f, sr);
+            const auto out =
+                run(*fx, static_cast<int>(sr * 0.3), [](int i) { return (i / 16) % 2 == 0 ? 1.0 : -1.0; }, 64);
+            for (const double v : out)
+            {
+                REQUIRE(std::isfinite(v));
+                REQUIRE(std::abs(v) < 12.0);
+            }
+        }
+
+    auto fx = makeVerb(0, 8.0f, 50.0f, 60.0f);
+    run(*fx, static_cast<int>(kSr * 1.0), tone(300.0, 0.7));
+    fx->reset();
+    const auto quiet = run(*fx, static_cast<int>(kSr * 0.5), [](int) { return 0.0; });
+    CHECK(rms(quiet, 0, static_cast<int>(kSr * 0.5)) < 1e-9);
+}
