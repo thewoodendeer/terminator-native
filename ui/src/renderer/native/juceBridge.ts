@@ -64,6 +64,11 @@ export const native = {
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),
+  /** Phase 4.5e: render the project OFFLINE through the same engine + mixer and write WAVs. The page owns the
+   *  project so it sends the JSON; the audio is already in the store so it sends KEY MAPS, not bytes.
+   *  `{project, main?, sources?{videoId: key}, drumLanes?{lane: key}, path, bitDepth?, sampleRate?, loops?, tail?,
+   *   mixer?, drums?, bass?, limiter?, stems?[channel]}` → `{ok, files[], seconds, sampleRate, bitDepth}`. */
+  exportProject: lazy<AnyRecord, AnyRecord>('terminatorExport'),
 };
 
 /** Subscribe to a shell event (`terminator.snapshot` 20 Hz, `terminator.devicesChanged`, `terminator.midiChanged`,

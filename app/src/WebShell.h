@@ -11,6 +11,7 @@
 // Probe mode (CI / headless smoke): TERMINATOR_PROBE_FILE=<path> — ~2.5 s after the page loads, the shell
 // evaluates JS inside the WebView, writes what the page rendered (bridge/engine/device/snapshot lines) as
 // JSON to that file and quits. Proves WebView + bridge + engine end-to-end without a screenshot.
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -64,6 +65,10 @@ class WebShell final : public juce::Component, private juce::Timer
     juce::var handleAudio(const juce::var& req);
     juce::var handleMidi(const juce::var& req);
     void applyMidiSettings(const juce::var& appSettings); // app.midi.clock → the engine, app.midi.outputs → the hub
+    /// `terminatorExport(req)` — render the page's project OFFLINE through the same engine + mixer and write WAVs.
+    /// Runs on its own thread against an INDEPENDENT Engine (renderOffline builds its own), so the live engine and
+    /// the audio callback are untouched; the sample buffers are held by shared_ptr for the duration.
+    void handleExport(const juce::var& req, juce::WebBrowserComponent::NativeFunctionCompletion complete);
     void handlePads(const juce::var& req, juce::WebBrowserComponent::NativeFunctionCompletion complete);
     juce::var padsVar() const;
     void persistAudioSetup();
@@ -76,7 +81,8 @@ class WebShell final : public juce::Component, private juce::Timer
     SampleStore& samples_;
     SampleLoader& loader_;
     Settings& settings_;
-    ShellServices services_;  // terminatorFs / terminatorSettings — the window.terminator shim's backend
+    ShellServices services_; // terminatorFs / terminatorSettings — the window.terminator shim's backend
+    std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true); // export threads outlive us
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
     ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
     juce::String audioError_;

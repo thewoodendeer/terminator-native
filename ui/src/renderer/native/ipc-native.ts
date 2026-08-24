@@ -27,6 +27,7 @@ import { installBrowserIPC } from '../ipc-browser';
 import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
 import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
 import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } from './assetsNative';
+import { installExportProbe } from './exportNative';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -278,6 +279,12 @@ export function installNativeIPC(): void {
   const assets = buildAssetKeys({ dataDir, join });
   Object.assign(overlay, assets.keys);
   installAssetsProbe(assets);
+
+  // the OFFLINE EXPORTER (4.5e): the render is entirely native — the probe drives it end to end
+  installExportProbe({
+    tempDir: () => nativeBoot()?.dirs.temp || '/tmp',
+    sep: () => nativeBoot()?.dirs.sep ?? '/',
+  });
 
   // the Sample Library (~/Music/Terminator) — libraryCore over terminatorFs, files served at /lib/b64/
   const library = buildLibraryOverlay({ getSettings, setSettings, settingsSync: () => settingsCache });

@@ -41,6 +41,12 @@ const SampleBuffer* SampleRegistry::find(const juce::String& key) const
     return it == ids_.end() ? nullptr : store_.get(it->second);
 }
 
+std::shared_ptr<SampleBuffer> SampleRegistry::shared(const juce::String& key) const
+{
+    const auto it = ids_.find(key);
+    return it == ids_.end() ? nullptr : store_.shared(it->second);
+}
+
 juce::var SampleRegistry::handle(const juce::var& req)
 {
     const auto verb = req.isObject() ? req.getProperty("verb", "list").toString() : juce::String("list");

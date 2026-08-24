@@ -34,6 +34,8 @@ class SampleRegistry
     juce::var setPadLoop(const juce::var& cmd);
 
     const SampleBuffer* find(const juce::String& key) const;
+    /// The buffer as a shared_ptr — the offline exporter needs to KEEP it alive while it renders on its own thread.
+    std::shared_ptr<SampleBuffer> shared(const juce::String& key) const;
     std::size_t keyCount() const { return ids_.size(); }
     std::size_t pendingCount() const { return pending_.size(); }
 

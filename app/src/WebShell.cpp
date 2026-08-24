@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 #include <iostream>
 
 #include "WebResources.h"
 #include "terminator/Version.h"
+#include "terminator/model/ProjectModel.h"
 #include "terminator/render/BassSpec.h"
+#include "terminator/render/ProjectRenderer.h"
 
 namespace terminator::app
 {
@@ -331,6 +334,9 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
             .withNativeFunction("terminatorPads", [this](const juce::Array<juce::var>& args,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { handlePads(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
+            .withNativeFunction("terminatorExport", [this](const juce::Array<juce::var>& args,
+                                                           juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                { handleExport(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
             .withNativeFunction(
                 "terminatorSamples",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -420,6 +426,7 @@ void WebShell::closePreferences()
 
 WebShell::~WebShell()
 {
+    alive_->store(false); // an export thread may still be running: its callback must not touch us
     stopTimer();
     audioIO_.onDeviceChanged = nullptr;
     midi_.onPortsChanged = nullptr;
@@ -1355,6 +1362,132 @@ juce::var WebShell::padsVar() const
     return juce::var(pads);
 }
 
+// ---- the offline exporter (Phase 4.5e) -----------------------------------------------------------------------
+//
+// `terminatorExport({project, main, sources{}, drumLanes{}, path, …})`. The page owns the project, so it hands the
+// JSON over; the audio is already in the SampleStore (the page uploaded it), so it hands over KEY MAPS rather than
+// bytes. The render is `render::renderProject` — the same engine, the same mixer, the same sequencers as playback.
+//
+// It runs on its own std::thread: renderOffline builds an Engine of its OWN, so nothing here touches the live engine
+// or the audio callback. The only shared state is the sample buffers, which we hold by shared_ptr for the duration.
+void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+{
+    if (!req.isObject())
+    {
+        complete(ok(false, "export needs an object"));
+        return;
+    }
+    juce::String error;
+    auto project = model::projectFromJson(req.getProperty("project", juce::var()), error);
+    if (!project.isValid())
+    {
+        complete(ok(false, error.isNotEmpty() ? error : juce::String("could not read the project")));
+        return;
+    }
+    const juce::File out(req.getProperty("path", "").toString());
+    if (out.getFullPathName().isEmpty())
+    {
+        complete(ok(false, "export needs a path"));
+        return;
+    }
+    if (!out.getParentDirectory().isDirectory())
+    {
+        complete(ok(false, "no such folder: " + out.getParentDirectory().getFullPathName()));
+        return;
+    }
+
+    // the audio: the page names the store keys, we take a shared_ptr of each so the render owns what it reads
+    render::SampleBank bank;
+    if (const auto mainKey = req.getProperty("main", "").toString(); mainKey.isNotEmpty())
+        bank.mainBuffer = registry_.shared(mainKey);
+    auto readMap = [this](const juce::var& v, auto&& put)
+    {
+        if (auto* o = v.getDynamicObject())
+            for (const auto& kv : o->getProperties())
+                if (auto buf = registry_.shared(kv.value.toString()))
+                    put(kv.name.toString(), std::move(buf));
+    };
+    readMap(req.getProperty("sources", juce::var()), [&bank](const juce::String& id, std::shared_ptr<SampleBuffer> b)
+            { bank.bySourceVideoId[id] = std::move(b); });
+    readMap(req.getProperty("drumLanes", juce::var()),
+            [&bank](const juce::String& lane, std::shared_ptr<SampleBuffer> b)
+            { bank.drumLanes[lane] = std::move(b); });
+
+    render::ProjectRenderOptions opts;
+    opts.sampleRate = static_cast<double>(req.getProperty("sampleRate", 48000.0));
+    opts.blockSize = std::clamp(static_cast<int>(req.getProperty("blockSize", 512)), 32, 4096);
+    opts.loops = std::clamp(static_cast<int>(req.getProperty("loops", 1)), 1, 64);
+    opts.tailSeconds = std::clamp(static_cast<double>(req.getProperty("tail", 2.5)), 0.0, 30.0);
+    opts.useMixer = static_cast<bool>(req.getProperty("mixer", true));
+    opts.renderDrums = static_cast<bool>(req.getProperty("drums", true));
+    opts.renderBass = static_cast<bool>(req.getProperty("bass", true));
+    opts.masterLimiter = static_cast<bool>(req.getProperty("limiter", true));
+    if (const auto* stems = req.getProperty("stems", juce::var()).getArray())
+        for (const auto& s : *stems)
+            opts.stemChannels.push_back(s.toString());
+    opts.numChannels = 2 + 2 * static_cast<int>(opts.stemChannels.size());
+    const int bitDepth = [&]
+    {
+        const int b = static_cast<int>(req.getProperty("bitDepth", 24));
+        return (b == 16 || b == 24 || b == 32) ? b : 24;
+    }();
+
+    auto alive = alive_;
+    auto shared = std::make_shared<juce::WebBrowserComponent::NativeFunctionCompletion>(std::move(complete));
+    std::thread(
+        [project, bank = std::move(bank), opts = std::move(opts), out, bitDepth, alive, shared]() mutable
+        {
+            juce::var result;
+            {
+                const auto rendered = render::renderProject(project, bank, opts);
+                auto* o = new juce::DynamicObject();
+                juce::Array<juce::var> files;
+                juce::String err;
+                bool wrote = true;
+                // the master, then one file per trackout named after its channel
+                juce::AudioBuffer<float> pair(2, rendered.buffer.getNumSamples());
+                auto writePair = [&](int firstChannel, const juce::File& f)
+                {
+                    for (int ch = 0; ch < 2; ++ch)
+                        pair.copyFrom(ch, 0, rendered.buffer, firstChannel + ch, 0, rendered.buffer.getNumSamples());
+                    if (!writeWav(f, pair, rendered.sampleRate, bitDepth, err))
+                        return false;
+                    files.add(f.getFullPathName());
+                    return true;
+                };
+                wrote = writePair(0, out);
+                for (std::size_t i = 0; wrote && i < opts.stemChannels.size(); ++i)
+                {
+                    const int first = 2 + 2 * static_cast<int>(i);
+                    if (first + 1 >= rendered.buffer.getNumChannels())
+                        break;
+                    wrote = writePair(first, out.getSiblingFile(out.getFileNameWithoutExtension() + " - " +
+                                                                opts.stemChannels[i] + out.getFileExtension()));
+                }
+                o->setProperty("ok", wrote);
+                if (!wrote)
+                    o->setProperty("error", err);
+                o->setProperty("files", juce::var(files));
+                o->setProperty("seconds", rendered.buffer.getNumSamples() / std::max(1.0, rendered.sampleRate));
+                // the master's peak: a render that wrote a file full of silence is a FAILED export, not a pass
+                float peak = 0.0f;
+                for (int ch = 0; ch < std::min(2, rendered.buffer.getNumChannels()); ++ch)
+                    peak = std::max(peak, rendered.buffer.getMagnitude(ch, 0, rendered.buffer.getNumSamples()));
+                o->setProperty("peak", static_cast<double>(peak));
+                o->setProperty("sampleRate", rendered.sampleRate);
+                o->setProperty("bitDepth", bitDepth);
+                result = juce::var(o);
+            }
+            juce::MessageManager::callAsync(
+                [alive, shared, result]
+                {
+                    if (alive->load())
+                        (*shared)(result);
+                });
+        })
+        .detach();
+}
+
 void WebShell::handlePads(const juce::var& req, juce::WebBrowserComponent::NativeFunctionCompletion complete)
 {
     const auto verb = req.isObject() ? req.getProperty("verb", "list").toString() : juce::String("list");
@@ -1471,6 +1604,10 @@ void WebShell::runProbeAsyncChecks()
                     // the asset store + project bundles (assetsNative.ts): put/has/get round-trip + readBinary
                     const as = window.__terminatorNativeAssets;
                     r.assets = as && as.selfTest ? await as.selfTest() : { error: 'no assets' };
+                    // the OFFLINE EXPORTER (4.5e): a tiny project rendered through the real engine + mixer and
+                    // written to a real WAV on disk
+                    const ex = window.__terminatorNativeExport;
+                    r.export = ex && ex.selfTest ? await ex.selfTest() : { error: 'no export' };
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();
