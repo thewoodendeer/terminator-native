@@ -13,10 +13,22 @@
 #include <cstdint>
 #include <vector>
 
+#include <juce_core/juce_core.h>
+
 #include "terminator/core/fx/Effect.h"
 
 namespace terminator
 {
+
+/// One note for a hosted INSTRUMENT (6.3), at its sample offset inside the block.
+struct ExternalNote
+{
+    std::uint32_t offset = 0; // samples into the block
+    std::uint8_t note = 60;
+    std::uint8_t velocity = 100;
+    std::uint8_t on = 1; // 0 = note off
+    std::uint8_t channel = 1;
+};
 
 /// Implemented in the app over `juce::AudioPluginInstance`. Every call happens on the AUDIO thread.
 class ExternalProcessor
@@ -26,6 +38,14 @@ class ExternalProcessor
     /// In place, float, `numChannels` pointers of `numSamples`. The plugin's own code runs here — it is other
     /// people's software, so it may do anything; that is the price of hosting and every host pays it.
     virtual void processBlock(float* const* channels, int numChannels, int numSamples) noexcept = 0;
+    /// INSTRUMENTS (6.3): the same, plus this block's notes. The buffer arrives SILENT and the instrument fills
+    /// it. An effect ignores the notes, which is why the default forwards.
+    virtual void processBlockWithNotes(float* const* channels, int numChannels, int numSamples,
+                                       const ExternalNote* notes, int numNotes) noexcept
+    {
+        juce::ignoreUnused(notes, numNotes);
+        processBlock(channels, numChannels, numSamples);
+    }
     /// The plugin's reported latency, for the mixer's PDC plan.
     virtual int latencySamples() const noexcept { return 0; }
 };

@@ -1020,6 +1020,16 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         c = Command::countIn(std::clamp(static_cast<int>(json.getProperty("beats", 4)), 1, 16), atSampleOf(json));
     else if (type == "cancelCountIn")
         c = Command::cancelCountIn();
+    // INSTRUMENTS (6.3): whether MIDI notes play the hosted instrument instead of the pads (OFF by default — the
+    // standing rule is that keys and MIDI trigger pads), and a note from the page's own keyboard.
+    else if (type == "setInstrumentMidi")
+        c = Command::setInstrumentMidi(static_cast<bool>(json.getProperty("on", false)));
+    else if (type == "instrumentNote")
+        c = Command::instrumentNote(
+            std::clamp(static_cast<int>(json.getProperty("note", 60)), 0, 127),
+            std::clamp(static_cast<float>(static_cast<double>(json.getProperty("velocity", 1.0))), 0.0f, 1.0f),
+            static_cast<bool>(json.getProperty("on", true)),
+            static_cast<std::uint64_t>(static_cast<double>(json.getProperty("atSample", 0.0))));
     else if (type == "setArp")
         c = Command::setArp(static_cast<bool>(json.getProperty("enabled", false)),
                             std::clamp(static_cast<int>(json.getProperty("rate", 4)), 1, 64),
@@ -2064,6 +2074,39 @@ juce::var WebShell::probePluginRack()
     o->setProperty("detached", after == nullptr || after->type() != FxType::plugin ||
                                    static_cast<const PluginFx*>(after)->processor() == nullptr);
     engine_.commands().push(Command::mixerRemoveFx(kStrip, 0));
+    // 6.3: the INSTRUMENT path, when a real one is pointed at (TERMINATOR_PROBE_INSTRUMENT=<a synth .vst3>): it is
+    // scanned, opened on the strip and the ENGINE must be holding it as its instrument.
+    if (const auto instPath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_INSTRUMENT", {});
+        instPath.isNotEmpty())
+    {
+        auto* scan = new juce::DynamicObject();
+        scan->setProperty("verb", "scanFile");
+        scan->setProperty("file", instPath);
+        scan->setProperty("format", "VST3");
+        const auto scanned = plugins_.handle(juce::var(scan));
+        o->setProperty("instrumentScanAdded", scanned.getProperty("added", -1));
+        juce::String instId;
+        if (const auto* ids = scanned.getProperty("ids", juce::var()).getArray(); ids != nullptr && !ids->isEmpty())
+            instId = (*ids)[0].toString();
+        o->setProperty("instrumentId", instId);
+        if (instId.isNotEmpty())
+        {
+            auto* openInst = new juce::DynamicObject();
+            openInst->setProperty("verb", "openInstrument");
+            openInst->setProperty("strip", kStrip);
+            openInst->setProperty("id", instId);
+            const auto opened2 = rack_.handle(juce::var(openInst));
+            o->setProperty("instrumentOpened", opened2.getProperty("ok", false));
+            juce::Thread::sleep(80);
+            o->setProperty("instrumentAttached", engine_.instrument() != nullptr);
+            o->setProperty("instrumentStrip", engine_.instrumentStrip());
+            auto* closeInst = new juce::DynamicObject();
+            closeInst->setProperty("verb", "closeInstrument");
+            rack_.handle(juce::var(closeInst));
+            juce::Thread::sleep(80);
+            o->setProperty("instrumentDetached", engine_.instrument() == nullptr);
+        }
+    }
     engine_.commands().push(Command::mixerSetStrip(kStrip, static_cast<std::uint8_t>(StripKind::off)));
     o->setProperty("ok", true);
     return juce::var(o);

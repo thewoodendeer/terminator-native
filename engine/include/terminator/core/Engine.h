@@ -167,6 +167,14 @@ class Engine
     /// (the message thread calls `stopRecord()`).
     bool recordComplete() const noexcept { return recComplete_.load(std::memory_order_acquire) != 0; }
 
+    // --- INSTRUMENTS (6.3) ----------------------------------------------------------------------
+    // A hosted plugin INSTRUMENT is a SOURCE, like the bass synth: notes go in, audio comes out into a mixer strip.
+    // The app owns the instance (PluginRack) and hands the pointer over `Command::setInstrument`; the same lifetime
+    // rule as an insert applies — detach, let blocks run, then delete.
+    /// The instrument's strip and whether one is attached (message thread read-back / tests).
+    int instrumentStrip() const noexcept { return instrumentStrip_; }
+    const ExternalProcessor* instrument() const noexcept { return instrument_.load(std::memory_order_acquire); }
+
     // --- MONITORING (5.1c, message thread → the audio thread over a command) ---------------------
     // `Command::setMonitor` — hear the interface's inputs through the engine while you set a level. It costs no
     // latency beyond the driver's own round trip: the block that arrives is added to the block that leaves.
@@ -281,6 +289,28 @@ class Engine
             recRolling_.load(std::memory_order_relaxed) == 0 && recorder_.recording() &&
             recArmSample_.load(std::memory_order_relaxed) == 0)
             recArmSample_.store(atSample > samplesProcessed_ ? atSample : samplesProcessed_, std::memory_order_release);
+    }
+
+    // INSTRUMENTS (6.3): one hosted instrument, rendered into its strip like the bass synth. Notes arrive from MIDI
+    // (when the page routes them here) and from `Command::instrumentNote`; they are collected per block, in order.
+    std::atomic<ExternalProcessor*> instrument_{nullptr};
+    int instrumentStrip_ = -1;      // −1 = dry into outs 1/2
+    bool midiToInstrument_ = false; // MIDI notes play the instrument (the page's routing choice)
+    static constexpr int kMaxInstrumentNotes = 64;
+    ExternalNote instrumentNotes_[kMaxInstrumentNotes] = {};
+    int instrumentNoteCount_ = 0;
+    float* instChans_[2] = {nullptr, nullptr};
+    void addInstrumentNote(std::uint8_t note, std::uint8_t velocity, bool on, std::int32_t offset,
+                           int numSamples) noexcept TERMINATOR_NONBLOCKING
+    {
+        if (instrumentNoteCount_ >= kMaxInstrumentNotes || instrument_.load(std::memory_order_relaxed) == nullptr)
+            return;
+        auto& n = instrumentNotes_[instrumentNoteCount_++];
+        n.offset = static_cast<std::uint32_t>(std::clamp<std::int32_t>(offset, 0, numSamples > 0 ? numSamples - 1 : 0));
+        n.note = note;
+        n.velocity = velocity;
+        n.on = on ? 1 : 0;
+        n.channel = 1;
     }
 
     // MONITORING (5.1c): the interface's inputs through the engine, so you can hear what you are about to record.

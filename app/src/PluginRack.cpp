@@ -2,6 +2,8 @@
 
 namespace terminator::app
 {
+/// The `slot` an INSTRUMENT entry carries: it is not in any insert chain (6.3).
+constexpr int kInstrumentSlot = -1;
 
 // ---- the adapter: a juce::AudioPluginInstance behind the engine's ExternalProcessor -------------------------
 // The engine hands two float channels and expects them back. A plugin that can be stereo in / stereo out is
@@ -40,6 +42,33 @@ class PluginRack::Adapter final : public ExternalProcessor
             else
                 std::fill_n(dst, numSamples, 0.0f);
         }
+        juce::AudioBuffer<float> view(scratch_.getArrayOfWritePointers(), channels_, numSamples);
+        plugin_.processBlock(view, midi_);
+        for (int c = 0; c < 2; ++c)
+            std::copy_n(scratch_.getReadPointer(c), numSamples, channels[c]);
+    }
+
+    /// INSTRUMENTS (6.3): the block's notes become a MidiBuffer and the plugin fills the (silent) buffer.
+    void processBlockWithNotes(float* const* channels, int numChannels, int numSamples, const ExternalNote* notes,
+                               int numNotes) noexcept override
+    {
+        if (numSamples > maxBlock_ || numChannels < 2)
+            return;
+        midi_.clear();
+        for (int i = 0; i < numNotes; ++i)
+        {
+            const auto& n = notes[i];
+            const auto msg = n.on != 0 ? juce::MidiMessage::noteOn(n.channel, n.note, juce::uint8(n.velocity))
+                                       : juce::MidiMessage::noteOff(n.channel, n.note);
+            midi_.addEvent(msg, static_cast<int>(n.offset));
+        }
+        if (channels_ == 2)
+        {
+            juce::AudioBuffer<float> wrapped(const_cast<float**>(channels), 2, numSamples);
+            plugin_.processBlock(wrapped, midi_);
+            return;
+        }
+        scratch_.clear(0, numSamples);
         juce::AudioBuffer<float> view(scratch_.getArrayOfWritePointers(), channels_, numSamples);
         plugin_.processBlock(view, midi_);
         for (int c = 0; c < 2; ++c)
@@ -93,7 +122,12 @@ PluginRack::~PluginRack()
     // Detach everything first, then let the instances go: the audio thread must never be handed a dangling
     // pointer, not even on the way out.
     for (auto& e : entries_)
-        engine_.commands().push(Command::mixerSetFxProcessor(e->strip, e->slot, nullptr));
+    {
+        if (e->slot == kInstrumentSlot)
+            engine_.commands().push(Command::setInstrument(nullptr, -1));
+        else
+            engine_.commands().push(Command::mixerSetFxProcessor(e->strip, e->slot, nullptr));
+    }
     entries_.clear();
     retired_.clear();
 }
@@ -101,7 +135,8 @@ PluginRack::~PluginRack()
 bool PluginRack::ownsVerb(const juce::String& verb)
 {
     return verb == "open" || verb == "close" || verb == "editor" || verb == "state" || verb == "setState" ||
-           verb == "params" || verb == "setParam" || verb == "rack";
+           verb == "params" || verb == "setParam" || verb == "rack" || verb == "openInstrument" ||
+           verb == "closeInstrument";
 }
 
 PluginRack::Entry* PluginRack::find(int strip, int slot)
@@ -128,7 +163,10 @@ juce::var PluginRack::entryVar(const Entry& e) const
 void PluginRack::retire(std::unique_ptr<Entry> e)
 {
     e->editor = nullptr; // the window goes now; the audio has not touched it
-    engine_.commands().push(Command::mixerSetFxProcessor(e->strip, e->slot, nullptr));
+    if (e->slot == kInstrumentSlot)
+        engine_.commands().push(Command::setInstrument(nullptr, -1));
+    else
+        engine_.commands().push(Command::mixerSetFxProcessor(e->strip, e->slot, nullptr));
     retired_.push_back({std::move(e), engine_.snapshot().blocksProcessed});
 }
 
@@ -154,12 +192,15 @@ void PluginRack::prepareAll(double sampleRate, int blockSize)
             continue;
         // Detach across the re-prepare: releaseResources/prepareToPlay on a plugin the audio thread is calling is
         // exactly the crash this whole design exists to avoid.
-        engine_.commands().push(Command::mixerSetFxProcessor(e->strip, e->slot, nullptr));
+        const bool isInstrument = e->slot == kInstrumentSlot;
+        engine_.commands().push(isInstrument ? Command::setInstrument(nullptr, -1)
+                                             : Command::mixerSetFxProcessor(e->strip, e->slot, nullptr));
         e->instance->releaseResources();
         e->instance->setRateAndBufferSizeDetails(sampleRate, blockSize);
         e->instance->prepareToPlay(sampleRate, blockSize);
         e->adapter->resize(blockSize);
-        engine_.commands().push(Command::mixerSetFxProcessor(e->strip, e->slot, e->adapter.get()));
+        engine_.commands().push(isInstrument ? Command::setInstrument(e->adapter.get(), e->strip)
+                                             : Command::mixerSetFxProcessor(e->strip, e->slot, e->adapter.get()));
     }
 }
 
@@ -277,6 +318,73 @@ juce::var PluginRack::handle(const juce::var& req)
         return juce::var(reply);
     }
 
+    // INSTRUMENTS (6.3): one at a time, on a strip of its own. `slot` −1 marks the entry as the instrument.
+    if (verb == "openInstrument")
+    {
+        const auto id = req.getProperty("id", "").toString();
+        const double sr = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
+        const int block = engine_.config().maxBlockSize > 0 ? engine_.config().maxBlockSize : 512;
+        juce::String error;
+        auto instance = hub_.create(id, sr, block, error);
+        if (instance == nullptr)
+        {
+            reply->setProperty("ok", false);
+            reply->setProperty("error", error.isNotEmpty() ? error : juce::String("the instrument would not load"));
+            return juce::var(reply);
+        }
+        instance->enableAllBuses();
+        auto layout = instance->getBusesLayout();
+        for (auto& b : layout.outputBuses)
+            b = juce::AudioChannelSet::stereo();
+        instance->setBusesLayout(layout);
+        instance->setRateAndBufferSizeDetails(sr, block);
+        instance->prepareToPlay(sr, block);
+        if (const auto stateB64 = req.getProperty("state", "").toString(); stateB64.isNotEmpty())
+        {
+            juce::MemoryOutputStream bytes;
+            if (juce::Base64::convertFromBase64(bytes, stateB64))
+                instance->setStateInformation(bytes.getData(), static_cast<int>(bytes.getDataSize()));
+        }
+        auto entry = std::make_unique<Entry>();
+        entry->name = instance->getName();
+        entry->id = id;
+        entry->strip = strip;
+        entry->slot = kInstrumentSlot;
+        entry->adapter = std::make_unique<Adapter>(*instance, block);
+        entry->instance = std::move(instance);
+        for (auto it = entries_.begin(); it != entries_.end();) // one instrument at a time
+        {
+            if ((*it)->slot == kInstrumentSlot)
+            {
+                engine_.commands().push(Command::setInstrument(nullptr, -1));
+                retire(std::move(*it));
+                it = entries_.erase(it);
+            }
+            else
+                ++it;
+        }
+        engine_.commands().push(Command::setInstrument(entry->adapter.get(), strip));
+        reply->setProperty("ok", true);
+        reply->setProperty("plugin", entryVar(*entry));
+        entries_.push_back(std::move(entry));
+        return juce::var(reply);
+    }
+    if (verb == "closeInstrument")
+    {
+        for (auto it = entries_.begin(); it != entries_.end();)
+        {
+            if ((*it)->slot == kInstrumentSlot)
+            {
+                engine_.commands().push(Command::setInstrument(nullptr, -1));
+                retire(std::move(*it));
+                it = entries_.erase(it);
+            }
+            else
+                ++it;
+        }
+        reply->setProperty("ok", true);
+        return juce::var(reply);
+    }
     if (verb == "close")
     {
         for (auto it = entries_.begin(); it != entries_.end();)

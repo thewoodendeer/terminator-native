@@ -1751,6 +1751,34 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.3 DONE (YOUR SYNTHS PLAY INTO THE MIXER), 2026-08-24
+
+An INSTRUMENT plugin is a SOURCE, like the bass synth: notes in, audio out into a mixer strip.
+
+- **Engine:** `ExternalProcessor` grew `processBlockWithNotes` (the block's `ExternalNote`s at their sample offsets;
+  an effect ignores them, which is why the default forwards to `processBlock`). The Engine holds ONE instrument —
+  pointer + strip — and renders it beside the bass: the buffer it gets is SILENT (an instrument writes, it does not
+  process what is there), and its output goes into its strip (or dry into outs 1/2 when it has none), so the fader,
+  the inserts after it and the console all apply. Notes come from `Command::instrumentNote` (sample-exact when the
+  page says when) and from MIDI IN — but only when `setInstrumentMidi` is on. **It is OFF by default: the standing
+  rule is that keys and MIDI trigger pads**, so playing the synth is a deliberate choice.
+- **App:** `openInstrument` / `closeInstrument` on the rack (one at a time), the adapter turning the block's notes
+  into a `MidiBuffer`. Same lifetime rule as an insert, same re-prepare on a device change.
+- **Page:** the same PLUGIN slot and the same picker — instruments are listed with `· INSTR`, and choosing one
+  loads it as the strip's INSTRUMENT instead of an insert (the insert itself stays the pass-through it is). The
+  device panel gains a **MIDI IN** toggle next to EDITOR.
+- **Gates:** 3 engine cases (notes play it and its audio takes the strip's fader · a MIDI note plays the instrument
+  instead of the pad it is mapped to · no allocation) — **ctest 395/395**. Probe: with
+  `TERMINATOR_PROBE_INSTRUMENT=<a synth .vst3>` it scans, opens and checks the ENGINE holds it — verified locally
+  with **Massive X** (`instrumentOpened/Attached/Detached` all true, strip 20).
+- **Fixed on the way:** `scanFile` now returns the IDs it added. Matching a freshly scanned plugin back by FILE
+  PATH is fragile — a format can report the path its own way, and Massive X did — so the caller gets the ids
+  instead of guessing.
+
+**Still open in 6:** 6.5 MIDI learn on plugin params · 6.6 crash drills. An instrument is not SEQUENCED yet (no
+notes from the chop/drum sequencers or the arrangement — that is a Phase 10 "beyond parity" question), and the
+offline render carries INSERT plugins but not the instrument.
+
 ## Phase 5 — 5.1e DONE (THE INPUT LIST IS YOUR INTERFACE'S CHANNELS), 2026-08-24
 
 RECORD SAMPLE's INPUT list was still the BROWSER's devices in the shell — a list the engine does not use for a

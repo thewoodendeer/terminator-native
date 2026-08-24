@@ -130,6 +130,13 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
       echo "plugin insert OK (engine): $(grep -Eo '"plugins62": ?\{[^}]*\}' "$OUT")"
     } || true
     grep -Eq '"pluginHosted": ?true' "$OUT" && echo "plugin insert OK (page -> app -> engine): $(grep -Eo '"pluginId": ?"[^"]*"' "$OUT")" || true
+    # Phase 6.3: an INSTRUMENT (TERMINATOR_PROBE_INSTRUMENT=<a synth .vst3>) — scanned, opened on a strip, and the
+    # ENGINE holds it as its instrument until it is closed.
+    grep -Eq '"instrumentOpened": ?true' "$OUT" && {
+      grep -Eq '"instrumentAttached": ?true' "$OUT" || { echo "::error::the instrument never reached the engine (see plugins62)"; exit 1; }
+      grep -Eq '"instrumentDetached": ?true' "$OUT" || { echo "::error::closing the instrument left the engine holding it (see plugins62)"; exit 1; }
+      echo "instrument OK: $(grep -Eo '"instrumentId": ?"[^"]*"' "$OUT")"
+    } || true
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

@@ -23,7 +23,8 @@ export async function listPlugins(): Promise<ScannedPlugin[]> {
   if (cache) return cache;
   inflight ??= native.plugins({ verb: 'list' })
     .then((r: any) => {
-      cache = ((r?.plugins ?? []) as ScannedPlugin[]).filter(p => !p.isInstrument);
+      // instruments are listed too (6.3): picking one makes it that strip's INSTRUMENT rather than an insert
+      cache = (r?.plugins ?? []) as ScannedPlugin[];
       return cache;
     })
     .catch(() => [])
@@ -45,6 +46,17 @@ export async function openPluginEditor(channel: string, slot: number): Promise<{
   if (!isNative() || strip < 0) return { ok: false, error: 'not running natively' };
   const r: any = await native.plugins({ verb: 'editor', strip, slot, show: true });
   return { ok: !!r?.ok, error: r?.error };
+}
+
+/** Is this plugin an instrument? (the picker labels it, and the shadow loads it differently) */
+export function isInstrumentId(id: string): boolean {
+  return cachedPlugins().some(p => p.id === id && p.isInstrument);
+}
+
+/** MIDI notes play the hosted INSTRUMENT instead of the pads. OFF by default — the standing rule is that keys and
+ *  MIDI trigger pads, so this is a deliberate choice, made in the plugin's own panel. */
+export function setInstrumentMidi(on: boolean): void {
+  if (isNative()) void native.command({ type: 'setInstrumentMidi', on });
 }
 
 /** Every loaded plugin's own state, for a project save: `{ 'sample1:2': '<base64>' }`. */

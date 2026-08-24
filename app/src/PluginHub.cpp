@@ -283,13 +283,20 @@ juce::var PluginHub::handle(const juce::var& req)
             ScanJob one(formats_, known_, {}, {}, true);
             one.scanOne(format->getName(), file);
             auto p = one.take();
+            juce::Array<juce::var> ids;
             for (const auto& d : p.found)
             {
                 known_.addType(d);
+                ids.add(d.createIdentifierString());
                 ++added;
             }
             if (added > 0)
+            {
+                // The caller usually wants to USE what it just scanned, and matching it back by file path is
+                // fragile (a format can report the path its own way). So the ids come back.
+                o->setProperty("ids", ids);
                 break;
+            }
         }
         if (added > 0)
             save();

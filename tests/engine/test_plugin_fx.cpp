@@ -226,3 +226,110 @@ TEST_CASE("export: a plugin insert is in the rendered file", "[plugin][export]")
     CHECK(peak(without) == Approx(0.5f).margin(0.01));
     CHECK(peak(withPlugin) == Approx(0.125f).margin(0.005));
 }
+
+// ── INSTRUMENTS (Phase 6.3) ─────────────────────────────────────────────────────────────────────────────────────
+// A hosted instrument is a SOURCE, like the bass synth: notes in, audio out into a mixer strip. The engine still
+// knows nothing about plugin formats — it hands the notes of the block to an ExternalProcessor and takes what it
+// writes.
+namespace
+{
+/// Stands in for a VST instrument: holds a DC level while any note is on, so a test can hear it.
+struct FakeInstrument final : ExternalProcessor
+{
+    float level = 0.0f;
+    int notesSeen = 0;
+    int lastNote = -1;
+    bool sounding = false;
+    void processBlock(float* const*, int, int) noexcept override {}
+    void processBlockWithNotes(float* const* channels, int numChannels, int numSamples, const ExternalNote* notes,
+                               int numNotes) noexcept override
+    {
+        notesSeen += numNotes;
+        int at = 0;
+        for (int i = 0; i < numNotes; ++i)
+        {
+            const auto& n = notes[i];
+            const int until = std::min(static_cast<int>(n.offset), numSamples);
+            for (int c = 0; c < numChannels; ++c)
+                for (int s = at; s < until; ++s)
+                    channels[c][s] = sounding ? level : 0.0f;
+            at = until;
+            sounding = n.on != 0;
+            lastNote = n.note;
+            if (n.on)
+                level = static_cast<float>(n.velocity) / 127.0f;
+        }
+        for (int c = 0; c < numChannels; ++c)
+            for (int s = at; s < numSamples; ++s)
+                channels[c][s] = sounding ? level : 0.0f;
+    }
+};
+} // namespace
+
+TEST_CASE("instrument: notes play it and its audio lands on its strip", "[plugin][instrument]")
+{
+    Rig r(128);
+    FakeInstrument inst;
+    r.push(Command::mixerSetStrip(1, kChannel));
+    r.push(Command::setInstrument(&inst, 1));
+    r.settle();
+    CHECK(r.engine.instrument() == &inst);
+    CHECK(r.engine.instrumentStrip() == 1);
+    r.run(2);
+    CHECK(r.out(0) == 0.0f); // nothing held: silence, not a stuck note
+    r.push(Command::instrumentNote(60, 1.0f, true));
+    r.run(2);
+    CHECK(inst.notesSeen == 1);
+    CHECK(inst.lastNote == 60);
+    CHECK(r.out(0) == Approx(1.0f).margin(0.01));
+    // the strip is a strip: its fader applies to the instrument like any other source
+    r.push(Command::mixerSetFader(1, -6.0206f));
+    r.settle();
+    CHECK(r.out(0) == Approx(0.5f).margin(0.01));
+    r.push(Command::instrumentNote(60, 0.0f, false));
+    r.settle();
+    CHECK(r.out(0) == Approx(0.0f).margin(0.001));
+    r.push(Command::setInstrument(nullptr, -1));
+    r.run(2);
+    CHECK(r.engine.instrument() == nullptr);
+}
+
+TEST_CASE("instrument: a MIDI note plays the instrument instead of a pad when the page routes it there",
+          "[plugin][instrument]")
+{
+    Rig r(128);
+    FakeInstrument inst;
+    r.push(Command::mixerSetStrip(1, kChannel));
+    r.push(Command::setInstrument(&inst, 1));
+    r.push(Command::setInstrumentMidi(true));
+    r.bindPad(0, 0.4f, 1); // note 36 maps to pad 0 — it must NOT be triggered while MIDI goes to the instrument
+    r.settle();
+    MidiEvent e;
+    e.data[0] = 0x90;
+    e.data[1] = 36;
+    e.data[2] = 100;
+    e.size = 3;
+    REQUIRE(r.engine.midiQueue(0).push(e));
+    r.run(2);
+    CHECK(inst.notesSeen == 1);
+    CHECK(inst.lastNote == 36);
+    CHECK(r.engine.snapshot().activeVoices == 0u); // the sampler never heard it
+}
+
+TEST_CASE("instrument: rendering one allocates nothing on the audio thread", "[plugin][instrument][rt]")
+{
+    Rig r(128);
+    FakeInstrument inst;
+    r.push(Command::mixerSetStrip(1, kChannel));
+    r.push(Command::setInstrument(&inst, 1));
+    r.settle();
+    const auto allocs = test::allocationsDuring(
+        [&]
+        {
+            r.push(Command::instrumentNote(48, 0.8f, true));
+            r.run(8);
+            r.push(Command::instrumentNote(48, 0.0f, false));
+            r.run(8);
+        });
+    CHECK(allocs == 0);
+}

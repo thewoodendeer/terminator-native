@@ -558,6 +558,27 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::countIn:
         metro_.countIn(c.payload.metro.beats, c.payload.metro.atSample, samplesProcessed_);
         break;
+    case CommandType::setInstrument:
+        instrument_.store(static_cast<ExternalProcessor*>(c.payload.fxProc.processor), std::memory_order_release);
+        instrumentStrip_ = c.payload.fxProc.strip;
+        instrumentNoteCount_ = 0; // a swapped instrument does not inherit the last one's notes
+        break;
+    case CommandType::setInstrumentMidi:
+        midiToInstrument_ = c.payload.midi.flag != 0;
+        break;
+    case CommandType::instrumentNote:
+    {
+        // Sample-exact when the page says WHEN (the same clock the pads are booked on); otherwise this block.
+        const auto at = c.payload.trigger.hostTimeNs;
+        const std::int32_t off =
+            at > samplesProcessed_ && at < samplesProcessed_ + static_cast<std::uint64_t>(numSamples)
+                ? static_cast<std::int32_t>(at - samplesProcessed_)
+                : 0;
+        addInstrumentNote(static_cast<std::uint8_t>(c.payload.trigger.pad),
+                          static_cast<std::uint8_t>(std::clamp(c.payload.trigger.velocity, 0.0f, 1.0f) * 127.0f),
+                          c.payload.trigger.subHit != 0, off, numSamples);
+        break;
+    }
     case CommandType::mixerSetFxProcessor:
         mixer_->setFxProcessor(c.payload.fxProc.strip, c.payload.fxProc.index,
                                static_cast<ExternalProcessor*>(c.payload.fxProc.processor));
@@ -715,12 +736,24 @@ void Engine::drainMidi(int numSamples) noexcept TERMINATOR_NONBLOCKING
     {
         for (std::size_t n = 0; n < MidiQueue::capacity() && q.pop(e); ++n)
         {
-            if (e.size < 2 || !midiNotesToPads_)
-                continue; // the page owns the notes (bass MIDI IN / DRUM PADS / MIDI OFF / learn) — mirrored, not
-                          // played
+            if (e.size < 2)
+                continue;
             const std::uint8_t status = e.data[0] & 0xF0u;
             const std::uint8_t note = e.data[1] & 0x7Fu;
             const std::uint8_t vel = e.size > 2 ? (e.data[2] & 0x7Fu) : 0;
+            // INSTRUMENTS (6.3): when the page routes MIDI to the hosted instrument, a note is a NOTE — no pad map,
+            // no arp, no live-hit stamp. It plays what a keyboard would play.
+            if (midiToInstrument_ && instrument_.load(std::memory_order_relaxed) != nullptr)
+            {
+                if (status == 0x90 && vel > 0)
+                    addInstrumentNote(note, vel, true, offsetForHostTime(e.hostTimeNs, numSamples), numSamples);
+                else if (status == 0x80 || (status == 0x90 && vel == 0))
+                    addInstrumentNote(note, 0, false, offsetForHostTime(e.hostTimeNs, numSamples), numSamples);
+                continue;
+            }
+            if (!midiNotesToPads_)
+                continue; // the page owns the notes (bass MIDI IN / DRUM PADS / MIDI OFF / learn) — mirrored, not
+                          // played
             const std::int16_t pad = noteToPad_[note];
             if (pad < 0)
                 continue;
@@ -1050,6 +1083,30 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
             mixer_->addToStrip(monitorStrip_, scratchL_.data(), scratchR_.data(), numSamples);
     }
     monitorGainCurrent_ = monitorTarget;
+
+    // INSTRUMENTS (6.3): a hosted instrument is a SOURCE — this block's notes go in, its audio comes out into its
+    // strip (or dry into outs 1/2, like the bass before Phase 4 routed it). The buffer it gets is SILENT: an
+    // instrument writes, it does not process what is already there.
+    if (auto* inst = instrument_.load(std::memory_order_acquire);
+        inst != nullptr && numSamples <= static_cast<int>(scratchL_.size()))
+    {
+        std::fill_n(scratchL_.data(), numSamples, 0.0f);
+        std::fill_n(scratchR_.data(), numSamples, 0.0f);
+        instChans_[0] = scratchL_.data();
+        instChans_[1] = scratchR_.data();
+        inst->processBlockWithNotes(instChans_, 2, numSamples, instrumentNotes_, instrumentNoteCount_);
+        if (instrumentStrip_ >= 0 && mixer_->isActive(instrumentStrip_))
+            mixer_->addToStrip(instrumentStrip_, scratchL_.data(), scratchR_.data(), numSamples);
+        else
+            for (int i = 0; i < numSamples; ++i)
+            {
+                if (numOut > 0 && outputs[0] != nullptr)
+                    outputs[0][i] += scratchL_.data()[i];
+                if (numOut > 1 && outputs[1] != nullptr)
+                    outputs[1][i] += scratchR_.data()[i];
+            }
+    }
+    instrumentNoteCount_ = 0; // the notes belong to the block they arrived in
 
     float clickPeak = -1.0f; // ≥ 0 = the click was rendered into its strip this block (not post-master below)
     if (clickStrip_ >= 0 && mixer_->isActive(clickStrip_) && numSamples <= static_cast<int>(scratchL_.size()))

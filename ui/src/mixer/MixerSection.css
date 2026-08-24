@@ -264,6 +264,7 @@
   color: var(--hw-accent, #35ff69); background: transparent; border: 1px solid var(--hw-accent, #35ff69);
 }
 .mx-plugin-editor:hover { background: rgba(53, 255, 105, 0.12); }
+.mx-plugin-editor.on { color: #050508; background: var(--hw-accent, #35ff69); }
 
 .mx-fx-add {
   width: 100%;

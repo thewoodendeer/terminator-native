@@ -34,7 +34,7 @@
 import { MixerEngine, ChannelName, setMixerNativeSink, setMixerNativeMeters, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
 import type { FxId } from '../../mixer/fx';
 import { native } from './juceBridge';
-import { forgetStrip, noteStrip } from './pluginSlots';
+import { forgetStrip, isInstrumentId, noteStrip } from './pluginSlots';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -285,9 +285,14 @@ export class NativeMixerShadow {
     if (!fx) return;
     const id = String(fx.params.PLUGIN ?? '');
     const state = String(fx.params.STATE ?? '');
+    // 6.3: an INSTRUMENT is not an insert — it is a source that plays INTO this strip. Same slot, same picker,
+    // different verb; the insert itself stays the pass-through it is.
+    const instrument = id ? isInstrumentId(id) : false;
     this.chain = this.chain
-      .then(() => (id ? native.plugins({ verb: 'open', strip, slot: index, id, state })
-                      : native.plugins({ verb: 'close', strip, slot: index })))
+      .then(() => (id
+        ? (instrument ? native.plugins({ verb: 'openInstrument', strip, id, state })
+                      : native.plugins({ verb: 'open', strip, slot: index, id, state }))
+        : native.plugins({ verb: 'close', strip, slot: index }).then(() => native.plugins({ verb: 'closeInstrument' }))))
       .then(() => {})
       .catch(() => {});
   }

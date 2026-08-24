@@ -11,7 +11,7 @@ import { FX_REGISTRY, FX_ORDER, FxId, ParamSpec, WET_PARAM_KEYS } from './fx';
 // PLUGINS (6.2): the picker's options and the EDITOR button. Outside the Terminator 3.0 shell this module is inert
 // and the `plugin` insert is not offered at all — a browser has nothing to host a VST3 with.
 import { isNative } from '../renderer/native/juceBridge';
-import { cachedPlugins, listPlugins, openPluginEditor } from '../renderer/native/pluginSlots';
+import { cachedPlugins, listPlugins, openPluginEditor, setInstrumentMidi } from '../renderer/native/pluginSlots';
 import { MidiMapTarget } from '../renderer/chopper/MidiMap';
 import type { HwPalette } from '../renderer/chopper/hwPalettes';
 import { LoudnessPopup } from './LoudnessPopup';
@@ -373,6 +373,7 @@ function MixerSectionImpl({ engine, clip, onClip, palette, transportOn }: {
   const [names, setNames] = useState<Record<string, string>>({});
   // PLUGINS (6.2): the scanned effects, fetched once and cached in pluginSlots (empty outside the shell).
   const [pluginList, setPluginList] = useState(cachedPlugins());
+  const [instMidi, setInstMidi] = useState(false); // 6.3: MIDI notes to the hosted instrument (off = the pads)
   useEffect(() => { if (isNative()) void listPlugins().then(setPluginList); }, []);
   const [renaming, setRenaming] = useState<string | null>(null);
 
@@ -1233,8 +1234,19 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                     </span>
                   )}
                   {id === 'plugin' && (
-                    <button className="mx-plugin-editor" title="Open the plugin's own window"
-                      onClick={e => { e.stopPropagation(); void openPluginEditor(ch, idx); }}>EDITOR</button>
+                    <>
+                      <button className="mx-plugin-editor" title="Open the plugin's own window"
+                        onClick={e => { e.stopPropagation(); void openPluginEditor(ch, idx); }}>EDITOR</button>
+                      {/* 6.3: an INSTRUMENT plays INTO this strip. MIDI notes keep playing the pads unless you say
+                          otherwise here — that is the standing rule, so this is off until you turn it on. */}
+                      {pluginList.some(p => p.id === String(fx.params.PLUGIN ?? '') && p.isInstrument) && (
+                        <button className={`mx-plugin-editor${instMidi ? ' on' : ''}`}
+                          title="Play this instrument from your keyboard and MIDI controller. While it is on, notes go to the instrument instead of the pads"
+                          onClick={e => { e.stopPropagation(); setInstMidi(v => { setInstrumentMidi(!v); return !v; }); }}>
+                          {instMidi ? 'MIDI IN ✓' : 'MIDI IN'}
+                        </button>
+                      )}
+                    </>
                   )}
                   {def.params.map(spec0 => {
                     const pKey = `${ch}:${idx}:${spec0.key}`;
@@ -1251,7 +1263,7 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                       : spec0.kind === 'select' && spec0.dynamic === 'plugins'
                       ? { ...spec0, options: [
                           { label: '— none —', value: '' },
-                          ...pluginList.map(p => ({ label: `${p.name} · ${p.format}`, value: p.id })),
+                          ...pluginList.map(p => ({ label: `${p.name} · ${p.format}${p.isInstrument ? ' · INSTR' : ''}`, value: p.id })),
                         ] }
                       : spec0;
                     return (

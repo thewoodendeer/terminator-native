@@ -96,6 +96,12 @@ enum class CommandType : std::uint32_t
     mixerSetFxProcessor, // fxProc.strip + fxProc.index + fxProc.processor — attach (or detach, nullptr) the APP's
                          // plugin instance to a `plugin` insert slot. The engine never learns what a VST3 is; the
                          // app may only DELETE the instance after detaching AND letting blocks run (PluginFx.h)
+    // ---- instruments (Phase 6.3, core/fx/PluginFx.h) ----
+    setInstrument,     // fxProc.processor + fxProc.strip — the APP's hosted INSTRUMENT and the strip it plays into
+                       // (strip −1 = dry into outs 1/2; processor nullptr = take it out)
+    setInstrumentMidi, // midi.flag — MIDI notes play the instrument instead of the pads
+    instrumentNote,    // trigger.pad = the NOTE, trigger.velocity, trigger.hostTimeNs = an engine sample (0 = now),
+                       // trigger.subHit = 0 note-off / 1 note-on — the page's keyboard and pads playing it
     // ---- input monitoring (Phase 5.1c, io/Recorder.h is the take; this is hearing it) ----
     setMonitor, // monitor.enabled + monitor.ch0/ch1 (hardware inputs, −1 = none — one channel feeds both sides) +
                 // monitor.gain (linear) + monitor.strip (a mixer strip, so its fader/inserts/console apply;
@@ -770,6 +776,34 @@ struct Command
         return c;
     }
     static Command cancelCountIn() noexcept { return metroCmd(CommandType::cancelCountIn); }
+    /// 6.3: hand a hosted INSTRUMENT to the engine (nullptr = take it out) and say which strip it plays into.
+    static Command setInstrument(void* processor, int strip) noexcept
+    {
+        Command c;
+        c.type = CommandType::setInstrument;
+        c.payload.fxProc.processor = processor;
+        c.payload.fxProc.strip = static_cast<std::int16_t>(strip);
+        c.payload.fxProc.index = 0;
+        return c;
+    }
+    static Command setInstrumentMidi(bool on) noexcept
+    {
+        Command c;
+        c.type = CommandType::setInstrumentMidi;
+        c.payload.midi.flag = on ? 1 : 0;
+        return c;
+    }
+    /// 6.3: a note for the instrument. `atSample` 0 = the next block; else the exact engine sample.
+    static Command instrumentNote(int note, float velocity, bool on, std::uint64_t atSample = 0) noexcept
+    {
+        Command c;
+        c.type = CommandType::instrumentNote;
+        c.payload.trigger.pad = static_cast<std::uint16_t>(note < 0 ? 0 : (note > 127 ? 127 : note));
+        c.payload.trigger.velocity = velocity;
+        c.payload.trigger.hostTimeNs = atSample;
+        c.payload.trigger.subHit = on ? 1 : 0;
+        return c;
+    }
     /// 6.2: hand a hosted plugin to (or take it from) an insert slot. `processor` is an `ExternalProcessor*`.
     static Command mixerSetFxProcessor(int strip, int index, void* processor) noexcept
     {
