@@ -468,4 +468,253 @@ void FetCompFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOC
     grDb_ = static_cast<float>(gainDb_);
 }
 
+// ---- TAPE ECHO ----------------------------------------------------------------------------------------------
+
+double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING
+{
+    const double z = dl.readAt(delaySamples);
+    const double v = x + g * z;
+    dl.write(v);
+    return z - g * v;
+}
+
+namespace
+{
+/// The tape motor's two wobbles. WOW is the slow one you hear as pitch drift, FLUTTER the fast one you hear as
+/// grain; both scale together off one knob because on the hardware they come from the same worn transport.
+constexpr double kWowHz = 0.7, kFlutterHz = 7.3;
+constexpr double kWowDepth = 0.004, kFlutterDepth = 0.0012; // as a fraction of the delay time
+constexpr float kTimeTau = 0.25f;                           // the motor takes a moment to change speed
+/// The spring tank's dispersion stages (ms) — the uneven spacing is what makes it "boing" instead of ring.
+constexpr double kSpringApMs[TapeEchoFx::kSpringStages] = {4.7, 3.1, 7.3, 2.3};
+constexpr double kSpringFbMs = 38.0;
+} // namespace
+
+void TapeEchoFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    // The longest read any head can ask for: the slowest motor speed, the furthest head, plus the wow.
+    const int maxDelay = static_cast<int>(kMaxTimeSec * kHeadRatio[2] * 1.05 * sampleRate) + 8;
+    tapeL_.prepare(maxDelay);
+    tapeR_.prepare(maxDelay);
+    for (int i = 0; i < kSpringStages; ++i)
+    {
+        const int n = static_cast<int>(kSpringApMs[i] * 0.001 * sampleRate) + 8;
+        springApL_[i].prepare(n);
+        springApR_[i].prepare(n);
+    }
+    const int fb = static_cast<int>(kSpringFbMs * 0.001 * sampleRate) + 8;
+    springFbL_.prepare(fb);
+    springFbR_.prepare(fb);
+    reset();
+}
+
+void TapeEchoFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    modeIdx_ = 6.0f;
+    time_.set(350.0f, true);
+    intensity_.set(35.0f, true);
+    wow_.set(25.0f, true);
+    sat_.set(30.0f, true);
+    bass_.set(0.0f, true);
+    treble_.set(0.0f, true);
+    springAmt_.set(0.0f, true);
+    tapeL_.reset();
+    tapeR_.reset();
+    wowPhase_ = 0.0;
+    flutPhase_ = 0.5; // the two wobbles start apart, so the drift never begins as one clean sweep
+    for (int i = 0; i < kSpringStages; ++i)
+    {
+        springApL_[i].reset();
+        springApR_[i].reset();
+    }
+    springFbL_.reset();
+    springFbR_.reset();
+    springStateL_ = springStateR_ = 0.0;
+    loopLpL_.reset();
+    loopLpR_.reset();
+    loopHpL_.reset();
+    loopHpR_.reset();
+    bumpL_.reset();
+    bumpR_.reset();
+    bassL_.reset();
+    bassR_.reset();
+    trebL_.reset();
+    trebR_.reset();
+    springLpL_.reset();
+    springLpR_.reset();
+    // The losses live INSIDE the feedback loop, which is the whole reason repeats darken and thicken as they go
+    // round rather than just fading.
+    loopLpL_.set(Biquad::Type::lowpass, 4500.0, 0.0, 0.0, sr_);
+    loopLpR_.set(Biquad::Type::lowpass, 4500.0, 0.0, 0.0, sr_);
+    loopHpL_.set(Biquad::Type::highpass, 120.0, 0.0, 0.0, sr_);
+    loopHpR_.set(Biquad::Type::highpass, 120.0, 0.0, 0.0, sr_);
+    bumpL_.set(Biquad::Type::peaking, 95.0, 1.1, 3.0, sr_);
+    bumpR_.set(Biquad::Type::peaking, 95.0, 1.1, 3.0, sr_);
+    springLpL_.set(Biquad::Type::lowpass, 3200.0, 0.0, 0.0, sr_);
+    springLpR_.set(Biquad::Type::lowpass, 3200.0, 0.0, 0.0, sr_);
+    recompute();
+}
+
+void TapeEchoFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        modeIdx_ = clampf(std::floor(value), 0.0f, 6.0f);
+        break;
+    case 1:
+        time_.set(clampf(value, 20.0f, 1500.0f), immediate);
+        break;
+    case 2:
+        intensity_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 3:
+        wow_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 4:
+        sat_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 5:
+        bass_.set(clampf(value, -12.0f, 12.0f), immediate);
+        break;
+    case 6:
+        treble_.set(clampf(value, -12.0f, 12.0f), immediate);
+        break;
+    case 7:
+        springAmt_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    default:
+        break;
+    }
+    if (immediate)
+        recompute();
+}
+
+float TapeEchoFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return modeIdx_;
+    case 1:
+        return time_.target;
+    case 2:
+        return intensity_.target;
+    case 3:
+        return wow_.target;
+    case 4:
+        return sat_.target;
+    case 5:
+        return bass_.target;
+    case 6:
+        return treble_.target;
+    case 7:
+        return springAmt_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+void TapeEchoFx::recompute() noexcept TERMINATOR_NONBLOCKING
+{
+    bassL_.set(Biquad::Type::lowshelf, 180.0, 0.0, static_cast<double>(bass_.cur), sr_);
+    bassR_.set(Biquad::Type::lowshelf, 180.0, 0.0, static_cast<double>(bass_.cur), sr_);
+    trebL_.set(Biquad::Type::highshelf, 3000.0, 0.0, static_cast<double>(treble_.cur), sr_);
+    trebR_.set(Biquad::Type::highshelf, 3000.0, 0.0, static_cast<double>(treble_.cur), sr_);
+}
+
+/// The spring tank: dispersion first (four allpasses at deliberately uneven delays — that is the "boing"), then a
+/// damped feedback delay for the tail.
+double TapeEchoFx::spring(double x, int ch) noexcept TERMINATOR_NONBLOCKING
+{
+    DelayLine* ap = ch == 0 ? springApL_ : springApR_;
+    DelayLine& fb = ch == 0 ? springFbL_ : springFbR_;
+    Biquad& lp = ch == 0 ? springLpL_ : springLpR_;
+    double& st = ch == 0 ? springStateL_ : springStateR_;
+    double v = x + 0.62 * st;
+    for (int i = 0; i < kSpringStages; ++i)
+        v = springAllpass(ap[i], v, kSpringApMs[i] * 0.001 * sr_, 0.62);
+    const double out = fb.readAt(kSpringFbMs * 0.001 * sr_);
+    fb.write(v);
+    st = lp.process(out);
+    return out;
+}
+
+void TapeEchoFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (time_.moving())
+        time_.advance(n, sr_, kTimeTau, 1e-3f); // the motor, not a jump cut
+    if (intensity_.moving() || wow_.moving() || sat_.moving() || bass_.moving() || treble_.moving() ||
+        springAmt_.moving())
+    {
+        intensity_.advance(n, sr_, kFxTau);
+        wow_.advance(n, sr_, kFxTau);
+        sat_.advance(n, sr_, kFxTau);
+        bass_.advance(n, sr_, kFxTau);
+        treble_.advance(n, sr_, kFxTau);
+        springAmt_.advance(n, sr_, kFxTau);
+        recompute();
+    }
+    const int mode = static_cast<int>(modeIdx_);
+    // MODE is a bit mask over the three heads: 0..2 = one head, 3 = 1+2, 4 = 2+3, 5 = 1+3, 6 = all three.
+    const bool head[3] = {mode == 0 || mode == 3 || mode == 5 || mode == 6,
+                          mode == 1 || mode == 3 || mode == 4 || mode == 6,
+                          mode == 2 || mode == 4 || mode == 5 || mode == 6};
+    int heads = 0;
+    for (const bool h : head)
+        heads += h ? 1 : 0;
+    const double headScale = heads > 0 ? 1.0 / std::sqrt(static_cast<double>(heads)) : 0.0;
+    const double baseSamples = static_cast<double>(time_.cur) * 0.001 * sr_;
+    const double fbGain = static_cast<double>(intensity_.cur) * 0.0105; // 100 → 1.05: it runs away, by design
+    const double wowAmt = static_cast<double>(wow_.cur) * 0.01;
+    const double satDrive = 1.0 + static_cast<double>(sat_.cur) * 0.06;
+    const double satComp = 1.0 / std::sqrt(satDrive);
+    const double springMix = static_cast<double>(springAmt_.cur) * 0.01;
+    const double wowInc = kWowHz / sr_, flutInc = kFlutterHz / sr_;
+
+    for (int i = 0; i < n; ++i)
+    {
+        wowPhase_ = advancePhase(wowPhase_, kWowHz, sr_);
+        flutPhase_ = advancePhase(flutPhase_, kFlutterHz, sr_);
+        (void)wowInc;
+        (void)flutInc;
+        const double wobL = 1.0 + wowAmt * (kWowDepth * lfoSine(wowPhase_) + kFlutterDepth * lfoSine(flutPhase_));
+        // the right channel reads the same tape a quarter-turn along the wobble, so the drift is stereo
+        const double wobR =
+            1.0 + wowAmt * (kWowDepth * lfoSine(wowPhase_ + 0.25) + kFlutterDepth * lfoSine(flutPhase_ + 0.25));
+
+        double echoL = 0.0, echoR = 0.0;
+        for (int h = 0; h < 3; ++h)
+        {
+            if (!head[h])
+                continue;
+            echoL += tapeL_.readAt(baseSamples * kHeadRatio[h] * wobL);
+            echoR += tapeR_.readAt(baseSamples * kHeadRatio[h] * wobR);
+        }
+        echoL *= headScale;
+        echoR *= headScale;
+
+        // What goes back on the tape: the input plus the heads' sum, through the tape's own losses and saturation.
+        double recL = l[i] + fbGain * echoL;
+        double recR = r[i] + fbGain * echoR;
+        recL = bumpL_.process(loopHpL_.process(loopLpL_.process(recL)));
+        recR = bumpR_.process(loopHpR_.process(loopLpR_.process(recR)));
+        recL = ftanh(recL * satDrive) * satComp;
+        recR = ftanh(recR * satDrive) * satComp;
+        tapeL_.write(recL);
+        tapeR_.write(recR);
+
+        double outL = trebL_.process(bassL_.process(echoL));
+        double outR = trebR_.process(bassR_.process(echoR));
+        if (springMix > 0.0)
+        {
+            outL = outL * (1.0 - springMix) + spring(outL, 0) * springMix;
+            outR = outR * (1.0 - springMix) + spring(outR, 1) * springMix;
+        }
+        l[i] = outL;
+        r[i] = outR;
+    }
+}
+
 } // namespace terminator

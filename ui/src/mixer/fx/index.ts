@@ -22,6 +22,7 @@ import { MbSatFX } from './MbSatFX';
 import { SidechainFX } from './SidechainFX';
 import { LadderFX } from './LadderFX';
 import { FetCompFX } from './FetCompFX';
+import { TapeEchoFX } from './TapeEchoFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -29,7 +30,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp';
+  | 'ladder' | 'fetcomp' | 'tapeecho';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -160,6 +161,22 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
     ],
     create: (c) => new LadderFX(c),
   },
+  tapeecho: {
+    name: 'TAPE ECHO',
+    desc: 'The RE-201 Space Echo — one tape loop read by three heads at fixed spacings, which is why the multi-head MODES roll the way a single delay cannot. TIME is the MOTOR: moving it bends the pitch of what is already on the tape. The losses live inside the loop, so every repeat is darker and thicker than the last; INTENSITY past ~90 runs away into self-oscillation and the tape saturation is what keeps that musical. WOW is the worn transport, SPRING is the tank. Rendered by the app\'s engine',
+    params: [
+      sel('MODE', 'HEADS', ['H1', 'H2', 'H3', 'H1+2', 'H2+3', 'H1+3', 'H1+2+3']),
+      { key: 'TIME', label: 'TIME', kind: 'slider', min: 20, max: 1500, log: true, unit: 'ms' },
+      { key: 'INTENSITY', label: 'INTENS', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'WOW', label: 'WOW', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'SAT', label: 'SAT', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'BASS', label: 'BASS', kind: 'knob', min: -12, max: 12, step: 0.5, center: 0, unit: 'dB' },
+      { key: 'TREBLE', label: 'TREBLE', kind: 'knob', min: -12, max: 12, step: 0.5, center: 0, unit: 'dB' },
+      { key: 'SPRING', label: 'SPRING', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new TapeEchoFX(c),
+  },
   fetcomp: {
     name: 'FET COMP',
     desc: 'The aggressive FET compressor. There is no THRESHOLD on purpose — you drive INTO it with INPUT and bring the level back with OUTPUT, exactly like the hardware. RATIO is the character (NUKE pins it), DETECT decides what the side chain hears so a kick stops ducking everything, and MODE adds the colour: DIST 2 even harmonics, DIST 3 odd, BRITISH faster and dirtier. Rendered by the app\'s engine',
@@ -260,7 +277,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'reverb', 'utility',
+  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

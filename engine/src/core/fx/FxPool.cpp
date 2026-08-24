@@ -25,6 +25,7 @@ const char* const kLadderModes[] = {"LP24", "LP18", "LP12", "LP6", "HP24", "HP12
 const char* const kFetRatios[] = {"1:1", "2:1", "3:1", "4:1", "6:1", "10:1", "20:1", "NUKE"};
 const char* const kFetDetect[] = {"FLAT", "HP1", "HP2", "BAND"};
 const char* const kFetModes[] = {"CLEAN", "DIST 2", "DIST 3", "BRITISH"};
+const char* const kTapeHeads[] = {"H1", "H2", "H3", "H1+2", "H2+3", "H1+3", "H1+2+3"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -120,6 +121,17 @@ const FxParamDef kFetCompParams[] = {
     {"OUTPUT", -24.0f, 24.0f, 0.0f},
     {"WET", 0.0f, 100.0f, 100.0f},
 };
+const FxParamDef kTapeEchoParams[] = {
+    {"MODE", 0.0f, 6.0f, 6.0f, kTapeHeads, 7}, // which of the three heads are reading the loop
+    {"TIME", 20.0f, 1500.0f, 350.0f},          // the MOTOR SPEED — it glides, so a move bends the pitch
+    {"INTENSITY", 0.0f, 100.0f, 35.0f},        // feedback; past ~90 it self-oscillates
+    {"WOW", 0.0f, 100.0f, 25.0f},
+    {"SAT", 0.0f, 100.0f, 30.0f},
+    {"BASS", -12.0f, 12.0f, 0.0f},
+    {"TREBLE", -12.0f, 12.0f, 0.0f},
+    {"SPRING", 0.0f, 100.0f, 0.0f},
+    {"WET", 0.0f, 100.0f, 35.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -150,6 +162,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::utility, "utility", kUtilityParams, 3, -1},
     {FxType::ladder, "ladder", kLadderParams, 5, 4},
     {FxType::fetcomp, "fetcomp", kFetCompParams, 8, 7},
+    {FxType::tapeecho, "tapeecho", kTapeEchoParams, 9, 8},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -184,6 +197,8 @@ int capacityOf(FxType t) noexcept
         return 24;
     case FxType::fetcomp:
         return 24;
+    case FxType::tapeecho:
+        return 12; // a 1.5 s tape at ×2.2 is a few MB of line per instance
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -220,6 +235,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<LadderFx>();
     case FxType::fetcomp:
         return std::make_unique<FetCompFx>();
+    case FxType::tapeecho:
+        return std::make_unique<TapeEchoFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

@@ -7,6 +7,9 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · TapeEchoFx — TAPE ECHO: the RE-201 Space Echo (three playback heads on one tape loop, motor-speed REPEAT
+//     RATE with real wow and flutter, tape saturation, a head bump, repeats that darken every pass, INTENSITY that
+//     runs away into self-oscillation, and the spring tank).
 //   · LadderFx — ANALOG FILTER: the Moog transistor ladder (D'Angelo–Välimäki nonlinear model, the same equations
 //     the BASS synth's LADDER uses, deliberately its own copy: this one runs 4× oversampled with an IIR decimator,
 //     mixes the stage taps for the 6/12/18/24 dB LP · 12/24 dB HP · 12/24 dB BP modes, has its own DRIVE stage with
@@ -15,6 +18,7 @@
 #include <cstdint>
 
 #include "terminator/core/fx/Effect.h"
+#include "terminator/core/fx/FxDsp.h" // DelayLine (the tape + the spring tank), lfoSine / advancePhase
 
 namespace terminator
 {
@@ -114,6 +118,58 @@ class FetCompFx final : public Effect
     // The DC blocker every asymmetric stage needs: DIST 2 is an even-harmonic shaper, and an even shaper ALWAYS
     // leaves DC behind (the hardware has a coupling capacitor doing this job).
     double dcInL_ = 0.0, dcOutL_ = 0.0, dcInR_ = 0.0, dcOutR_ = 0.0, dcR_ = 0.999;
+};
+
+/// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
+double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// TAPE ECHO — the RE-201 Space Echo (Phase 4.6d).
+///   MODE      H1 | H2 | H3 | H1+2 | H2+3 | H1+3 | H1+2+3 — WHICH of the three playback heads are reading the loop.
+///             One tape, three heads at fixed spacing (×1.0, ×1.6, ×2.2 of the base time), which is why the
+///             multi-head modes give those uneven, rolling patterns a single delay cannot.
+///   TIME      20..1500 ms — the MOTOR SPEED, so it GLIDES (τ 250 ms): moving it bends the pitch of whatever is
+///             still on the tape, exactly like turning the knob on the hardware. It is not a jump-cut.
+///   INTENSITY 0..100 — feedback. Past ~90 the loop runs away and self-oscillates; the tape saturation is what
+///             keeps that bounded instead of exploding.
+///   WOW       0..100 — the motor's wow (0.7 Hz) and flutter (7.3 Hz) together, the L/R phases offset so it drifts
+///             in stereo instead of moving as one block.
+///   SAT       0..100 — how hard the tape is driven. Each pass goes through it again, so repeats do not just get
+///             quieter, they get thicker and darker (the loop's LP + head bump are inside the feedback path).
+///   BASS / TREBLE  −12..+12 dB on the echo, the front-panel tone controls.
+///   SPRING    0..100 — the tank, blended into the echo path.
+///   WET       0..100 (the CHAIN crossfades — ECHO VOLUME).
+class TapeEchoFx final : public Effect
+{
+  public:
+    static constexpr double kHeadRatio[3] = {1.0, 1.6, 2.2};
+    static constexpr double kMaxTimeSec = 1.5;
+    static constexpr int kSpringStages = 4;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::tapeecho; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    void recompute() noexcept TERMINATOR_NONBLOCKING;
+    double spring(double x, int ch) noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    float modeIdx_ = 6.0f; // H1+2+3
+    Glide time_, intensity_, wow_, sat_, bass_, treble_, springAmt_;
+    DelayLine tapeL_, tapeR_;
+    // inside the loop: the tape's own losses — an LP that takes a little more top off every pass, an HP, and the
+    // head bump (the low-mid resonance a tape head has)
+    Biquad loopLpL_, loopLpR_, loopHpL_, loopHpR_, bumpL_, bumpR_;
+    Biquad bassL_, bassR_, trebL_, trebR_;
+    double wowPhase_ = 0.0, flutPhase_ = 0.0;
+    // the spring tank: a dispersive allpass chain into a damped feedback delay
+    DelayLine springApL_[kSpringStages], springApR_[kSpringStages];
+    DelayLine springFbL_, springFbR_;
+    Biquad springLpL_, springLpR_;
+    double springStateL_ = 0.0, springStateR_ = 0.0;
 };
 
 /// ANALOG FILTER — the Moog ladder as a mixer insert.

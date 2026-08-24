@@ -588,3 +588,262 @@ TEST_CASE("fet comp: INPUT and OUTPUT are the two ends", "[fx][analog][comp]")
     trim->setParam(kOut, 6.0f, true);
     CHECK(outDb(*trim, 300.0, -30.0, 0.5) == Approx(-24.0).margin(0.3));
 }
+
+// ---- TAPE ECHO (4.6d) ------------------------------------------------------------------------------------------
+// The RE-201. What has to be true: the heads are WHERE they say (one tape, three fixed spacings, which is the whole
+// reason the multi-head modes sound the way they do), INTENSITY really is feedback and runs away at the top without
+// blowing up, each pass through the loop is darker than the last, WOW moves the tape and 0 means dead steady, SAT
+// thickens, the tone controls do what they say, and TIME is a MOTOR — moving it bends pitch instead of jumping.
+
+namespace
+{
+enum
+{
+    kTapeMode = 0,
+    kTapeTime,
+    kIntensity,
+    kWow,
+    kSat,
+    kBass,
+    kTreble,
+    kSpring
+};
+
+std::unique_ptr<TapeEchoFx> makeTape(int mode, float timeMs, float intensity, float wow = 0.0f, float sat = 0.0f,
+                                     double sr = kSr)
+{
+    auto fx = std::make_unique<TapeEchoFx>();
+    fx->prepare(sr, kBlock);
+    fx->setParam(kTapeMode, static_cast<float>(mode), true);
+    fx->setParam(kTapeTime, timeMs, true);
+    fx->setParam(kIntensity, intensity, true);
+    fx->setParam(kWow, wow, true);
+    fx->setParam(kSat, sat, true);
+    fx->setParam(kBass, 0.0f, true);
+    fx->setParam(kTreble, 0.0f, true);
+    fx->setParam(kSpring, 0.0f, true);
+    return fx;
+}
+
+/// The sample positions of the peaks in `out` that stand above `floorFrac` of the biggest one, at least `minGap`
+/// samples apart — the echoes.
+std::vector<int> echoPositions(const std::vector<double>& out, double floorFrac, int minGap)
+{
+    const double top = peak(out, 0, static_cast<int>(out.size()));
+    std::vector<int> hits;
+    int i = 1;
+    while (i < static_cast<int>(out.size()) - 1)
+    {
+        const double a = std::abs(out[static_cast<std::size_t>(i)]);
+        if (a > floorFrac * top && a >= std::abs(out[static_cast<std::size_t>(i - 1)]) &&
+            a >= std::abs(out[static_cast<std::size_t>(i + 1)]))
+        {
+            hits.push_back(i);
+            i += minGap;
+            continue;
+        }
+        ++i;
+    }
+    return hits;
+}
+
+/// A single-sample impulse generator.
+auto impulse()
+{
+    return [](int i) { return i == 0 ? 1.0 : 0.0; };
+}
+
+/// Energy above `hz` as a fraction of the total, over [from, to) — "how bright is this stretch".
+double hfFraction(const std::vector<double>& out, int from, int to, double hz, double sr)
+{
+    // one-pole HP vs the raw energy; enough to compare two stretches of the same signal
+    double prevX = 0.0, y = 0.0, hf = 0.0, all = 0.0;
+    const double a = std::exp(-kTwoPi * hz / sr);
+    for (int i = from; i < to; ++i)
+    {
+        const double x = out[static_cast<std::size_t>(i)];
+        y = a * (y + x - prevX);
+        prevX = x;
+        hf += y * y;
+        all += x * x;
+    }
+    return all > 0.0 ? hf / all : 0.0;
+}
+} // namespace
+
+TEST_CASE("tape echo: the three heads are where they say they are", "[fx][analog][tape]")
+{
+    REQUIRE(fxTypeFromId("tapeecho") == FxType::tapeecho);
+    const auto& info = fxTypeInfo(FxType::tapeecho);
+    REQUIRE(info.numParams == 9);
+    REQUIRE(info.wetParam == 8);
+    REQUIRE(fxOptionIndex(FxType::tapeecho, 0, "H1+2+3") == 6);
+
+    // MODE H1, TIME 200 ms, no feedback: exactly one echo, at 200 ms.
+    auto h1 = makeTape(0, 200.0f, 0.0f);
+    const auto a = run(*h1, static_cast<int>(kSr * 0.9), impulse());
+    const auto pa = echoPositions(a, 0.35, 128);
+    REQUIRE(pa.size() == 1);
+    CHECK(pa[0] == Approx(static_cast<int>(kSr * 0.200)).margin(kSr * 0.004));
+
+    // All three heads: three echoes, at ×1.0, ×1.6 and ×2.2 of the time — one tape, three fixed spacings.
+    auto all = makeTape(6, 200.0f, 0.0f);
+    const auto b = run(*all, static_cast<int>(kSr * 0.9), impulse());
+    const auto pb = echoPositions(b, 0.35, 128);
+    REQUIRE(pb.size() == 3);
+    CHECK(pb[0] == Approx(static_cast<int>(kSr * 0.200)).margin(kSr * 0.004));
+    CHECK(pb[1] == Approx(static_cast<int>(kSr * 0.320)).margin(kSr * 0.004));
+    CHECK(pb[2] == Approx(static_cast<int>(kSr * 0.440)).margin(kSr * 0.004));
+
+    // H2+3 skips the first head entirely — the pattern starts late, which is what the mode is for.
+    auto h23 = makeTape(4, 200.0f, 0.0f);
+    const auto c = run(*h23, static_cast<int>(kSr * 0.9), impulse());
+    const auto pc = echoPositions(c, 0.35, 128);
+    REQUIRE(pc.size() == 2);
+    CHECK(pc[0] == Approx(static_cast<int>(kSr * 0.320)).margin(kSr * 0.004));
+}
+
+TEST_CASE("tape echo: INTENSITY is feedback, and the top of it runs away", "[fx][analog][tape]")
+{
+    // 0 = one repeat only (already gated above). Half way up = a decaying train of them.
+    auto mid = makeTape(0, 120.0f, 50.0f);
+    const auto out = run(*mid, static_cast<int>(kSr * 2.0), impulse());
+    const auto hits = echoPositions(out, 0.06, 256);
+    CHECK(hits.size() >= 4); // a train, not a slap
+    // …each quieter than the one before it.
+    for (std::size_t i = 1; i < hits.size() && i < 4; ++i)
+        CHECK(std::abs(out[static_cast<std::size_t>(hits[i])]) < std::abs(out[static_cast<std::size_t>(hits[i - 1])]));
+
+    // Wide open it self-oscillates — and the tape saturation is what keeps that a sound instead of an explosion.
+    auto runaway = makeTape(0, 120.0f, 100.0f, 0.0f, 40.0f);
+    const auto ro = run(*runaway, static_cast<int>(kSr * 6.0), impulse());
+    const double late = rms(ro, static_cast<int>(kSr * 5.0), static_cast<int>(kSr * 6.0));
+    CHECK(late > 0.02); // still going six seconds later
+    for (const double v : ro)
+    {
+        REQUIRE(std::isfinite(v));
+        REQUIRE(std::abs(v) < 4.0);
+    }
+}
+
+TEST_CASE("tape echo: every pass is darker than the last", "[fx][analog][tape]")
+{
+    // The losses are INSIDE the loop, so repeat 4 has to be duller than repeat 1. This is the difference between a
+    // tape echo and a digital delay with a filter on the output.
+    auto fx = makeTape(0, 150.0f, 70.0f, 0.0f, 20.0f);
+    const auto out = run(*fx, static_cast<int>(kSr * 2.0),
+                         [](int i) { return i < 64 ? std::sin(kTwoPi * 3000.0 * static_cast<double>(i) / kSr) : 0.0; });
+    const int one = static_cast<int>(kSr * 0.150), win = static_cast<int>(kSr * 0.05);
+    const double first = hfFraction(out, one, one + win, 2000.0, kSr);
+    const double fourth = hfFraction(out, 4 * one, 4 * one + win, 2000.0, kSr);
+    CHECK(fourth < first);
+}
+
+TEST_CASE("tape echo: WOW moves the tape, and 0 is dead steady", "[fx][analog][tape]")
+{
+    // With no wow the same impulse lands on the same sample every pass; with wow up it wanders. Measured as the
+    // spread of the gaps between repeats.
+    const auto gaps = [](float wow)
+    {
+        auto fx = makeTape(0, 200.0f, 75.0f, wow);
+        const auto out = run(*fx, static_cast<int>(kSr * 3.0), impulse());
+        const auto hits = echoPositions(out, 0.05, 1024);
+        std::vector<double> g;
+        for (std::size_t i = 1; i < hits.size(); ++i)
+            g.push_back(static_cast<double>(hits[i] - hits[i - 1]));
+        double mean = 0.0;
+        for (const double v : g)
+            mean += v;
+        mean /= static_cast<double>(std::max<std::size_t>(1, g.size()));
+        double var = 0.0;
+        for (const double v : g)
+            var += (v - mean) * (v - mean);
+        return std::sqrt(var / static_cast<double>(std::max<std::size_t>(1, g.size())));
+    };
+    const double steady = gaps(0.0f), wobbly = gaps(100.0f);
+    INFO("steady " << steady << " vs wobbly " << wobbly);
+    // NOT zero at WOW 0: every pass goes through the loop's filters again, so the peak of the pulse drifts a sample
+    // or two as it dulls. That is the group delay of a real feedback loop, not the motor.
+    CHECK(steady < 3.0);
+    CHECK(wobbly > steady * 2.0); // the motor is audibly not steady
+}
+
+TEST_CASE("tape echo: SAT thickens and the tone controls work", "[fx][analog][tape]")
+{
+    // SAT puts harmonics on the repeats (the tape is driven, and every pass goes through it again).
+    const auto thirdHarmonic = [](float sat)
+    {
+        auto fx = makeTape(0, 100.0f, 60.0f, 0.0f, sat);
+        const auto out = run(*fx, static_cast<int>(kSr * 1.5), tone(300.0, 0.5));
+        return magDb(out, 900.0) - magDb(out, 300.0);
+    };
+    CHECK(thirdHarmonic(100.0f) > thirdHarmonic(0.0f) + 6.0);
+
+    // TREBLE is a shelf on the echo: +12 makes the repeats brighter than −12, by a lot.
+    const auto bright = [](float treble)
+    {
+        auto fx = makeTape(0, 100.0f, 0.0f);
+        fx->setParam(kTreble, treble, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.5), tone(6000.0, 0.3));
+        return magDb(out, 6000.0);
+    };
+    CHECK(bright(12.0f) > bright(-12.0f) + 12.0);
+}
+
+TEST_CASE("tape echo: TIME is a motor, not a jump cut", "[fx][analog][tape]")
+{
+    // Moving TIME must GLIDE (τ 250 ms), which is what bends the pitch of what is already on the tape. A jump would
+    // show up as the echo arriving at the new time immediately; a motor takes a moment to get there.
+    auto fx = makeTape(0, 400.0f, 0.0f);
+    run(*fx, static_cast<int>(kSr * 0.2), [](int) { return 0.0; });
+    fx->setParam(kTapeTime, 100.0f, false);
+    CHECK(fx->param(kTapeTime) == Approx(100.0f)); // the TARGET moves at once
+    run(*fx, 256, [](int) { return 0.0; });
+    // …but one block later the tape has barely begun to speed up, so an impulse still reads near the old time.
+    const auto out = run(*fx, static_cast<int>(kSr * 0.6), impulse());
+    const auto hits = echoPositions(out, 0.3, 256);
+    REQUIRE(!hits.empty());
+    CHECK(hits[0] > static_cast<int>(kSr * 0.15)); // nowhere near the new 100 ms yet
+}
+
+TEST_CASE("tape echo: SPRING adds the tank", "[fx][analog][tape]")
+{
+    // With the tank in, the space BETWEEN the repeats stops being silent — that diffuse wash is the whole point.
+    auto dry = makeTape(0, 300.0f, 0.0f);
+    auto wet = makeTape(0, 300.0f, 0.0f);
+    wet->setParam(kSpring, 100.0f, true);
+    const int from = static_cast<int>(kSr * 0.35), to = static_cast<int>(kSr * 0.5);
+    const auto a = run(*dry, static_cast<int>(kSr * 0.6), impulse());
+    const auto b = run(*wet, static_cast<int>(kSr * 0.6), impulse());
+    CHECK(rms(b, from, to) > rms(a, from, to) * 4.0);
+}
+
+TEST_CASE("tape echo: finite everywhere, reset clears, blocks do not matter", "[fx][analog][tape]")
+{
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int mode = 0; mode < 7; ++mode)
+        {
+            auto fx = makeTape(mode, 20.0f, 100.0f, 100.0f, 100.0f, sr);
+            const auto out =
+                run(*fx, static_cast<int>(sr * 0.4), [](int i) { return (i / 16) % 2 == 0 ? 1.0 : -1.0; }, 64);
+            for (const double v : out)
+            {
+                REQUIRE(std::isfinite(v));
+                REQUIRE(std::abs(v) < 8.0);
+            }
+        }
+
+    auto fx = makeTape(6, 250.0f, 90.0f, 50.0f, 50.0f);
+    run(*fx, static_cast<int>(kSr * 0.5), tone(220.0, 0.8));
+    fx->reset();
+    CHECK(fx->param(kTapeTime) == Approx(350.0f));
+    const auto quiet = run(*fx, static_cast<int>(kSr * 0.5), [](int) { return 0.0; });
+    CHECK(rms(quiet, 0, static_cast<int>(kSr * 0.5)) < 1e-6);
+
+    auto a = makeTape(6, 180.0f, 60.0f, 40.0f, 30.0f);
+    auto b = makeTape(6, 180.0f, 60.0f, 40.0f, 30.0f);
+    const auto ga = run(*a, 16384, tone(180.0, 0.4), 16384);
+    const auto gb = run(*b, 16384, tone(180.0, 0.4), 41);
+    for (std::size_t i = 0; i < ga.size(); ++i)
+        REQUIRE(ga[i] == Approx(gb[i]).margin(1e-9));
+}

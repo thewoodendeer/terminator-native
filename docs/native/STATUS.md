@@ -1739,6 +1739,40 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6d DONE (THE THIRD PREMIUM DEVICE: TAPE ECHO, THE RE-201), 2026-08-24
+
+`TapeEchoFx` in `AnalogFx.{h,cpp}`, `FxType::tapeecho` appended. The parity DELAY is untouched.
+
+**What makes it a tape echo and not a delay with a filter on it:**
+- **One tape, three heads.** MODE (H1 / H2 / H3 / H1+2 / H2+3 / H1+3 / H1+2+3) picks which of three FIXED head
+  spacings (×1.0, ×1.6, ×2.2 of the base time) are reading the same loop — which is where the uneven, rolling
+  patterns come from. Gated: MODE H1 → one echo at 200 ms; H1+2+3 → three, at 200 / 320 / 440 ms; H2+3 → the
+  pattern starts late, at 320 ms.
+- **TIME is the MOTOR, so it glides (τ 250 ms)** — moving it bends the pitch of whatever is already on the tape
+  instead of jump-cutting. Gated: the target moves at once, but a block later the echo still reads near the OLD
+  time.
+- **The losses are INSIDE the feedback loop** (LP 4.5 k → HP 120 → a +3 dB head bump at 95 Hz → tape saturation),
+  so repeat 4 is measurably duller than repeat 1. That is the gate, and it is the thing an output filter cannot do.
+- **INTENSITY runs away on purpose** (100 → a loop gain of 1.05) and the tape saturation is what keeps
+  self-oscillation bounded: gated as still ringing 6 s later AND never exceeding ±4.
+- **WOW** is the worn transport — 0.7 Hz wow + 7.3 Hz flutter off one knob, the two channels a quarter-turn apart
+  so the drift is stereo. **SPRING** is the tank (four uneven allpasses into a damped feedback delay).
+
+**The issue this one turned up:** the "WOW 0 is dead steady" gate measured **2.1 samples of drift, not 0**. Not a
+bug — with the filters inside the loop, every pass is filtered AGAIN, so the peak of the pulse walks a sample or
+two later as it dulls. That is the loop's accumulated group delay. The gate now says what is actually true
+(< 3 samples at WOW 0, and WOW 100 at least double it) with the reason written next to it, instead of asserting a
+zero that a real feedback loop can never hit.
+
+**Gates (4.6d):** 8 more cases — head positions per MODE · INTENSITY (a decaying train, each repeat quieter, and a
+bounded runaway) · every pass darker · WOW moves it and 0 does not · SAT thickens (3rd harmonic +6 dB) and the tone
+shelves work · TIME glides · SPRING fills the gaps between repeats (4× the RMS) · finite at 3 rates × 7 modes on a
+square, reset clears to silence, block-size invariant to 1e-9 (16384 vs 41).
+**mac-debug ctest 319/319 · RTSan 320/320 · ui typecheck 5 = baseline · vite build clean · clang-format clean ·
+the ASCII grep prints nothing.**
+
+Page side in the same commit: `tapeecho` in `FX_REGISTRY` as **TAPE ECHO** (pass-through stub) + the full Help entry.
+
 ## CI RED on `25cf0cc`, and it was the ASCII rule again (fixed 2026-08-24)
 
 **Windows x64 (MSVC) failed one test: `engine.4× oversampling buys real aliasing rejection`** — and not on the
