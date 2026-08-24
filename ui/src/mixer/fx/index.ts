@@ -20,12 +20,15 @@ import { PhaserFX } from './PhaserFX';
 import { FlangerFX } from './FlangerFX';
 import { MbSatFX } from './MbSatFX';
 import { SidechainFX } from './SidechainFX';
+import { LadderFX } from './LadderFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
 export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
-  | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility';
+  | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
+  /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
+  | 'ladder';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -143,6 +146,19 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
     ],
     create: (c) => new VinylFX(c),
   },
+  ladder: {
+    name: 'ANALOG FILTER',
+    desc: 'Moog transistor ladder — the real thing, 4× oversampled: 24/18/12/6 dB lowpass plus highpass and bandpass, DRIVE that saturates the input stage, and RESO that self-oscillates at 100. Rendered by the app\'s engine, so it is in your Master Mixdown and Trackouts (not in the MPC / Drum Rack export, which bakes one-shots)',
+    params: [
+      sel('MODE', 'MODE', ['LP24', 'LP18', 'LP12', 'LP6', 'HP24', 'HP12', 'BP24', 'BP12'],
+          ['LP 24', 'LP 18', 'LP 12', 'LP 6', 'HP 24', 'HP 12', 'BP 24', 'BP 12']),
+      { key: 'CUTOFF', label: 'CUTOFF', kind: 'slider', min: 20, max: 20000, log: true, unit: 'Hz' },
+      { key: 'RESO', label: 'RESO', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'DRIVE', label: 'DRIVE', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new LadderFX(c),
+  },
   filter: {
     name: 'FILTER',
     desc: 'Filter — one resonant lowpass / highpass / bandpass / notch. RESO is how much it rings at the cutoff',
@@ -228,7 +244,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'filter', 'eq', 'comp', 'sccomp', 'delay', 'reverb', 'utility',
+  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'sccomp', 'delay', 'reverb', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

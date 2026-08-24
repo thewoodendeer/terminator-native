@@ -612,6 +612,7 @@ export const TOPICS: Topic[] = [
           ['VINYL/TAPE', 'saturation, aged top end, wow and flutter and a warmth bell in one box'],
           ['WIDE · M/S EQ · PAN', 'stereo width, an EQ that treats centre and sides separately, and auto-pan'],
           ['FILTER · EQ · COMP', 'the bread and butter. COMP\'s NY-PARALLEL blends the squashed signal with the dry, time-aligned so the two never phase'],
+          ['ANALOG FILTER', 'the Moog transistor ladder, modelled properly and oversampled 4× — MODE picks how steep (LP 24 / 18 / 12 / 6) or flips it to a highpass or bandpass, CUTOFF and RESO are the classic pair (RESO past about 85 rings, at 100 it sings on its own), and DRIVE overdrives the input stage into the ladder for grit rather than volume. Wide open is not bypass: four poles at 20 kHz still cost a few dB up top, which is what a real one does. It is an ENGINE effect, so it lands in your Master Mixdown and Trackouts — the MPC project and the Drum Rack bake one-shots through the page chain, so it is not in those'],
           ['SC COMP', 'sidechain compressor — ducks THIS channel from another one. Open its panel and pick the SOURCE (put the kick there to make an 808, a pad or the sample duck under every hit); THRESH and RATIO set how hard, ATK / REL / HOLD the shape, KEY HP keeps only the source\'s lows triggering. The GR readout shows how much it is ducking'],
           ['DELAY · REVERB', 'time effects — repeats darken like tape; the reverb is a real room, bright onset, dark tail'],
           ['UTILITY', 'gain trim, mono fold-down, phase flip'],

@@ -1875,6 +1875,31 @@ page cannot make a sound with), the stems should sum to the master, MP3 and 24-b
 and a CANCEL mid-render should leave no file. Compare against an export from the Electron app if you want the
 before/after.
 
+## Phase 4 — 4.6b DONE (THE ANALOG FILTER IS ON THE MIXER — the 4.6a blocker is closed), 2026-08-24
+
+Now that the master and the trackouts render in the engine (4.7), a native-only device can be put on a strip
+without vanishing from the file. `ladder` is in the page's `FX_REGISTRY` as **ANALOG FILTER** (MODE · CUTOFF ·
+RESO · DRIVE · WET) and in the ＋ INSERT FX list right after FILTER, which is what it is the premium version of.
+
+**`ui/src/mixer/fx/LadderFX.ts` is a documented PASS-THROUGH and must stay one.** The device is the engine's; a
+Web Audio "version" would be a different filter wearing the same name — the exact drift the native build exists to
+end. The page's graph runs for the UI, the engine is what is heard, and the engine renders the export.
+
+**The one place it does not reach: the MPC Project / Drum Rack export**, which bakes the PAGE's mixer chain into
+one-shot WAVs (`engine.exportChops`). A native-only device is not in those files. That is a much smaller gap than
+the master/stems one — those formats are sampler kits, not the mix — and it is now said out loud in the device's
+own tooltip and in Help rather than left to be discovered. Closing it properly means native .mpcsample / .adg
+writers (a Phase 8 item).
+
+Help + the device tooltip updated in the same commit (house rule).
+
+**Gates (4.6b):** ui typecheck 5 = baseline · vite build clean · mac-debug builds.
+**LOCAL PROBE RED, AND IT IS THE MACHINE:** `prefsWindow: false` with `prefsReady: true` — the documented
+window-server symptom. Proven not mine: the SAME probe passed earlier in this session (`build/probe-47b.json`
+`prefsWindow: true`), and with **my work stashed and HEAD rebuilt it still failed** (`build/probe-head.json`).
+Everything before it in the probe is green (ChopperView renders, no page errors). CI is the arbiter, as it was last
+session.
+
 ### THE BLOCKER THIS UNCOVERED — a premium device is heard but NOT exported (needs Victor's call)
 `exportProjectNative` (the whole of 4.5) is wired to **the probe only**. The shipping EXPORT dialog calls the
 PAGE's `exportArrangement` → `renderArrangementDAW`, i.e. the Web Audio mixer, because that is the only thing that
