@@ -25,6 +25,7 @@ namespace
 constexpr double kSr = 48000.0;
 constexpr int kBlock = 256;
 constexpr double kTwoPi = 6.283185307179586;
+constexpr double kHalfPiT = 1.5707963267948966; // one quarter of the sample rate, in radians per sample
 
 /// Param indices (FxPool's kLadderParams).
 enum
@@ -1278,6 +1279,203 @@ TEST_CASE("saturator: bounded, reset, block-invariant", "[fx][analog][sat]")
     auto b = makeSat(0, 70.0f);
     const auto ga = run(*a, 8192, tone(220.0, 0.5), 8192);
     const auto gb = run(*b, 8192, tone(220.0, 0.5), 29);
+    for (std::size_t i = 0; i < ga.size(); ++i)
+        REQUIRE(ga[i] == Approx(gb[i]).margin(1e-9));
+}
+
+// ---- LIMITER (4.6g) --------------------------------------------------------------------------------------------
+// One gate matters more than the rest: THE CEILING IS NEVER EXCEEDED. Everything else — styles, release, look-ahead
+// — is about how it gets there. A limiter that overshoots is not a limiter, so that one is checked across every
+// style, every rate, and material chosen to be hostile (full-scale square edges, a sine that jumps 30 dB).
+
+namespace
+{
+enum
+{
+    kLimStyle = 0,
+    kLimGain,
+    kCeiling,
+    kLimRelease,
+    kLookahead,
+    kTruePeak,
+    kLink
+};
+
+std::unique_ptr<LimiterFx> makeLim(int style, float gainDb, float ceilDb, float lookMs = 3.0f, double sr = kSr)
+{
+    auto fx = std::make_unique<LimiterFx>();
+    fx->prepare(sr, kBlock);
+    fx->setParam(kLimStyle, static_cast<float>(style), true);
+    fx->setParam(kLimGain, gainDb, true);
+    fx->setParam(kCeiling, ceilDb, true);
+    fx->setParam(kLimRelease, 120.0f, true);
+    fx->setParam(kLookahead, lookMs, true);
+    fx->setParam(kTruePeak, 0.0f, true);
+    fx->setParam(kLink, 100.0f, true);
+    return fx;
+}
+
+/// The inter-sample (true) peak of a rendered buffer, by 4x Lagrange interpolation — the same measurement the
+/// device claims to make, applied independently to its OUTPUT.
+double truePeakOf(const std::vector<double>& v)
+{
+    double m = 0.0;
+    for (int i = 1; i + 2 < static_cast<int>(v.size()); ++i)
+    {
+        const double p1 = v[static_cast<std::size_t>(i - 1)], x = v[static_cast<std::size_t>(i)],
+                     n1 = v[static_cast<std::size_t>(i + 1)], n2 = v[static_cast<std::size_t>(i + 2)];
+        m = std::max(m, std::abs(x));
+        for (int k = 1; k < 4; ++k)
+        {
+            const double t = 0.25 * static_cast<double>(k);
+            const double c0 = -t * (t - 1.0) * (t - 2.0) / 6.0;
+            const double c1 = (t + 1.0) * (t - 1.0) * (t - 2.0) / 2.0;
+            const double c2 = -(t + 1.0) * t * (t - 2.0) / 2.0;
+            const double c3 = (t + 1.0) * t * (t - 1.0) / 6.0;
+            m = std::max(m, std::abs(c0 * p1 + c1 * x + c2 * n1 + c3 * n2));
+        }
+    }
+    return m;
+}
+} // namespace
+
+TEST_CASE("limiter: the ceiling is never exceeded", "[fx][analog][lim]")
+{
+    REQUIRE(fxTypeFromId("limiter") == FxType::limiter);
+    REQUIRE(fxTypeInfo(FxType::limiter).wetParam == -1); // fully wet, never blended
+    REQUIRE(fxOptionIndex(FxType::limiter, 0, "AGGRESSIVE") == 4);
+
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int style = 0; style < 7; ++style)
+            for (const float ceilDb : {-0.3f, -3.0f, -12.0f})
+            {
+                auto fx = makeLim(style, 18.0f, ceilDb, 3.0f, sr);
+                const double ceilLin = std::pow(10.0, static_cast<double>(ceilDb) / 20.0);
+                // hostile material: square edges, then a sine that leaps 30 dB mid-buffer
+                const auto out = run(
+                    *fx, static_cast<int>(sr * 0.5),
+                    [&](int i)
+                    {
+                        const double t = static_cast<double>(i) / sr;
+                        if (i < static_cast<int>(sr * 0.2))
+                            return (i / 32) % 2 == 0 ? 0.95 : -0.95;
+                        const double a = t < 0.35 ? 0.02 : 0.9;
+                        return a * std::sin(kTwoPi * 220.0 * t);
+                    },
+                    64);
+                INFO("sr " << sr << " style " << style << " ceiling " << ceilDb);
+                REQUIRE(peak(out, 0, static_cast<int>(out.size())) <= ceilLin * 1.001);
+            }
+}
+
+TEST_CASE("limiter: TP catches what sample peak misses", "[fx][analog][lim]")
+{
+    // The textbook inter-sample case: a sine at exactly a QUARTER of the sample rate, 45 degrees out of phase, so
+    // every single sample lands at 0.707 of a peak the converter will still reconstruct. Sample-peak limiting to
+    // −0.3 dBFS therefore hands the DAC something 3 dB OVER. (An earlier version of this gate used 11025 Hz, whose
+    // samples wander across the phase and so eventually land near the peak — it discriminated nothing.)
+    const auto gen = [](int i)
+    { return 0.9 * std::sin(kHalfPiT * static_cast<double>(i) + 0.25 * 3.14159265358979323846); };
+    const double ceilLin = std::pow(10.0, -0.3 / 20.0);
+
+    auto off = makeLim(3, 6.0f, -0.3f);
+    const auto a = run(*off, static_cast<int>(kSr * 0.3), gen);
+    CHECK(peak(a, 0, static_cast<int>(a.size())) <= ceilLin * 1.001);
+
+    auto on = makeLim(3, 6.0f, -0.3f);
+    on->setParam(kTruePeak, 1.0f, true);
+    const auto b = run(*on, static_cast<int>(kSr * 0.3), gen);
+    const int from = static_cast<int>(kSr * 0.05);
+    const std::vector<double> tailA(a.begin() + from, a.end());
+    const std::vector<double> tailB(b.begin() + from, b.end());
+    INFO("sample-peak TP " << truePeakOf(tailA) << " vs true-peak TP " << truePeakOf(tailB));
+    CHECK(truePeakOf(tailA) > ceilLin * 1.2); // the overshoot a sample-peak limiter cannot see
+    CHECK(truePeakOf(tailB) < truePeakOf(tailA));
+    CHECK(truePeakOf(tailB) <= ceilLin * 1.05);
+}
+
+TEST_CASE("limiter: LOOKAHEAD is the latency it reports", "[fx][analog][lim]")
+{
+    // PDC reads latencySamples(), so it has to be the truth: the output is delayed by exactly that many samples.
+    for (const float ms : {0.0f, 1.0f, 5.0f, 20.0f})
+    {
+        auto fx = makeLim(3, 0.0f, 0.0f, ms);
+        const int want = fx->latencySamples();
+        CHECK(want == static_cast<int>(static_cast<double>(ms) * 0.001 * kSr));
+        REQUIRE(fx->latencySamples() == want);
+        const auto out = run(*fx, 8192, [](int i) { return i == 100 ? 0.5 : 0.0; });
+        int at = -1;
+        for (int i = 0; i < static_cast<int>(out.size()); ++i)
+            if (std::abs(out[static_cast<std::size_t>(i)]) > 1e-9)
+            {
+                at = i;
+                break;
+            }
+        INFO("lookahead " << ms << " ms");
+        CHECK(at == 100 + want);
+    }
+}
+
+TEST_CASE("limiter: under the ceiling it does nothing at all", "[fx][analog][lim]")
+{
+    // Quiet material must come out bit-identical (just delayed) — no gain riding, no colour, no gain reduction.
+    auto fx = makeLim(0, 0.0f, -0.3f, 0.0f);
+    const int n = 4096;
+    std::vector<double> l(n), r(n), in(n);
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<std::size_t>(i)] = 0.2 * std::sin(kTwoPi * 200.0 * static_cast<double>(i) / kSr);
+        l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = in[static_cast<std::size_t>(i)];
+    }
+    fx->process(l.data(), r.data(), n);
+    for (int i = 0; i < n; ++i)
+        REQUIRE(l[static_cast<std::size_t>(i)] == Approx(in[static_cast<std::size_t>(i)]).margin(1e-12));
+    CHECK(fx->gainReductionDb() == Approx(0.0f).margin(1e-6f));
+}
+
+TEST_CASE("limiter: GAIN pushes it, and the styles are different", "[fx][analog][lim]")
+{
+    const auto grAt = [](int style, float gainDb)
+    {
+        auto fx = makeLim(style, gainDb, -0.3f);
+        run(*fx, static_cast<int>(kSr * 0.5), tone(300.0, 0.5));
+        return static_cast<double>(fx->gainReductionDb());
+    };
+    CHECK(grAt(3, 18.0f) < grAt(3, 6.0f)); // more push, more gain reduction
+
+    // How much of a transient survives is what separates PUNCHY from BUS.
+    const auto transientPeak = [](int style)
+    {
+        auto fx = makeLim(style, 12.0f, -0.3f);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.4),
+                             [](int i)
+                             {
+                                 const double t = static_cast<double>(i) / kSr;
+                                 const double env = std::exp(-40.0 * std::fmod(t, 0.1));
+                                 return 0.9 * env * std::sin(kTwoPi * 90.0 * t);
+                             });
+        return rms(out, 0, static_cast<int>(out.size()));
+    };
+    CHECK(transientPeak(4) > transientPeak(5)); // AGGRESSIVE is louder than BUS, by design
+}
+
+TEST_CASE("limiter: finite, reset, block-invariant", "[fx][analog][lim]")
+{
+    auto fx = makeLim(4, 24.0f, -0.3f, 10.0f);
+    const auto out = run(*fx, static_cast<int>(kSr * 0.3), [](int i) { return (i / 8) % 2 == 0 ? 1.0 : -1.0; }, 64);
+    for (const double v : out)
+    {
+        REQUIRE(std::isfinite(v));
+        REQUIRE(std::abs(v) <= 1.0);
+    }
+    fx->reset();
+    CHECK(fx->param(kCeiling) == Approx(-0.3f));
+    CHECK(fx->gainReductionDb() == Approx(0.0f).margin(1e-6f));
+
+    auto a = makeLim(3, 12.0f, -1.0f, 4.0f);
+    auto b = makeLim(3, 12.0f, -1.0f, 4.0f);
+    const auto ga = run(*a, 8192, tone(150.0, 0.7), 8192);
+    const auto gb = run(*b, 8192, tone(150.0, 0.7), 31);
     for (std::size_t i = 0; i < ga.size(); ++i)
         REQUIRE(ga[i] == Approx(gb[i]).margin(1e-9));
 }

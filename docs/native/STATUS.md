@@ -1739,6 +1739,46 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6g DONE (THE SIXTH PREMIUM DEVICE: LIMITER — AND A REAL PDC BUG IT UNCOVERED), 2026-08-24
+
+`LimiterFx` in `AnalogFx.{h,cpp}`, `FxType::limiter` appended. Seven styles (TRANSPARENT / PUNCHY / DYNAMIC /
+ALLROUND / AGGRESSIVE / BUS / SAFE), GAIN into a fixed CEILING, program-dependent RELEASE, LOOKAHEAD 0–20 ms,
+TRUE-PEAK, channel LINK, GR to the panel meter.
+
+**How it cannot overshoot.** The anticipation is a **sliding minimum** of the required gain over the look-ahead
+window (a monotonic deque on fixed arrays — O(1), no allocation), so the gain starts falling the moment a peak
+ENTERS the window, `look` samples before it is played. Then the smoothed gain is **hard-clamped to the gain that
+exact sample needs**. The styles shape HOW it gets there; the clamp is why it always arrives. Gated across
+3 rates × 7 styles × 3 ceilings on hostile material (square edges, then a sine that jumps 30 dB): the output peak
+never exceeds the ceiling.
+
+**THE BUG THIS DEVICE FOUND — `Mixer::setFxParam` never rebuilt PDC.** PDC was rebuilt when a device was added,
+removed, bypassed or the chain cleared — but **a PARAM can change a device's latency**, and the LIMITER's LOOKAHEAD
+is exactly that. Left alone, moving that knob would have left the whole strip compensated for the old number:
+silently off the grid, nothing sounding broken, just not where the other strips are. `setFxParam` now reads
+`latencySamples()` before and after and rebuilds only when the number actually moved — a knob drag costs one
+comparison. **This was a latent bug in the 4.4 PDC plan, not a new one; it needed a device with a latency PARAM to
+show up.**
+
+**Two more issues, both found by gates:**
+1. **The look-ahead delay read the ring BEFORE writing it**, so LOOKAHEAD 0 delayed by a whole ring (an impulse at
+   sample 100 came out at 1065) and quiet material came out as silence. Write, then read `look` back.
+2. **TRUE PEAK did nothing** in the first version — the hard clamp measured the sample peak in both branches, so TP
+   only affected the anticipation and the output's true peak was unchanged. It now reads the inter-sample peak of
+   the sample being PLAYED (4-point Lagrange over its neighbours in the delay ring), which needs two samples of
+   future — so TP puts a **two-sample floor on the look-ahead, reported in `latencySamples()`**.
+   **And the TP gate itself was measuring nothing:** an 11 kHz test sine's samples wander across the phase and
+   eventually land near the peak, so sample-peak limiting already looked fine. It now uses the textbook case — a
+   sine at exactly a QUARTER of the sample rate, 45° out of phase, where every sample sits at 0.707 of a peak the
+   converter still reconstructs — and asserts that TP off leaves ≥ 1.2× the ceiling on the output while TP on does
+   not.
+
+**Gates (4.6g):** 6 more cases — the ceiling across 63 combinations · TP vs sample peak · LOOKAHEAD == the reported
+latency and the output really is delayed by it · under the ceiling it is bit-identical (1e-12) with GR 0 · GAIN
+pushes it and AGGRESSIVE is louder than BUS · finite/reset/block-invariant.
+**mac-debug ctest 339/339 · RTSan 340/340 · ui typecheck 5 = baseline · vite clean · format clean · ASCII grep
+silent.** Page side: `limiter` in `FX_REGISTRY`, the GR readout and the native GR mirror extended to it, Help.
+
 ## Phase 4 — 4.6f DONE (THE FIFTH PREMIUM DEVICE: SATURATOR — FIVE FLAVOURS), 2026-08-24
 
 `SaturatorFx` in `AnalogFx.{h,cpp}`, `FxType::saturator` appended. The Decapitator shape from B4: **A** tube

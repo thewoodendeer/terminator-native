@@ -1166,4 +1166,247 @@ void SaturatorFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBL
     }
 }
 
+// ---- LIMITER ------------------------------------------------------------------------------------------------
+
+namespace
+{
+/// {release scale, how much of the look-ahead window the attack is smoothed over, program dependence}.
+constexpr LimiterFx::Style kLimStyles[7] = {
+    {2.20, 1.00, 0.30}, // TRANSPARENT — slow and smooth, gets out of the way
+    {0.45, 0.35, 0.20}, // PUNCHY — lets transients through
+    {1.00, 0.70, 1.00}, // DYNAMIC — the release follows how hard it is working
+    {1.00, 0.70, 0.40}, // ALLROUND
+    {0.25, 0.20, 0.10}, // AGGRESSIVE — loud, and it shows
+    {3.00, 1.00, 0.50}, // BUS — barely moves
+    {0.60, 0.10, 0.00}, // SAFE — a catch net, nothing more
+};
+} // namespace
+
+LimiterFx::Style LimiterFx::styleFor(int i) const noexcept TERMINATOR_NONBLOCKING
+{
+    return kLimStyles[std::clamp(i, 0, 6)];
+}
+
+void LimiterFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    maxLook_ = static_cast<int>(kMaxLookaheadSec * sampleRate) + 4;
+    dlyL_.assign(static_cast<std::size_t>(maxLook_ + 1), 0.0);
+    dlyR_.assign(static_cast<std::size_t>(maxLook_ + 1), 0.0);
+    reqRing_.assign(static_cast<std::size_t>(maxLook_ + 1), 1.0);
+    minDeque_.assign(static_cast<std::size_t>(maxLook_ + 2), 0);
+    reset();
+}
+
+void LimiterFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    styleIdx_ = 3.0f;
+    tp_ = 0.0f;
+    gain_.set(0.0f, true);
+    ceiling_.set(-0.3f, true);
+    release_.set(120.0f, true);
+    lookMs_.set(3.0f, true);
+    link_.set(100.0f, true);
+    std::fill(dlyL_.begin(), dlyL_.end(), 0.0);
+    std::fill(dlyR_.begin(), dlyR_.end(), 0.0);
+    std::fill(reqRing_.begin(), reqRing_.end(), 1.0);
+    dlyPos_ = 0;
+    minHead_ = minTail_ = 0;
+    minCount_ = 0;
+    smooth_ = held_ = 1.0;
+    tpHistL_[0] = tpHistL_[1] = tpHistL_[2] = 0.0;
+    tpHistR_[0] = tpHistR_[1] = tpHistR_[2] = 0.0;
+    grDb_ = 0.0f;
+    look_ = std::clamp(static_cast<int>(3.0 * 0.001 * sr_), 0, maxLook_);
+}
+
+void LimiterFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        styleIdx_ = clampf(std::floor(value), 0.0f, 6.0f);
+        break;
+    case 1:
+        gain_.set(clampf(value, 0.0f, 24.0f), immediate);
+        break;
+    case 2:
+        ceiling_.set(clampf(value, -12.0f, 0.0f), immediate);
+        break;
+    case 3:
+        release_.set(clampf(value, 1.0f, 1000.0f), immediate);
+        break;
+    case 4:
+        // LOOKAHEAD changes the device's LATENCY, so it is applied whole — a glide would make the reported number
+        // a lie for as long as it took to arrive, and PDC reads that number.
+        lookMs_.set(clampf(value, 0.0f, 20.0f), true);
+        look_ = std::clamp(static_cast<int>(static_cast<double>(lookMs_.cur) * 0.001 * sr_), 0, maxLook_);
+        minHead_ = minTail_ = 0;
+        minCount_ = 0;
+        break;
+    case 5:
+        tp_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 6:
+        link_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    default:
+        break;
+    }
+}
+
+float LimiterFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return styleIdx_;
+    case 1:
+        return gain_.target;
+    case 2:
+        return ceiling_.target;
+    case 3:
+        return release_.target;
+    case 4:
+        return lookMs_.target;
+    case 5:
+        return tp_;
+    case 6:
+        return link_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+/// The inter-sample peak, estimated by 4-point Lagrange interpolation at the quarter points. A sample-peak reading
+/// can be several dB under what the converter (or an mp3 encoder) actually reconstructs.
+double LimiterFx::truePeak(double p2, double p1, double x, double n1) const noexcept TERMINATOR_NONBLOCKING
+{
+    double m = std::abs(x);
+    for (int k = 1; k < 4; ++k)
+    {
+        const double t = 0.25 * static_cast<double>(k);
+        const double c0 = -t * (t - 1.0) * (t - 2.0) / 6.0;
+        const double c1 = (t + 1.0) * (t - 1.0) * (t - 2.0) / 2.0;
+        const double c2 = -(t + 1.0) * t * (t - 2.0) / 2.0;
+        const double c3 = (t + 1.0) * t * (t - 1.0) / 6.0;
+        m = std::max(m, std::abs(c0 * p2 + c1 * p1 + c2 * x + c3 * n1));
+    }
+    return m;
+}
+
+/// A monotonic-deque sliding minimum over the last `look_ + 1` required gains. O(1) amortised, no allocation.
+double LimiterFx::slideMin(double v) noexcept TERMINATOR_NONBLOCKING
+{
+    const int cap = static_cast<int>(reqRing_.size());
+    const int idx = static_cast<int>(minCount_ % cap);
+    reqRing_[static_cast<std::size_t>(idx)] = v;
+    const int dcap = static_cast<int>(minDeque_.size());
+    while (minTail_ != minHead_)
+    {
+        const int back = (minTail_ - 1 + dcap) % dcap;
+        if (reqRing_[static_cast<std::size_t>(minDeque_[static_cast<std::size_t>(back)])] >= v)
+            minTail_ = back;
+        else
+            break;
+    }
+    minDeque_[static_cast<std::size_t>(minTail_)] = idx;
+    minTail_ = (minTail_ + 1) % dcap;
+    // drop anything that has fallen out of the window
+    const std::int64_t oldest = minCount_ - look_;
+    while (minHead_ != minTail_)
+    {
+        const int front = minDeque_[static_cast<std::size_t>(minHead_)];
+        const std::int64_t age = minCount_ - ((minCount_ - front + cap) % cap);
+        if (age < oldest)
+            minHead_ = (minHead_ + 1) % dcap;
+        else
+            break;
+    }
+    ++minCount_;
+    return reqRing_[static_cast<std::size_t>(minDeque_[static_cast<std::size_t>(minHead_)])];
+}
+
+void LimiterFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (gain_.moving() || ceiling_.moving() || release_.moving() || link_.moving())
+    {
+        gain_.advance(n, sr_, kFxTau);
+        ceiling_.advance(n, sr_, kFxTau);
+        release_.advance(n, sr_, kFxTau);
+        link_.advance(n, sr_, kFxTau);
+    }
+    const Style st = styleFor(static_cast<int>(styleIdx_));
+    const double inGain = std::pow(10.0, static_cast<double>(gain_.cur) / 20.0);
+    const double ceil = std::pow(10.0, static_cast<double>(ceiling_.cur) / 20.0);
+    const double link = static_cast<double>(link_.cur) * 0.01;
+    const bool trueP = tp_ > 0.5f;
+    const int look = latencySamples(); // TP needs two samples of future to read an inter-sample peak
+    const int cap = static_cast<int>(dlyL_.size());
+    // The attack smoother is sized to a fraction of the look-ahead, so it always finishes INSIDE the window.
+    const double smoothSamples = std::max(1.0, st.smoothFrac * static_cast<double>(std::max(look, 1)));
+    const double atkCoef = std::exp(-1.0 / smoothSamples);
+
+    for (int i = 0; i < n; ++i)
+    {
+        const double xl = l[i] * inGain, xr = r[i] * inGain;
+        // what this sample needs, per channel, then linked
+        const double pl = trueP ? truePeak(tpHistL_[0], tpHistL_[1], tpHistL_[2], xl) : std::abs(xl);
+        const double pr = trueP ? truePeak(tpHistR_[0], tpHistR_[1], tpHistR_[2], xr) : std::abs(xr);
+        tpHistL_[0] = tpHistL_[1];
+        tpHistL_[1] = tpHistL_[2];
+        tpHistL_[2] = xl;
+        tpHistR_[0] = tpHistR_[1];
+        tpHistR_[1] = tpHistR_[2];
+        tpHistR_[2] = xr;
+        const double peakLinked = std::max(pl, pr);
+        const double peakCh = 0.5 * (pl + pr);
+        const double pk = link * peakLinked + (1.0 - link) * peakCh;
+        const double required = pk > ceil ? ceil / pk : 1.0;
+
+        const double target = slideMin(required);
+        if (target < smooth_)
+            smooth_ = target + (smooth_ - target) * atkCoef;
+        else
+        {
+            // program dependence: the harder it is working, the slower it lets go
+            const double relMs = std::max(1.0, static_cast<double>(release_.cur)) * st.releaseScale *
+                                 (1.0 + st.program * (1.0 - smooth_) * 6.0);
+            const double relCoef = std::exp(-1.0 / (0.001 * relMs * sr_));
+            smooth_ = target + (smooth_ - target) * relCoef;
+        }
+
+        // WRITE first, then read `look` samples back — with look = 0 that has to be the sample just written, and
+        // reading before writing quietly handed back the one from a whole ring ago instead.
+        dlyL_[static_cast<std::size_t>(dlyPos_)] = xl;
+        dlyR_[static_cast<std::size_t>(dlyPos_)] = xr;
+        const int rd = (dlyPos_ - look + cap) % cap;
+        const double outL = dlyL_[static_cast<std::size_t>(rd)];
+        const double outR = dlyR_[static_cast<std::size_t>(rd)];
+        dlyPos_ = (dlyPos_ + 1) % cap;
+
+        // THE HARD CLAMP. Everything above shapes HOW the gain gets there; this is what guarantees it arrives.
+        // A limiter that can overshoot its ceiling is not a limiter, so the applied gain is never allowed above
+        // what this exact sample needs — measured on the sample being PLAYED, not the one being watched.
+        // With TP on, "what this sample needs" is its INTER-sample peak, which needs the two samples after it —
+        // hence the two-sample floor on the look-ahead when TP is armed (and reported in latencySamples()).
+        double plOut = std::max(std::abs(outL), std::abs(outR));
+        if (trueP)
+        {
+            const int m1 = (rd - 1 + cap) % cap, p1 = (rd + 1) % cap, p2 = (rd + 2) % cap;
+            plOut = std::max(truePeak(dlyL_[static_cast<std::size_t>(m1)], outL, dlyL_[static_cast<std::size_t>(p1)],
+                                      dlyL_[static_cast<std::size_t>(p2)]),
+                             truePeak(dlyR_[static_cast<std::size_t>(m1)], outR, dlyR_[static_cast<std::size_t>(p1)],
+                                      dlyR_[static_cast<std::size_t>(p2)]));
+        }
+        const double needNow = plOut > ceil ? ceil / plOut : 1.0;
+        const double g = std::min(smooth_, needNow);
+
+        l[i] = outL * g;
+        r[i] = outR * g;
+        held_ = g;
+    }
+    grDb_ = static_cast<float>(20.0 * std::log10(std::max(held_, 1e-6)));
+}
+
 } // namespace terminator

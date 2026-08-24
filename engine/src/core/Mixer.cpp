@@ -558,7 +558,14 @@ void Mixer::setFxParam(int strip, int index, int param, float value, bool immedi
         return;
     if (param < 0 || param >= s.fx[index]->numParams())
         return;
+    // A PARAM CAN CHANGE A DEVICE'S LATENCY (the LIMITER's LOOKAHEAD, its TRUE-PEAK switch). PDC is only rebuilt
+    // when a device is added / removed / bypassed, so without this the plan would keep compensating for the old
+    // number and that strip would sit off the grid — silently, because nothing sounds broken, it just is not where
+    // the others are. Rebuild only when the number actually moved, so a knob drag costs one comparison.
+    const int before = s.fx[index]->latencySamples();
     s.fx[index]->setParam(param, value, immediate);
+    if (s.fx[index]->latencySamples() != before)
+        rebuildPdc();
     if (s.fx[index]->type() == FxType::sccomp)
         rebuildKeyMask();
 }

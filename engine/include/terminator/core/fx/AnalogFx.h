@@ -7,6 +7,9 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · LimiterFx — LIMITER: a modern mastering limiter (styles, look-ahead, true peak). The ONE thing it must never
+//     do is exceed its ceiling, so the applied gain is hard-clamped to the gain that sample actually needs — the
+//     smoothing shapes how it gets there, it never decides whether it arrives.
 //   · SaturatorFx — SATURATOR: the Decapitator's five analogue flavours (tube / germanium / British console /
 //     transformer / punish), each a different curve on the same 4x-oversampled, DC-blocked, auto-gained stage.
 //   · PlateVerbFx — HALL 224: the Lexicon 224's programs on a Dattorro tank — a REAL algorithmic reverb (input
@@ -20,7 +23,9 @@
 //     mixes the stage taps for the 6/12/18/24 dB LP · 12/24 dB HP · 12/24 dB BP modes, has its own DRIVE stage with
 //     auto-gain, and self-oscillates from an analog noise floor. Changing it must never change how a bass patch
 //     sounds, which a shared class could not promise.)
+#include <algorithm>
 #include <cstdint>
+#include <vector>
 
 #include "terminator/core/fx/Effect.h"
 #include "terminator/core/fx/FxDsp.h" // DelayLine (the tape + the spring tank), lfoSine / advancePhase
@@ -127,6 +132,65 @@ class FetCompFx final : public Effect
 
 /// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
 double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// LIMITER — the mastering limiter (Phase 4.6g).
+///   STYLE     TRANSPARENT | PUNCHY | DYNAMIC | ALLROUND | AGGRESSIVE | BUS | SAFE — the release law and how much
+///             the attack is smoothed. PUNCHY lets transients through, BUS barely moves, SAFE is a catch net.
+///   GAIN      0..24 dB into the limiter (how hard you push it) · CEILING −12..0 dBFS
+///   RELEASE   1..1000 ms · LOOKAHEAD 0..20 ms (reported as latency, so PDC lines the strip back up)
+///   TP        OFF | ON — TRUE peak: the level BETWEEN samples, estimated by 4x interpolation. A sample-peak
+///             limiter can hand a converter something above its ceiling and an mp3 encoder something worse.
+///   LINK      0..100 — how much the two channels share one gain (100 = the image never moves).
+/// The chain runs it fully wet (a limiter is not a parallel device); `gainReductionDb()` feeds the panel meter.
+class LimiterFx final : public Effect
+{
+  public:
+    static constexpr double kMaxLookaheadSec = 0.02;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::limiter; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    /// The look-ahead, and with TRUE PEAK armed at least two samples — an inter-sample peak cannot be read without
+    /// the samples on either side of it. Reported honestly because PDC lines the whole strip up from this number,
+    /// and Mixer::setFxParam now rebuilds the plan when a param moves it.
+    int latencySamples() const noexcept TERMINATOR_NONBLOCKING override
+    {
+        return tp_ > 0.5f ? std::max(look_, 2) : look_;
+    }
+    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING override { return grDb_; }
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+    /// {release scale, how much of the look-ahead the attack is smoothed over, program dependence} — public only
+    /// so the style table can live at file scope in the .cpp (a nonblocking function may not have a static local).
+    struct Style
+    {
+        double releaseScale, smoothFrac, program;
+    };
+
+  private:
+    Style styleFor(int i) const noexcept TERMINATOR_NONBLOCKING;
+    /// The sliding MINIMUM of the required gain over the look-ahead window — this is the anticipation: it drops as
+    /// soon as a peak ENTERS the window, which is `look_` samples before that peak is played.
+    double slideMin(double v) noexcept TERMINATOR_NONBLOCKING;
+    double truePeak(double prev2, double prev1, double x, double next) const noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    float styleIdx_ = 3.0f;
+    float tp_ = 0.0f;
+    Glide gain_, ceiling_, release_, lookMs_, link_;
+    int look_ = 0, maxLook_ = 0;
+    std::vector<double> dlyL_, dlyR_; // the look-ahead delay on the audio
+    int dlyPos_ = 0;
+    std::vector<double> reqRing_; // the required-gain history the sliding min reads
+    std::vector<int> minDeque_;   // monotonic indices into reqRing_ (allocation-free after prepare)
+    int minHead_ = 0, minTail_ = 0;
+    std::int64_t minCount_ = 0;
+    double smooth_ = 1.0, held_ = 1.0;
+    double tpHistL_[3] = {}, tpHistR_[3] = {};
+    float grDb_ = 0.0f;
+};
 
 /// SATURATOR — five analogue flavours on one stage (Phase 4.6f).
 ///   STYLE   A (tube — asymmetric, even harmonics first) | E (germanium, harder edge) | N (British console, gentle

@@ -1208,10 +1208,10 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
               </div>
               {!collapsed && (
                 <div className="mx-device-body" onDoubleClick={e => e.stopPropagation()}>
-                  {(id === 'sccomp' || id === 'fetcomp') && (
-                    <span className="mx-param mx-sc-gr" title={id === 'fetcomp'
-                      ? 'Gain reduction — how many dB it is holding this channel down right now'
-                      : 'Gain reduction — how hard the key is ducking this channel right now'}>
+                  {(id === 'sccomp' || id === 'fetcomp' || id === 'limiter') && (
+                    <span className="mx-param mx-sc-gr" title={id === 'sccomp'
+                      ? 'Gain reduction — how hard the key is ducking this channel right now'
+                      : 'Gain reduction — how many dB it is holding this channel down right now'}>
                       <span className="mx-param-label">GR</span>
                       <span className="mx-param-val" ref={el => { scGrRefs.current.set(key, el); }}>0.0 dB</span>
                     </span>

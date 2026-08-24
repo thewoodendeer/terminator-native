@@ -29,6 +29,7 @@ const char* const kTapeHeads[] = {"H1", "H2", "H3", "H1+2", "H2+3", "H1+3", "H1+
 const char* const kVerbPrograms[] = {"HALL", "CHAMBER", "PLATE", "ROOM", "AMBIENCE"};
 const char* const kSatStyles[] = {"A TUBE", "E GERM", "N BRIT", "T XFMR", "P PUNISH"};
 const char* const kOffOn[] = {"OFF", "ON"};
+const char* const kLimStyleNames[] = {"TRANSPARENT", "PUNCHY", "DYNAMIC", "ALLROUND", "AGGRESSIVE", "BUS", "SAFE"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -156,6 +157,15 @@ const FxParamDef kSaturatorParams[] = {
     {"OUTPUT", -24.0f, 24.0f, 0.0f},
     {"WET", 0.0f, 100.0f, 100.0f},
 };
+const FxParamDef kLimiterParams[] = {
+    {"STYLE", 0.0f, 6.0f, 3.0f, kLimStyleNames, 7},
+    {"GAIN", 0.0f, 24.0f, 0.0f},
+    {"CEILING", -12.0f, 0.0f, -0.3f},
+    {"RELEASE", 1.0f, 1000.0f, 120.0f},
+    {"LOOKAHEAD", 0.0f, 20.0f, 3.0f}, // reported as the device's latency, so PDC lines the strip back up
+    {"TP", 0.0f, 1.0f, 0.0f, kOffOn, 2},
+    {"LINK", 0.0f, 100.0f, 100.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -189,6 +199,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::tapeecho, "tapeecho", kTapeEchoParams, 9, 8},
     {FxType::plateverb, "plateverb", kPlateVerbParams, 9, 8},
     {FxType::saturator, "saturator", kSaturatorParams, 8, 7},
+    {FxType::limiter, "limiter", kLimiterParams, 7, -1}, // fully wet: a limiter is not a parallel device
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -229,6 +240,8 @@ int capacityOf(FxType t) noexcept
         return 8; // the tank is a dozen delay lines, sized for SIZE 100
     case FxType::saturator:
         return 32;
+    case FxType::limiter:
+        return 16;
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -271,6 +284,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<PlateVerbFx>();
     case FxType::saturator:
         return std::make_unique<SaturatorFx>();
+    case FxType::limiter:
+        return std::make_unique<LimiterFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

@@ -25,6 +25,7 @@ import { FetCompFX } from './FetCompFX';
 import { TapeEchoFX } from './TapeEchoFX';
 import { PlateVerbFX } from './PlateVerbFX';
 import { SaturatorFX } from './SaturatorFX';
+import { LimiterFX } from './LimiterFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -32,7 +33,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -162,6 +163,20 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
       { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
     ],
     create: (c) => new LadderFX(c),
+  },
+  limiter: {
+    name: 'LIMITER',
+    desc: 'A mastering limiter that cannot exceed its ceiling — the applied gain is hard-clamped to what each sample actually needs, so the styles only decide HOW it gets there. TP reads the level BETWEEN samples (a sample-peak limiter can hand a converter, or an mp3 encoder, 3 dB more than it promised). GAIN is how hard you push it; LOOKAHEAD is reported as latency so PDC lines the strip back up. Rendered by the app\'s engine',
+    params: [
+      sel('STYLE', 'STYLE', ['TRANSPARENT', 'PUNCHY', 'DYNAMIC', 'ALLROUND', 'AGGRESSIVE', 'BUS', 'SAFE']),
+      { key: 'GAIN', label: 'GAIN', kind: 'slider', min: 0, max: 24, step: 0.1, unit: 'dB' },
+      { key: 'CEILING', label: 'CEIL', kind: 'knob', min: -12, max: 0, step: 0.1, unit: 'dB' },
+      { key: 'RELEASE', label: 'REL', kind: 'knob', min: 1, max: 1000, step: 1, log: true, unit: 'ms' },
+      { key: 'LOOKAHEAD', label: 'LOOK', kind: 'knob', min: 0, max: 20, step: 0.1, unit: 'ms' },
+      { key: 'TP', label: 'TRUE PK', kind: 'toggle', onValue: 'ON', offValue: 'OFF' },
+      { key: 'LINK', label: 'LINK', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new LimiterFX(c),
   },
   saturator: {
     name: 'SATURATOR',
@@ -310,7 +325,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'saturator', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'utility',
+  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */
