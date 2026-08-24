@@ -1270,6 +1270,15 @@ label.btn-loadfile { display: inline-flex; align-items: center; justify-content:
 .btn-rec-go.rec-idle:hover:not(:disabled) { opacity: 1; background: rgba(255, 82, 48, 0.18); }
 .btn-rec-go.rec-armed { color: #fff; background: #ff5230; animation: record-blink 0.7s steps(2, start) infinite; }
 .btn-rec-go.rec-recording { color: #fff; background: #ff5230; box-shadow: 0 0 14px rgba(255, 82, 48, 0.8); }
+/* MONITOR (5.1c) — hear the input through the engine while you set the level. Lit = the input is open. */
+.btn-rec-monitor {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 1.5px; font-weight: 700;
+  padding: 6px 12px; cursor: pointer; border-radius: 3px;
+  border: 1px solid var(--neon-dim); color: var(--text-dim); background: transparent;
+}
+.btn-rec-monitor:hover { color: var(--neon2); border-color: var(--neon2); }
+.btn-rec-monitor.on { color: #050508; background: var(--neon); border-color: var(--neon); text-shadow: none; }
+.record-countin-select { min-width: 96px; }
 .record-live { display: flex; align-items: center; gap: 8px; }
 .record-meter { width: 120px; height: 14px; background: #050508; border: 1px solid rgba(255,82,48,0.4); border-radius: 2px; }
 .record-elapsed { font-family: var(--font-mono); font-size: 13px; color: #ff5230; font-variant-numeric: tabular-nums; text-shadow: 0 0 6px rgba(255,82,48,0.5); }

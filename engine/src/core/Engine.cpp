@@ -107,6 +107,94 @@ void Engine::prepare(const Config& config)
     publish(0);
 }
 
+// RECORDING (5.1a) + THE ARM (5.1c). The file is opened HERE, on the message thread, even for a take that will not
+// begin for four beats: opening it is the slow part, and the audio thread cannot do it when the sample arrives.
+bool Engine::startRecord(const RecorderConfig& cfg, juce::String& error, const RecordArm& arm)
+{
+    recRolling_.store(0, std::memory_order_relaxed);
+    recComplete_.store(0, std::memory_order_relaxed);
+    recStarted_.store(0, std::memory_order_relaxed);
+    recPlayhead_.store(0, std::memory_order_relaxed);
+    recLength_.store(arm.lengthSamples, std::memory_order_relaxed);
+    recArmMode_.store(static_cast<std::uint8_t>(arm.mode), std::memory_order_relaxed);
+    // `atSample` is the only mode the caller can resolve itself; the other two are resolved by the audio thread when
+    // the count-in or the transport says so. 0 = unresolved.
+    recArmSample_.store(arm.mode == RecordStart::atSample ? arm.atSample : 0, std::memory_order_release);
+    const bool started = recorder_.start(cfg, error);
+    if (!started)
+        recArmMode_.store(static_cast<std::uint8_t>(RecordStart::immediate), std::memory_order_release);
+    return started;
+}
+
+bool Engine::startRecord(const RecorderConfig& cfg, juce::String& error)
+{
+    return startRecord(cfg, error, RecordArm{});
+}
+
+std::uint64_t Engine::stopRecord()
+{
+    const auto frames = recorder_.stop();
+    recRolling_.store(0, std::memory_order_relaxed);
+    recComplete_.store(0, std::memory_order_relaxed);
+    recArmSample_.store(0, std::memory_order_relaxed);
+    recLength_.store(0, std::memory_order_relaxed);
+    recArmMode_.store(static_cast<std::uint8_t>(RecordStart::immediate), std::memory_order_release);
+    return frames;
+}
+
+// The take's window inside this block (5.1c). Armed, the capture begins at ITS sample — not at the block boundary
+// that happens to contain it — and a punch-out length ends it just as exactly.
+void Engine::pushRecordWindow(const float* const* inputs, int numIn, int numSamples) noexcept TERMINATOR_NONBLOCKING
+{
+    if (!recorder_.recording() || recComplete_.load(std::memory_order_relaxed) != 0)
+        return;
+    const std::uint64_t blockStart = samplesProcessed_;
+    const auto mode = static_cast<RecordStart>(recArmMode_.load(std::memory_order_relaxed));
+    int offset = 0;
+    if (recRolling_.load(std::memory_order_relaxed) == 0)
+    {
+        std::uint64_t at = recArmSample_.load(std::memory_order_relaxed);
+        if (mode == RecordStart::immediate)
+            at = blockStart;
+        else if (mode == RecordStart::countInDownbeat && at == 0)
+        {
+            // The count-in owns the downbeat; until one is booked there is nothing to aim at, so the take waits.
+            if (!metro_.countInPending())
+                return;
+            at = metro_.countInDownbeatSample();
+            if (at == 0)
+                return;
+            recArmSample_.store(at, std::memory_order_relaxed);
+        }
+        if (at == 0 || at >= blockStart + static_cast<std::uint64_t>(numSamples))
+            return; // not this block
+        offset = at > blockStart ? static_cast<int>(at - blockStart) : 0;
+        recStarted_.store(blockStart + static_cast<std::uint64_t>(offset), std::memory_order_relaxed);
+        // where the take belongs in the song: the transport position of its first frame
+        recPlayhead_.store(playing_ ? playheadSamples_ + static_cast<std::uint64_t>(offset) : playheadSamples_,
+                           std::memory_order_relaxed);
+        recRolling_.store(1, std::memory_order_release);
+    }
+    int frames = numSamples - offset;
+    // PUNCH-OUT: exactly `length` frames, then the file is finished (the message thread closes it).
+    const std::uint64_t length = recLength_.load(std::memory_order_relaxed);
+    bool done = false;
+    if (length > 0)
+    {
+        const std::uint64_t captured = recorder_.framesCaptured() + recorder_.framesDropped();
+        const std::uint64_t left = captured >= length ? 0 : length - captured;
+        if (left <= static_cast<std::uint64_t>(frames))
+        {
+            frames = static_cast<int>(left);
+            done = true;
+        }
+    }
+    if (frames > 0)
+        recorder_.push(inputs, numIn, frames, offset);
+    if (done)
+        recComplete_.store(1, std::memory_order_release);
+}
+
 void Engine::release()
 {
     // The audio device stopped. That is ALL this means — it is the only caller (AudioIO::audioDeviceStopped), and it
@@ -162,6 +250,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
         break;
     case CommandType::transportPlay:
         playing_ = true;
+        noteTransportStart(samplesProcessed_);
         break;
     case CommandType::transportStop:
         playing_ = false;
@@ -243,6 +332,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::seqPlay:
         seq_.play(c.payload.seq.atSample, samplesProcessed_);
         playing_ = true;
+        noteTransportStart(c.payload.seq.atSample != 0 ? c.payload.seq.atSample : samplesProcessed_);
         // the MIDI clock rides the SAME anchor (the TS seqStartHook → MidiClockSender.start(at)); a restart re-sends
         // STOP + SPP 0 + START
         clockOut_.start(c.payload.seq.atSample != 0 ? c.payload.seq.atSample : samplesProcessed_, samplesProcessed_);
@@ -296,6 +386,7 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::drumPlay:
         drums_.play(c.payload.drum.atSample, c.payload.drum.stepOffset, samplesProcessed_);
         playing_ = true;
+        noteTransportStart(c.payload.drum.atSample != 0 ? c.payload.drum.atSample : samplesProcessed_);
         // drums alone (no sample loaded: the page's PLAY starts only the drums) still clock the outboard gear — the
         // first transport to start anchors the clock; a seqPlay in the same run already did
         if (!clockOut_.running())
@@ -460,7 +551,22 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::countIn:
         metro_.countIn(c.payload.metro.beats, c.payload.metro.atSample, samplesProcessed_);
         break;
+    case CommandType::setMonitor:
+        // INPUT MONITORING (5.1c): hear what you are about to record. The gain RAMPS (monitorGainCurrent_), so a
+        // level move while you are listening is a fade, not a click.
+        monitorEnabled_ = c.payload.monitor.enabled != 0;
+        monitorCh_[0] = c.payload.monitor.ch0;
+        monitorCh_[1] = c.payload.monitor.ch1;
+        monitorGainTarget_ = c.payload.monitor.gain > 0.0f ? c.payload.monitor.gain : 0.0f;
+        monitorStrip_ = c.payload.monitor.strip;
+        break;
     case CommandType::cancelCountIn:
+        // A take armed to THIS count-in has nothing left to wait for. It is finished rather than left hanging: an
+        // empty take the page reports beats one that silently never starts.
+        if (recorder_.recording() && recRolling_.load(std::memory_order_relaxed) == 0 &&
+            recArmMode_.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(RecordStart::countInDownbeat) &&
+            recArmSample_.load(std::memory_order_relaxed) == 0)
+            recComplete_.store(1, std::memory_order_release);
         metro_.cancelCountIn();
         break;
     case CommandType::setArp:
@@ -711,6 +817,17 @@ void Engine::publish(int numSamples) noexcept TERMINATOR_NONBLOCKING
     s.metronomeClicks = metro_.clicks();
     s.metronomeLastClickSample = metro_.lastClickSample();
     s.metronomeLastClickAccent = metro_.lastClickAccent() ? 1u : 0u;
+    // recording + monitoring (5.1a/5.1c)
+    s.recordState = !recorder_.recording()                              ? 0u
+                    : recComplete_.load(std::memory_order_relaxed) != 0 ? 3u
+                    : recRolling_.load(std::memory_order_relaxed) != 0  ? 2u
+                                                                        : 1u;
+    s.recordStartSample = recStarted_.load(std::memory_order_relaxed);
+    s.recordStartPlayhead = recPlayhead_.load(std::memory_order_relaxed);
+    s.recordFrames = recorder_.framesCaptured();
+    s.recordDropped = recorder_.framesDropped();
+    s.monitorOn = (monitorEnabled_ && monitorGainTarget_ > 0.0f) ? 1u : 0u;
+    s.monitorStrip = monitorStrip_;
     s.countInBeat = metro_.countInBeat();
     s.countInPending = metro_.countInPending() ? 1u : 0u;
     s.countInDownbeatSample = metro_.countInDownbeatSample();
@@ -857,8 +974,9 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
                 inputPeak_[ch] = pk;
             }
     // RECORDING (5.1a): the take gets the block BEFORE anything else looks at it — what is on the interface is
-    // what lands in the file, with nothing of ours in between.
-    recorder_.push(inputs, numIn, numSamples);
+    // what lands in the file, with nothing of ours in between. 5.1c: an ARMED take starts inside the block, at its
+    // own sample, and a punch-out length ends it at its own sample too.
+    pushRecordWindow(inputs, numIn, numSamples);
     if (calibState_ == 1 && inputs != nullptr && calibIn_ < nIn && inputs[calibIn_] != nullptr)
     {
         const float* in = inputs[calibIn_];
@@ -885,6 +1003,41 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
     }
     else
         bass_.render(outputs[0], numOut > 1 ? outputs[1] : nullptr, numSamples, samplesProcessed_); // dry, outs 1/2
+    // INPUT MONITORING (5.1c): the interface's inputs, heard through the engine. Straight to outs 1/2, or through a
+    // mixer strip so its fader, inserts and console colour the thing you are playing INTO the take. No latency of
+    // ours: this block's input is added to this block's output.
+    const float monitorTarget = monitorEnabled_ ? monitorGainTarget_ : 0.0f; // OFF ramps down, it does not cut
+    if ((monitorGainCurrent_ > 0.0f || monitorTarget > 0.0f) && inputs != nullptr)
+    {
+        const float g0 = monitorGainCurrent_;
+        const float step = (monitorTarget - g0) / static_cast<float>(numSamples);
+        const bool toStrip =
+            monitorStrip_ >= 0 && mixer_->isActive(monitorStrip_) && numSamples <= static_cast<int>(scratchL_.size());
+        float* dstL = toStrip ? scratchL_.data() : (numOut > 0 ? outputs[0] : nullptr);
+        float* dstR = toStrip ? scratchR_.data() : (numOut > 1 ? outputs[1] : nullptr);
+        if (toStrip)
+        {
+            std::fill_n(scratchL_.data(), numSamples, 0.0f);
+            std::fill_n(scratchR_.data(), numSamples, 0.0f);
+        }
+        // one channel monitors CENTRED (heard on both sides); two are heard as the pair they are
+        const int c0 = monitorCh_[0];
+        const int c1 = monitorCh_[1] >= 0 ? monitorCh_[1] : monitorCh_[0];
+        const float* inL = (c0 >= 0 && c0 < numIn) ? inputs[c0] : nullptr;
+        const float* inR = (c1 >= 0 && c1 < numIn) ? inputs[c1] : nullptr;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float g = g0 + step * static_cast<float>(i);
+            if (dstL != nullptr && inL != nullptr)
+                dstL[i] += inL[i] * g;
+            if (dstR != nullptr && inR != nullptr)
+                dstR[i] += inR[i] * g;
+        }
+        if (toStrip)
+            mixer_->addToStrip(monitorStrip_, scratchL_.data(), scratchR_.data(), numSamples);
+    }
+    monitorGainCurrent_ = monitorTarget;
+
     float clickPeak = -1.0f; // ≥ 0 = the click was rendered into its strip this block (not post-master below)
     if (clickStrip_ >= 0 && mixer_->isActive(clickStrip_) && numSamples <= static_cast<int>(scratchL_.size()))
     {

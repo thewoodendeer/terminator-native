@@ -109,6 +109,11 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     grep -Eq '"mixerPageOk": ?true' "$OUT" || { echo "::error::the page mixer did not drive the native mixer (mixerPageOk false — see mixerStripsLive / mixerSources / mixerFaderDown / mixerFaderUp / mixerMuteOn / mixerMuteOff / mixerOrderValid / mixerRejected / mixerPadStrip)"; exit 1; }
     echo "live record on the engine clock OK: chop step=$(grep -Eo '"liveRecStep": ?-?[0-9]+' "$OUT") offset=$(grep -Eo '"liveRecOffsetSamples": ?[-0-9.e]+|"liveRecOffsetSamples": ?null' "$OUT") drums=$(grep -Eo '"drumLiveRec": ?\{[^}]*\}' "$OUT")"
     echo "metronome + count-in + arp native OK: $(grep -Eo '"metroLastClick": ?\{[^}]*\}' "$OUT") countIn offset=$(grep -Eo '"countInOffsetSamples": ?[-0-9.e]+|"countInOffsetSamples": ?null' "$OUT") anchorTaken=$(grep -Eo '"countInAnchorTaken": ?(true|false)' "$OUT") arpHits=$(grep -Eo '"arpHits": ?[0-9]+' "$OUT" | head -1)"
+    # Phase 5.1c: the RECORD arm + the input monitor over the bridge handler — a take armed a minute ahead reports
+    # ARMED and captures nothing, and the monitor verb answers
+    grep -Eq '"armed": ?true' "$OUT" || { echo "::error::the record ARM did not take over the bridge (see record51c)"; exit 1; }
+    grep -Eq '"monitorOk": ?true' "$OUT" || { echo "::error::input monitoring did not take over the bridge (see record51c)"; exit 1; }
+    echo "record arm + monitor OK: $(grep -Eo '"record51c": ?\{[^}]*\}' "$OUT")"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

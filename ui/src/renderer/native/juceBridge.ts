@@ -69,13 +69,17 @@ export const native = {
    *  `{project, main?, sources?{videoId: key}, drumLanes?{lane: key}, path, bitDepth?, sampleRate?, loops?, tail?,
    *   mixer?, drums?, bass?, limiter?, stems?[channel]}` → `{ok, files[], seconds, sampleRate, bitDepth}`. */
   exportProject: lazy<AnyRecord, AnyRecord>('terminatorExport'),
-  /** Phase 5.1a: RECORD from the interface's own inputs, in the ENGINE. `{verb:'start', path, channels?, inputs?[],
-   *  bitDepth?}` → `{ok, path, error?}`; `{verb:'stop'}` → `{ok, frames, seconds, dropped}`; `{verb:'status'}` →
-   *  `{recording, frames, captured, dropped, peakL, peakR}`.
+  /** Phase 5.1a/b/c: RECORD from the interface's own inputs, in the ENGINE — what RECORD SAMPLE uses in the shell
+   *  for a real input (Terminator's own output and system audio stay on the page's getUserMedia path).
+   *  `{verb:'start', path, channels?, inputs?[], bitDepth?, countIn?, atSample?, atTransport?, lengthSeconds?}` →
+   *  `{ok, path, armed, error?}`; `{verb:'stop'}` → `{ok, frames, seconds, dropped}`; `{verb:'status'}` →
+   *  `{recording, armed, complete, frames, captured, dropped, peakL, peakR, startSample, startPlayhead}`;
+   *  `{verb:'monitor', enabled, inputs?[], gainDb?, strip?}` → the input through the engine, live.
    *
-   *  This is NOT what the RECORD SAMPLE button uses yet — that still goes through the page's getUserMedia, which
-   *  in the shell means the audio takes a trip through WebKit before it is a file: no channel choice, no say in
-   *  the format, nothing aligned to the transport. Moving the button onto this is the next step (5.1b). */
+   *  THE ARM (5.1c): with `countIn` the shell books the clicks AND the take, and capture begins on the downbeat
+   *  itself — the first frame of the file is that beat. `atSample` starts on an exact engine sample, `atTransport`
+   *  on the transport's own anchor, and `lengthSeconds` punches out on its own frame: the shell then closes the
+   *  file and emits `terminator.recordFinished` `{path, frames, dropped, seconds}` — nobody has to hold STOP. */
   record: lazy<AnyRecord, AnyRecord>('terminatorRecord'),
 };
 

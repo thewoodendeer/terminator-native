@@ -42,8 +42,11 @@ class Recorder
 
     /// Non-RT: open the file and start the writer thread. False + `error` if the file cannot be written.
     bool start(const RecorderConfig& cfg, juce::String& error);
-    /// RT: copy this block in. Never allocates, never blocks, never touches the file.
-    void push(const float* const* inputs, int numIn, int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    /// RT: copy this block in. Never allocates, never blocks, never touches the file. `startOffset` is where in
+    /// the block the take begins (5.1c: an armed take starts at ITS sample, not at the block boundary that
+    /// contains it) — the frames before it were never part of this take.
+    void push(const float* const* inputs, int numIn, int numSamples,
+              int startOffset = 0) noexcept TERMINATOR_NONBLOCKING;
     /// Non-RT: drain, close the file, join the writer. Returns the frames actually written.
     std::uint64_t stop();
 

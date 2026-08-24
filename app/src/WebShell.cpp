@@ -618,6 +618,12 @@ juce::var WebShell::handleRecord(const juce::var& req)
         o->setProperty("dropped", static_cast<double>(rec.framesDropped()));
         o->setProperty("peakL", static_cast<double>(rec.peak(0)));
         o->setProperty("peakR", static_cast<double>(rec.peak(1)));
+        // THE ARM (5.1c): armed = the file is open and the take is waiting for its sample (the count-in's downbeat,
+        // the transport, a booked position). The page shows the wait rather than pretending it is already recording.
+        o->setProperty("armed", engine_.recordArmed());
+        o->setProperty("startSample", static_cast<double>(engine_.recordStartSample()));
+        o->setProperty("startPlayhead", static_cast<double>(engine_.recordStartPlayhead()));
+        o->setProperty("complete", engine_.recordComplete());
     };
     if (verb == "start")
     {
@@ -629,18 +635,66 @@ juce::var WebShell::handleRecord(const juce::var& req)
         if (auto* ins = req.getProperty("inputs", juce::var()).getArray())
             for (const auto& v : *ins)
                 cfg.inputChannels.push_back(static_cast<int>(v));
+        // THE ARM (5.1c). `countIn` beats -> the take starts on the downbeat the count is counting to (and the
+        // shell books the clicks itself, so the count-in can never be booked after the arm and missed);
+        // `atSample` -> an exact engine sample; `atTransport` -> the next transport start, on its own anchor;
+        // `lengthSeconds` -> a punch-out, ending the take on its own frame.
+        Engine::RecordArm arm;
+        const double sr = cfg.sampleRate;
+        const int countIn = std::clamp(static_cast<int>(req.getProperty("countIn", 0)), 0, 16);
+        const auto atSample = static_cast<double>(req.getProperty("atSample", 0.0));
+        if (countIn > 0)
+            arm.mode = Engine::RecordStart::countInDownbeat;
+        else if (atSample > 0.0)
+        {
+            arm.mode = Engine::RecordStart::atSample;
+            arm.atSample = static_cast<std::uint64_t>(atSample);
+        }
+        else if (static_cast<bool>(req.getProperty("atTransport", false)))
+            arm.mode = Engine::RecordStart::transportStart;
+        const auto lengthSeconds = static_cast<double>(req.getProperty("lengthSeconds", 0.0));
+        if (lengthSeconds > 0.0)
+            arm.lengthSamples = static_cast<std::uint64_t>(lengthSeconds * sr);
         juce::String err;
-        const bool ok = cfg.file.getFullPathName().isNotEmpty() && engine_.startRecord(cfg, err);
+        const bool ok = cfg.file.getFullPathName().isNotEmpty() && engine_.startRecord(cfg, err, arm);
+        if (ok)
+        {
+            recordPath_ = cfg.file.getFullPathName();
+            if (countIn > 0)
+                engine_.commands().push(Command::countIn(countIn));
+        }
         obj->setProperty("ok", ok);
+        obj->setProperty("armed", engine_.recordArmed());
         if (!ok)
             obj->setProperty("error", err.isNotEmpty() ? err : juce::String("no path"));
         obj->setProperty("path", cfg.file.getFullPathName());
         status(obj);
         return juce::var(obj);
     }
+    if (verb == "monitor")
+    {
+        // INPUT MONITORING (5.1c): hear the interface through the engine while you set the level. `strip` routes it
+        // through a mixer strip (its fader, inserts and console apply); -1 is straight to outs 1/2.
+        const bool on = static_cast<bool>(req.getProperty("enabled", false));
+        int ch0 = 0, ch1 = 1;
+        if (auto* ins = req.getProperty("inputs", juce::var()).getArray())
+        {
+            ch0 = ins->size() > 0 ? static_cast<int>((*ins)[0]) : 0;
+            ch1 = ins->size() > 1 ? static_cast<int>((*ins)[1]) : -1;
+        }
+        const auto gainDb = static_cast<double>(req.getProperty("gainDb", 0.0));
+        const auto gain = static_cast<float>(std::pow(10.0, gainDb / 20.0));
+        const int strip = static_cast<int>(req.getProperty("strip", -1));
+        engine_.commands().push(Command::setMonitor(on, ch0, ch1, gain, strip));
+        obj->setProperty("ok", true);
+        obj->setProperty("monitoring", on);
+        status(obj);
+        return juce::var(obj);
+    }
     if (verb == "stop")
     {
         const auto frames = engine_.stopRecord();
+        recordPath_ = {};
         obj->setProperty("ok", true);
         obj->setProperty("frames", static_cast<double>(frames));
         const double sr = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
@@ -1884,6 +1938,38 @@ void WebShell::runProbeAsyncChecks()
     }
 }
 
+// PROBE (5.1c): the ARM and the MONITOR over the real bridge handler — the engine's own behaviour is gated in
+// ctest; what this checks is the JSON path the page actually calls. The take is armed a minute into the future, so
+// it must report ARMED and capture nothing, and the file is dropped again.
+juce::var WebShell::probeRecordArm()
+{
+    auto* o = new juce::DynamicObject();
+    const auto f =
+        juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("terminator-probe-take.wav");
+    f.deleteFile();
+    const double sr = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
+    auto* start = new juce::DynamicObject();
+    start->setProperty("verb", "start");
+    start->setProperty("path", f.getFullPathName());
+    start->setProperty("atSample", static_cast<double>(engine_.snapshot().samplesProcessed) + sr * 60.0);
+    const auto startReply = handleRecord(juce::var(start));
+    o->setProperty("startOk", startReply.getProperty("ok", false));
+    o->setProperty("armed", startReply.getProperty("armed", false));
+    auto* mon = new juce::DynamicObject();
+    mon->setProperty("verb", "monitor");
+    mon->setProperty("enabled", true);
+    o->setProperty("monitorOk", handleRecord(juce::var(mon)).getProperty("monitoring", false));
+    auto* monOff = new juce::DynamicObject();
+    monOff->setProperty("verb", "monitor");
+    monOff->setProperty("enabled", false);
+    handleRecord(juce::var(monOff));
+    auto* stop = new juce::DynamicObject();
+    stop->setProperty("verb", "stop");
+    o->setProperty("frames", handleRecord(juce::var(stop)).getProperty("frames", -1.0));
+    f.deleteFile();
+    return juce::var(o);
+}
+
 void WebShell::runProbe()
 {
     static const char* kScript = R"JS((function(){
@@ -1917,6 +2003,7 @@ void WebShell::runProbe()
                     o->setProperty("registryKeys", static_cast<int>(registry_.keyCount()));
                     o->setProperty("enginePrepared", static_cast<bool>(engine_.snapshot().prepared));
                     o->setProperty("lastTriggeredPad", engine_.snapshot().lastTriggeredPad);
+                    o->setProperty("record51c", probeRecordArm());
                     out = juce::JSON::toString(parsed, true);
                 }
                 else
@@ -1949,6 +2036,22 @@ void WebShell::timerCallback()
 
     samples_.collect(engine_.snapshot());
     finishCalibration();
+    // A PUNCH-OUT fired (5.1c): the audio thread stopped capturing on its own frame, so the file is closed here and
+    // the page is told — a take with a length has to land without anybody pressing STOP.
+    if (engine_.recordComplete())
+    {
+        const auto path = recordPath_;
+        const auto dropped = engine_.recorder().framesDropped();
+        const auto frames = engine_.stopRecord();
+        recordPath_ = {};
+        auto* done = new juce::DynamicObject();
+        done->setProperty("path", path);
+        done->setProperty("frames", static_cast<double>(frames));
+        done->setProperty("dropped", static_cast<double>(dropped));
+        const double sr = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
+        done->setProperty("seconds", static_cast<double>(frames) / sr);
+        emitToAll("terminator.recordFinished", juce::var(done));
+    }
 
     if (!pageReady_)
         return;
@@ -2063,6 +2166,14 @@ void WebShell::timerCallback()
     obj->setProperty("metronomeClicks", static_cast<juce::int64>(s.metronomeClicks));
     obj->setProperty("metronomeLastClickSample", static_cast<juce::int64>(s.metronomeLastClickSample));
     obj->setProperty("metronomeLastClickAccent", static_cast<bool>(s.metronomeLastClickAccent));
+    // recording + monitoring (5.1a/5.1c)
+    obj->setProperty("recordState", static_cast<int>(s.recordState)); // 0 idle 1 armed 2 rolling 3 punched out
+    obj->setProperty("recordStartSample", static_cast<juce::int64>(s.recordStartSample));
+    obj->setProperty("recordStartPlayhead", static_cast<juce::int64>(s.recordStartPlayhead));
+    obj->setProperty("recordFrames", static_cast<juce::int64>(s.recordFrames));
+    obj->setProperty("recordDropped", static_cast<juce::int64>(s.recordDropped));
+    obj->setProperty("monitorOn", static_cast<bool>(s.monitorOn));
+    obj->setProperty("monitorStrip", s.monitorStrip);
     obj->setProperty("countInBeat", s.countInBeat);
     obj->setProperty("countInPending", static_cast<bool>(s.countInPending));
     obj->setProperty("countInDownbeatSample", static_cast<juce::int64>(s.countInDownbeatSample));

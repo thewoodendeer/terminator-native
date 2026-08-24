@@ -92,6 +92,11 @@ enum class CommandType : std::uint32_t
     arpHold,       // arp.pad + arp.velocity + arp.atSample (0 = the next block) — hold: the arp steps from there; with
                    // the arp off it is a plain trigger
     arpRelease,    // arp.pad — release: stops the arp when it is the held pad (−1 = whatever is held)
+    // ---- input monitoring (Phase 5.1c, io/Recorder.h is the take; this is hearing it) ----
+    setMonitor, // monitor.enabled + monitor.ch0/ch1 (hardware inputs, −1 = none — one channel feeds both sides) +
+                // monitor.gain (linear) + monitor.strip (a mixer strip, so its fader/inserts/console apply;
+                // −1 = straight to outs 1/2). No added latency: the block that arrives is added to the block
+                // that leaves.
     // ---- the mixer (Phase 4.1, core/Mixer.h) ----
     mixerSetStrip,   // strip.strip + strip.kind (StripKind: 0 off · 1 channel · 2 send · 3 bus) — activate / retype /
                      // deactivate a strip (strip 0 = the master, always) + strip.seed (the CONSOLE seed = FNV-1a of
@@ -277,6 +282,15 @@ struct Command
         {
             std::uint8_t flag;
         } midi;
+
+        struct Monitor
+        {
+            float gain;         // linear
+            std::int16_t ch0;   // hardware input for the left side (−1 = none)
+            std::int16_t ch1;   // … the right (−1 = none: ch0 is heard centred, on both sides)
+            std::int16_t strip; // a mixer strip (−1 = straight to outs 1/2)
+            std::uint8_t enabled;
+        } monitor;
 
         struct Metro
         {
@@ -745,6 +759,18 @@ struct Command
         return c;
     }
     static Command cancelCountIn() noexcept { return metroCmd(CommandType::cancelCountIn); }
+    /// Input monitoring (5.1c): hear inputs ch0/ch1 through the engine at `gain`, optionally through a mixer strip.
+    static Command setMonitor(bool enabled, int ch0, int ch1, float gain, int strip) noexcept
+    {
+        Command c;
+        c.type = CommandType::setMonitor;
+        c.payload.monitor.enabled = enabled ? 1 : 0;
+        c.payload.monitor.ch0 = static_cast<std::int16_t>(ch0);
+        c.payload.monitor.ch1 = static_cast<std::int16_t>(ch1);
+        c.payload.monitor.gain = gain;
+        c.payload.monitor.strip = static_cast<std::int16_t>(strip);
+        return c;
+    }
     static Command arpCmd(CommandType t) noexcept
     {
         Command c;

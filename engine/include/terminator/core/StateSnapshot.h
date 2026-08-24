@@ -116,6 +116,15 @@ struct StateSnapshot
     std::int32_t countInBeat = -1;           // −1 idle; N..1 while a count-in runs (the TS countInBeat)
     std::uint32_t countInPending = 0;        // between the countIn command and its downbeat
     std::uint64_t countInDownbeatSample = 0; // the sample the transport should start at (the last count-in's)
+    // recording + monitoring (Phase 5.1a/5.1c, io/Recorder.h)
+    std::uint32_t recordState = 0;         // 0 idle · 1 armed (waiting for its sample) · 2 rolling · 3 punched out
+    std::uint64_t recordStartSample = 0;   // the engine sample capture began at (0 = not yet)
+    std::uint64_t recordStartPlayhead = 0; // the transport position of the take's first frame
+    std::uint64_t recordFrames = 0;        // frames captured
+    std::uint64_t recordDropped = 0;       // … lost because the writer fell behind (any number but 0 is a bad take)
+    std::uint32_t monitorOn = 0;           // input monitoring is audible
+    std::int32_t monitorStrip = -1;        // the strip it goes through (−1 = straight to outs 1/2)
+
     std::uint32_t arpEnabled = 0;
     std::int32_t arpHoldPad = -1; // the pad held (−1 = nothing)
     std::int32_t arpStep = 0;     // steps fired since the hold

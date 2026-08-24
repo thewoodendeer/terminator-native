@@ -206,6 +206,26 @@ verb that can answer big (never send > ~24 KB through `complete()`/`emitEvent`).
 `terminator-settings.json` keys, verbatim — Phase 8 imports that file here), saves, emits
 `terminator.settingsChanged` → `{ ok, settings }`. `app.eula`, `app.recentProjects`, `app.projectsDir` live here.
 
+## `terminatorRecord(req)` — RECORDING from the interface (Phase 5.1)
+The take is made by the ENGINE, off the interface's own inputs, and written straight to a WAV — in the shell the
+page's `getUserMedia` path is kept only for the two sources the engine does not have (Terminator's own output, which
+is a bounce, and system audio, which is the OS's).
+`verb`:
+- `start` {`path`, `channels`? (default 2), `inputs`?[hardware inputs, in order], `bitDepth`? (24 default · 32 float ·
+  16), **`countIn`?** (beats), **`atSample`?**, **`atTransport`?**, **`lengthSeconds`?} → `{ok, path, armed, error?}`.
+  **The arm (5.1c):** the file is opened at once — that is the slow part — and capture begins on the take's own
+  SAMPLE. `countIn` books the clicks here in the shell (so the count can never be booked after the arm and missed)
+  and the take starts on the DOWNBEAT the count is counting to; `atSample` starts on an exact engine sample;
+  `atTransport` on the transport's own anchor (`seqPlay(atSample)`, not the block the command landed in);
+  `lengthSeconds` punches out on its own frame.
+- `stop` → `{ok, frames, seconds, dropped}` · `status` → `{recording, armed, complete, frames, captured, dropped,
+  peakL, peakR, startSample, startPlayhead}` — `startPlayhead` is the TRANSPORT position of the take's first frame,
+  which is where it belongs in the song. `dropped` is reported on purpose: a take with a counted hole in it beats one
+  that silently splices across it.
+- `monitor` {`enabled`, `inputs`?[ch0, ch1] (one channel is heard centred), `gainDb`?, `strip`? (a mixer strip, whose
+  fader/inserts/console then apply; −1 = straight to outs 1/2)} — hearing the input through the engine costs no
+  latency of ours: the block that arrives is added to the block that leaves.
+
 ## `terminatorWindow(req)` — windows
 `verb`: `preferences` → opens (or fronts) the **Preferences window**: a second JUCE `DocumentWindow` hosting the
 React `preferences/preferences.html` from the same resource provider with the SAME bridge options (one backend,
@@ -238,6 +258,8 @@ synchronous boot reads the Electron preload offered (`getSettingsSync`) work; pl
   "midiNotesToPads": true, "midiSent": 0, "midiSendLateMs": 0, "midiClockInBpm": 0, "midiClockInPort": -1, "midiClockInStarted": false,
   "metronomeEnabled": false, "metronomeSound": 0, "metronomeBeat": -1, "metronomeClicks": 0, "metronomeLastClickSample": 0, "metronomeLastClickAccent": false,
   "countInBeat": -1, "countInPending": false, "countInDownbeatSample": 0,
+  "recordState": 0, "recordStartSample": 0, "recordStartPlayhead": 0, "recordFrames": 0, "recordDropped": 0,
+  "monitorOn": false, "monitorStrip": -1,
   "arpEnabled": false, "arpHoldPad": -1, "arpStep": 0, "arpLastPad": -1, "arpHits": 0,
   "mixer": { "active": [0, 1, 2], "silent": [2], "strips": { "0": [0.5, 0.5, 0.5, 0.5, 0.35, 0.35, 1.0, 0], "1": [0.5, 0.5, 0.5, 0.5, 0.35, 0.35, 1.0, 2], "2": [0.1, 0.1, 0, 0, 0.07, 0, 0, 0] },
              "rejected": 0, "fxRejected": 0, "console": false, "limiter": true, "orderValid": true, "mainOut": 0, "bassStrip": 7, "clickStrip": 12 } }
@@ -296,6 +318,10 @@ ChopperView's ONE router runs unchanged — transport from the hardware, CC lear
 fold by port name), DRUM PADS, pad learn, pads (marked `nativeOwned` → no second native trigger). The page has no Web
 MIDI inside the WebView. `terminatorMidi {verb:"inject", …}` feeds a message as if it arrived on port 0 — the probe's
 MIDI checks (a note, then START/STOP driving the transport + the clock OUT).
+### `terminator.recordFinished` {path, frames, dropped, seconds} — a PUNCH-OUT landed (5.1c)
+A take started with `lengthSeconds` ends in the engine on its own frame; the shell closes the file and emits this, so
+the take lands without anybody holding STOP. The page reads the file back, saves it under USER SAMPLES and drops it
+on a pad — the same landing STOP uses.
 ### `terminator.midiClock` {bpm, port} — the clock-IN follower settled on a new tempo (3.5)
 ≤ once per beat, only the owning port's ticks; the page applies Preferences "MIDI Clock (follow tempo)" (and only
 while the hardware's START is in charge) → `engine.setMetronomeBpm(bpm)`.

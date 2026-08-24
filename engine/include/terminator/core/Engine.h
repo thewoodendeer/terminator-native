@@ -3,6 +3,7 @@
 // [non-RT]. UI talks to it only through commands() (lock-free queue) and reads back only through
 // snapshot(). Phase 1: pad sampler (voices, varispeed, envelopes, choke, per-pad output pair), test tone,
 // master gain, transport counter, host-clock mapping, MIDI note map, loopback calibration.
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -117,12 +118,46 @@ class Engine
     const Mixer& mixer() const noexcept { return *mixer_; }
 
     // --- RT ------------------------------------------------------------------------------------
-    // --- RECORDING (5.1a, message thread) -------------------------------------------------------
+    // --- RECORDING (5.1a message thread; 5.1c the arm) ------------------------------------------
+    /// When an armed take actually begins. The file is opened by `startRecord` either way — opening it is the slow
+    /// part, and a take that has to wait for its sample cannot afford to do it then.
+    enum class RecordStart : std::uint8_t
+    {
+        immediate = 0,       // the next block, as 5.1a did
+        atSample = 1,        // an exact engine sample (the page knows the grid)
+        countInDownbeat = 2, // the downbeat a pending count-in is counting to — the take lands ON the grid
+        transportStart = 3   // the next time the transport starts rolling (its anchor sample, not the block's)
+    };
+    struct RecordArm
+    {
+        RecordStart mode = RecordStart::immediate;
+        std::uint64_t atSample = 0;      // mode == atSample
+        std::uint64_t lengthSamples = 0; // 0 = until stopRecord(); else punch out after exactly this many frames
+    };
     /// Start a take from the interface's inputs. The audio callback hands every block to it until `stopRecord()`.
-    bool startRecord(const RecorderConfig& cfg, juce::String& error) { return recorder_.start(cfg, error); }
+    /// With an arm, the audio thread waits for the take's sample and captures from EXACTLY there.
+    bool startRecord(const RecorderConfig& cfg, juce::String& error, const RecordArm& arm);
+    /// … starting at once, as 5.1a did.
+    bool startRecord(const RecorderConfig& cfg, juce::String& error);
     /// Stop and close the file; returns the frames written.
-    std::uint64_t stopRecord() { return recorder_.stop(); }
+    std::uint64_t stopRecord();
     const Recorder& recorder() const noexcept { return recorder_; }
+    /// Armed, waiting for its sample (the count-in, the transport, a booked position) — nothing captured yet.
+    bool recordArmed() const noexcept
+    {
+        return recorder_.recording() && recRolling_.load(std::memory_order_acquire) == 0;
+    }
+    /// The engine sample the take began at (0 = it has not begun).
+    std::uint64_t recordStartSample() const noexcept { return recStarted_.load(std::memory_order_acquire); }
+    /// The TRANSPORT position at that sample — where in the song the take belongs.
+    std::uint64_t recordStartPlayhead() const noexcept { return recPlayhead_.load(std::memory_order_acquire); }
+    /// A punch-out length has elapsed: the audio thread has stopped capturing and the file wants closing
+    /// (the message thread calls `stopRecord()`).
+    bool recordComplete() const noexcept { return recComplete_.load(std::memory_order_acquire) != 0; }
+
+    // --- MONITORING (5.1c, message thread → the audio thread over a command) ---------------------
+    // `Command::setMonitor` — hear the interface's inputs through the engine while you set a level. It costs no
+    // latency beyond the driver's own round trip: the block that arrives is added to the block that leaves.
 
     /// Renders numSamples into outputs[0..numOut). Always overwrites. inputs may be null / numIn 0. Safe to call
     /// before prepare() (renders silence). hostTimeNs = host time at callback entry (0 = unknown).
@@ -214,6 +249,31 @@ class Engine
     /// RECORDING (5.1a): the take, if one is running. Owned here because the audio callback has to reach it, but
     /// started and stopped from the message thread — `push()` is the only thing the audio thread calls.
     Recorder recorder_;
+    // THE ARM (5.1c). Written by the message thread before the recorder is started, then owned by the audio thread;
+    // atomics because both read them (a take is armed on one thread and starts on the other).
+    std::atomic<std::uint8_t> recArmMode_{0};    // RecordStart
+    std::atomic<std::uint64_t> recArmSample_{0}; // the sample capture starts at (0 = not resolved yet)
+    std::atomic<std::uint64_t> recLength_{0};    // punch-out length in frames (0 = none)
+    std::atomic<std::uint64_t> recStarted_{0};   // the sample capture began at (0 = not yet)
+    std::atomic<std::uint64_t> recPlayhead_{0};  // the transport position at that sample
+    std::atomic<std::uint8_t> recRolling_{0};    // capture is live (the arm resolved)
+    std::atomic<std::uint8_t> recComplete_{0};   // the punch-out fired: the file is finished, close it
+    void pushRecordWindow(const float* const* inputs, int numIn, int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    /// A transport start was applied at `atSample`: a take armed to the transport begins exactly there.
+    void noteTransportStart(std::uint64_t atSample) noexcept TERMINATOR_NONBLOCKING
+    {
+        if (recArmMode_.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(RecordStart::transportStart) &&
+            recRolling_.load(std::memory_order_relaxed) == 0 && recorder_.recording() &&
+            recArmSample_.load(std::memory_order_relaxed) == 0)
+            recArmSample_.store(atSample > samplesProcessed_ ? atSample : samplesProcessed_, std::memory_order_release);
+    }
+
+    // MONITORING (5.1c): the interface's inputs through the engine, so you can hear what you are about to record.
+    bool monitorEnabled_ = false;
+    std::int16_t monitorCh_[2] = {0, 1}; // hardware inputs (−1 = none; one channel feeds both sides, centred)
+    int monitorStrip_ = -1;              // a mixer strip (its fader/inserts/console apply) — −1 = straight to outs 1/2
+    float monitorGainTarget_ = 1.0f;
+    float monitorGainCurrent_ = 0.0f; // ramped over the block: a monitor that clicks on every level move is useless
 
     // the last LIVE trigger (a command / a booked hit / a MIDI note on the direct path): pad + its engine sample — the
     // page's live-record probe compares it to the landed grid line (3.7)

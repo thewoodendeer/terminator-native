@@ -1751,6 +1751,59 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 5 — 5.1c DONE (THE ARM: A TAKE STARTS ON A SAMPLE, AND YOU CAN HEAR YOURSELF), 2026-08-24
+
+5.1a made the engine record and 5.1b put the button on it. What was still missing is everything that turns a
+CAPTURE into a TAKE: it began on whichever buffer boundary the click happened to land near, it ran until somebody
+pressed STOP, and you could not hear the input while you set the level.
+
+- **THE ARM.** `Engine::startRecord(cfg, err, RecordArm)` opens the file on the message thread as before — opening
+  it is the slow part, and a take that has to wait four beats cannot afford to do it when its sample arrives — and
+  the AUDIO thread starts capturing at the take's own sample. Four modes: `immediate` (5.1a's behaviour),
+  `atSample` (an exact engine sample), **`countInDownbeat`** (the downbeat a pending count-in is counting to) and
+  `transportStart` (the transport's OWN anchor — `seqPlay(atSample)` books a start in the future, and the take
+  begins there, not in the block the command landed in). `Recorder::push` grew a `startOffset` so the first
+  recorded frame is the armed frame, mid-block: armed at 300 with a 128-frame buffer, frame 0 of the file IS
+  sample 300, not 256.
+- **PUNCH-OUT.** `lengthSamples` ends the take on its own frame (500 frames means 500, not "the block that passes
+  500"). The audio thread stops capturing and raises `recordComplete()`; the shell's timer closes the file and
+  emits **`terminator.recordFinished`** {path, frames, dropped, seconds}, and the page lands the take the same way
+  STOP does — nobody has to be holding the button when a timed take finishes.
+- **THE COUNT-IN IS THE SHELL'S JOB, not the page's.** `terminatorRecord {verb:'start', countIn: N}` arms the take
+  AND books the clicks, in that order, in one place. Doing it from the page would race: if the count-in were
+  booked after the arm the engine would already be waiting for a downbeat that has been and gone. Cancelling the
+  count-in FINISHES an armed take (an empty take the page reports beats a recorder that silently never fires).
+- **INPUT MONITORING.** `Command::setMonitor(enabled, ch0, ch1, gain, strip)` — the interface's inputs, heard
+  through the engine, ramped (OFF fades over a block rather than clicking), one channel heard centred, and
+  optionally through a MIXER STRIP so the take is auditioned through the fader, inserts and console it will sit
+  behind. It costs no latency of ours: this block's input is added to this block's output, so what you hear is the
+  driver's round trip and nothing else.
+- **The page:** RECORD SAMPLE gains a COUNT-IN picker (OFF / 2 / 4 / 8 beats) and a MONITOR button, both only for
+  the engine's own path (Terminator's output and system audio stay on the page path). The REC button reads
+  `● COUNTING IN` while armed and a second click CANCELS — nothing is captured, so nothing is saved. The monitor
+  closes with the panel: an input left open behind a closed panel is a feedback loop waiting to happen. Help +
+  tooltips updated in the same commit.
+- The snapshot carries `recordState` (0 idle · 1 armed · 2 rolling · 3 punched out), `recordStartSample`,
+  **`recordStartPlayhead`** (the TRANSPORT position of the take's first frame — where it belongs in the song),
+  `recordFrames`, `recordDropped`, `monitorOn`, `monitorStrip`.
+
+**Gates (5.1c):** a new `test_record_arm.cpp`, 10 cases — the armed sample is the file's first frame (mid-block),
+the punch-out length is exact, the count-in downbeat is the take's first frame, a cancelled count-in finishes the
+take, the transport anchor is honoured, the reported playhead is right, the monitor's gain/centre/strip-fader/
+mute behaviour, and an allocation counter over armed → rolling → captured with the monitor open (0). **ctest
+383/383 · RTSan clean · probe OK** (the probe now arms a take a minute ahead over the real bridge handler and
+asserts `armed` + `monitorOk` + 0 frames) · ui typecheck 5 = baseline · vite build clean.
+
+**Still unwired on purpose:** a punch-out LENGTH and the `atSample` start have no UI yet — grid-aligned punch-in
+while the song plays wants the page to name the next bar line, which belongs with the arranger, not the sample
+recorder. Both are on the bridge and both are gated.
+
+**Owed to his ears:** the count-in (does the take land where the click says?) and the monitor (level, feel,
+through a strip) — both on his interface.
+
+**NEXT (5.1d):** the take that knows the song — dropping a punched take onto the arrangement at
+`recordStartPlayhead`, and the input-channel picker (which of the interface's inputs a take takes) in the panel.
+
 ## Phase 5 — 5.1b DONE (THE RECORD BUTTON IS ON THE ENGINE), 2026-08-24
 
 RECORD SAMPLE now makes its take in the ENGINE when it is running in the shell and the input is a real one. The

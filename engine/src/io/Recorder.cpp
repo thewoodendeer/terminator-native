@@ -86,9 +86,10 @@ bool Recorder::start(const RecorderConfig& cfg, juce::String& error)
     return true;
 }
 
-void Recorder::push(const float* const* inputs, int numIn, int numSamples) noexcept TERMINATOR_NONBLOCKING
+void Recorder::push(const float* const* inputs, int numIn, int numSamples,
+                    int startOffset) noexcept TERMINATOR_NONBLOCKING
 {
-    if (!recording_.load(std::memory_order_acquire) || inputs == nullptr || numSamples <= 0)
+    if (!recording_.load(std::memory_order_acquire) || inputs == nullptr || numSamples <= 0 || startOffset < 0)
         return;
     const int nch = cfg_.numChannels;
     const std::uint64_t w = writePos_.load(std::memory_order_relaxed);
@@ -111,7 +112,7 @@ void Recorder::push(const float* const* inputs, int numIn, int numSamples) noexc
             // which hardware input this recorded channel takes; default = the first N
             const int src =
                 c < static_cast<int>(cfg_.inputChannels.size()) ? cfg_.inputChannels[static_cast<std::size_t>(c)] : c;
-            const float v = (src >= 0 && src < numIn && inputs[src] != nullptr) ? inputs[src][i] : 0.0f;
+            const float v = (src >= 0 && src < numIn && inputs[src] != nullptr) ? inputs[src][startOffset + i] : 0.0f;
             ring_[base + static_cast<std::size_t>(c)] = v;
             const float a = v < 0.0f ? -v : v;
             if (a > peak_[c].load(std::memory_order_relaxed))

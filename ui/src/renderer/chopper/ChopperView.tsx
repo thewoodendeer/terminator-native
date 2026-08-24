@@ -22,6 +22,9 @@ const AUTOSAVE_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
 // RECORD SAMPLE: persisted choice of recording input (mic/interface device id
 // or desktop-capture source id).
 const RECORD_INPUT_KEY = 'terminator_record_input';
+// RECORD SAMPLE, natively (5.1c): the count-in the take starts on (beats, 0 = straight away) and whether the
+// interface is monitored through the engine while the panel is open.
+const RECORD_COUNTIN_KEY = 'terminator_record_countin';
 // Sentinel input id for the "System Audio (what's playing)" choice — captured via
 // getDisplayMedia + the main-process setDisplayMediaRequestHandler loopback, not
 // a real device id.
@@ -3332,7 +3335,13 @@ export function ChopperView() {
     } catch { return isWeb ? DEFAULT_INPUT_ID : null; }
   });
   const [recordInputLabel, setRecordInputLabel] = useState('');
-  const [recordState, setRecordState] = useState<'idle' | 'recording'>('idle');
+  // 'armed' (5.1c) = the file is open and the ENGINE is waiting for the take's first sample — the count-in's
+  // downbeat. Nothing has been captured yet, and pressing the button again cancels rather than stops.
+  const [recordState, setRecordState] = useState<'idle' | 'armed' | 'recording'>('idle');
+  const [recordCountIn, setRecordCountIn] = useState<number>(() => {
+    try { return Math.max(0, Math.min(16, Number(localStorage.getItem(RECORD_COUNTIN_KEY) ?? 0))); } catch { return 0; }
+  });
+  const [recordMonitor, setRecordMonitor] = useState(false);
   const [recordStream, setRecordStream] = useState<MediaStream | null>(null);
   // The mic/interface devices for the dropdown. System audio is a single fixed
   // option (SYSTEM_AUDIO_ID) captured via getDisplayMedia, not enumerated here.
@@ -3486,18 +3495,43 @@ export function ChopperView() {
     if (!dir) return false;
     const path = `${dir}${boot?.dirs?.sep ?? '/'}terminator-take-${recordTimestamp()}.wav`;
     // 24-bit, stereo, the first two inputs — the same shape the page path produced, but without the round trip
-    // through WebKit.
-    const res = await native.record({ verb: 'start', path, channels: 2, bitDepth: 24 });
+    // through WebKit. With a COUNT-IN (5.1c) the engine opens the file now and starts capturing on the downbeat
+    // itself, so the take's first frame IS the downbeat — nothing to trim.
+    const res = await native.record({ verb: 'start', path, channels: 2, bitDepth: 24, countIn: recordCountIn });
     if (!res?.ok) { setError(String(res?.error ?? 'Recording failed to start')); return false; }
     // The level meter reads the ENGINE's own peaks — there is no MediaStream to hang an analyser on, and the
-    // engine's number is the true one anyway (it is the interface's sample, before anything of ours).
+    // engine's number is the true one anyway (it is the interface's sample, before anything of ours). The same
+    // poll flips ARMED to RECORDING the moment the engine's take actually begins.
     const timer = window.setInterval(async () => {
       const st = await native.record({ verb: 'status' });
       paintNativeMeter(Math.max(Number(st?.peakL ?? 0), Number(st?.peakR ?? 0)));
+      if (st?.armed === false && nativeTakeRef.current) {
+        setRecordState('recording');
+        recordStartMsRef.current = performance.now(); // the elapsed readout counts the TAKE, not the count-in
+      }
     }, 80);
     nativeTakeRef.current = { path, timer };
-    setRecordState('recording');
+    setRecordState(res?.armed ? 'armed' : 'recording');
     return true;
+  };
+
+  /** Cancel an armed take: nothing was captured, so the file is dropped rather than saved as an empty recording. */
+  const cancelNativeRecording = async () => {
+    const take = nativeTakeRef.current;
+    nativeTakeRef.current = null;
+    if (take) window.clearInterval(take.timer);
+    await native.record({ verb: 'stop' });
+    void native.command({ type: 'cancelCountIn' });
+    setRecordState('idle');
+    paintNativeMeter(0);
+    if (take) void native.fs({ verb: 'trash', path: take.path });
+  };
+
+  /** Input monitoring (5.1c): hear the interface through the engine while you set the level. It is turned off with
+   *  the panel — an open monitor you forgot about is a feedback loop waiting for the next time you unmute. */
+  const setNativeMonitor = (on: boolean) => {
+    setRecordMonitor(on);
+    if (isNative()) void native.record({ verb: 'monitor', enabled: on, inputs: [0, 1] });
   };
 
   const finalizeNativeRecording = async () => {
@@ -3508,8 +3542,14 @@ export function ChopperView() {
     setRecordState('idle');
     paintNativeMeter(0);
     if (!take) return;
-    const frames = Number(res?.frames ?? 0);
-    const dropped = Number(res?.dropped ?? 0);
+    await landNativeTake(take.path, Number(res?.frames ?? 0), Number(res?.dropped ?? 0));
+  };
+
+  /** Read the finished take back, save it under USER SAMPLES and land it on a pad. Two callers: STOP, and a
+   *  PUNCH-OUT (5.1c) — a take with a length ends on its own frame in the engine and the shell closes the file,
+   *  so nobody has to be holding the button when it lands. */
+  const landNativeTake = async (path: string, frames: number, dropped: number) => {
+    const take = { path };
     if (frames <= 0) { setError('Nothing was recorded — check the input in Preferences → AUDIO'); return; }
     // A take with a hole in it is SAID so, not quietly kept: the engine counts what it could not write.
     if (dropped > 0) setError(`Recorded, but ${dropped} frames were dropped — the disk could not keep up`);
@@ -3533,6 +3573,20 @@ export function ChopperView() {
       setError(`Save failed: ${e?.message ?? String(e)}`);
     }
   };
+
+  // A PUNCH-OUT (5.1c) ends the take in the ENGINE, on its own frame, and the shell closes the file — so the take
+  // lands without anybody holding the button. Through a ref because the listener outlives this render.
+  const landTakeRef = useRef(landNativeTake);
+  landTakeRef.current = landNativeTake;
+  useEffect(() => onNativeEvent('terminator.recordFinished', (p: any) => {
+    const take = nativeTakeRef.current;
+    if (!take) return; // not ours, or STOP already landed it
+    nativeTakeRef.current = null;
+    window.clearInterval(take.timer);
+    setRecordState('idle');
+    paintNativeMeter(0);
+    void landTakeRef.current(String(p?.path ?? take.path), Number(p?.frames ?? 0), Number(p?.dropped ?? 0));
+  }), []);
 
   const startRecording = async () => {
     if (!recordInputId) return;
@@ -3692,6 +3746,8 @@ export function ChopperView() {
     if (recordState === 'idle') {
       if (!recordInputId) return; // disabled, but guard anyway
       void startRecording();
+    } else if (recordState === 'armed') {
+      void cancelNativeRecording(); // nothing captured yet: this is a cancel, not a stop
     } else {
       stopRecording();
     }
@@ -3702,6 +3758,7 @@ export function ChopperView() {
     setRecordOpen(open => {
       const next = !open;
       if (next) void loadRecordInputs(); // refresh inputs each time the panel opens
+      else if (recordMonitor) setNativeMonitor(false); // never leave the input open behind a closed panel
       return next;
     });
   };
@@ -5208,7 +5265,7 @@ export function ChopperView() {
               <select
                 className="ctrl-select record-input-select"
                 value={recordInputId ?? ''}
-                disabled={recordState === 'recording'}
+                disabled={recordState !== 'idle'}
                 onChange={e => {
                   const opt = e.target.selectedOptions[0];
                   onSelectRecordInput(e.target.value, opt ? opt.textContent ?? '' : '');
@@ -5231,16 +5288,50 @@ export function ChopperView() {
                 )}
               </select>
             </label>
+            {/* COUNT-IN + MONITOR — the engine's own record path only (5.1c): the take starts ON the downbeat the
+                count is counting to, and the monitor lets you hear the input while you set the level. */}
+            {isNative() && recordInputId !== INTERNAL_OUTPUT_ID && recordInputId !== SYSTEM_AUDIO_ID && (
+              <>
+                <label className="record-field">
+                  <span className="record-label">COUNT-IN</span>
+                  <select
+                    className="ctrl-select record-countin-select"
+                    value={recordCountIn}
+                    disabled={recordState !== 'idle'}
+                    title="Count the take in: the clicks play, and recording starts EXACTLY on the downbeat after them — the first frame of the file is that beat, so the take is already in time"
+                    onChange={e => {
+                      const v = Math.max(0, Math.min(16, Number(e.target.value) || 0));
+                      setRecordCountIn(v);
+                      try { localStorage.setItem(RECORD_COUNTIN_KEY, String(v)); } catch { /* private mode */ }
+                    }}
+                  >
+                    <option value={0}>OFF</option>
+                    <option value={2}>2 BEATS</option>
+                    <option value={4}>4 BEATS</option>
+                    <option value={8}>8 BEATS</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className={`btn-rec-monitor${recordMonitor ? ' on' : ''}`}
+                  onClick={() => setNativeMonitor(!recordMonitor)}
+                  title="MONITOR — hear the input through Terminator while you set the level. Headphones: with speakers up this is a feedback loop"
+                >
+                  {recordMonitor ? 'MONITOR ON' : 'MONITOR'}
+                </button>
+              </>
+            )}
             <button
               className={`btn-rec-go rec-${recordState}`}
               disabled={recordState === 'idle' && !recordInputId}
               onClick={onRecClick}
               title={
                 recordState === 'idle' ? (recordInputId ? 'Start recording' : 'Choose an input first')
+                : recordState === 'armed' ? 'Counting in — the take starts on the downbeat. Click to cancel'
                 : 'Stop + save recording'
               }
             >
-              {recordState === 'recording' ? '■ STOP' : '● REC'}
+              {recordState === 'recording' ? '■ STOP' : recordState === 'armed' ? '● COUNTING IN' : '● REC'}
             </button>
             {recordState === 'recording' && (
               <div className="record-live">
@@ -5258,6 +5349,7 @@ export function ChopperView() {
           </div>
           <div className="record-hint">
             {recordState === 'idle' && (isWeb ? 'Press REC — the mic (or whatever is plugged in) records; STOP loads it into the waveform. Interfaces and virtual devices (Loopback, BlackHole) list under MIC / INTERFACE once the mic is allowed.' : 'Pick an input — your interface and virtual devices (Loopback, BlackHole) list under MIC / INTERFACE — then press REC.')}
+            {recordState === 'armed' && 'Counting in — the clicks are the count. Recording starts on the downbeat itself, so the take needs no trimming. Click again to cancel.'}
             {recordState === 'recording' && (isWeb ? 'Recording… press STOP to load it. It is saved with the project (⇩ FILE / SAVE PROJECT).' : 'Recording… press STOP to save + load.')}
           </div>
         </div>
