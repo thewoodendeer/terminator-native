@@ -114,6 +114,11 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     grep -Eq '"armed": ?true' "$OUT" || { echo "::error::the record ARM did not take over the bridge (see record51c)"; exit 1; }
     grep -Eq '"monitorOk": ?true' "$OUT" || { echo "::error::input monitoring did not take over the bridge (see record51c)"; exit 1; }
     echo "record arm + monitor OK: $(grep -Eo '"record51c": ?\{[^}]*\}' "$OUT")"
+    # Phase 6.1: the plugin hub answers and knows its formats (VST3 + AudioUnit on a Mac). No scan here — that is
+    # minutes of other people's code — only that the list loads.
+    grep -Eq '"plugins61": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::the plugin hub did not answer (see plugins61)"; exit 1; }
+    grep -Eq '"scanFileOk": ?true' "$OUT" || { echo "::error::the plugin scan machinery (child process -> XML -> list) did not answer (see plugins61)"; exit 1; }
+    echo "plugin hub OK: $(grep -Eo '"plugins61": ?\{[^}]*\}' "$OUT")"
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"

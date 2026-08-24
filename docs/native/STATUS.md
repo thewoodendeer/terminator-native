@@ -1751,6 +1751,40 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.1 DONE (THE PLUGIN SCAN, IN CHILD PROCESSES), 2026-08-24
+
+Terminator can see his VST3s and Audio Units. `app/src/PluginHub.{h,cpp}` + `terminatorPlugins` + a
+Preferences → PLUGINS pane.
+
+- **Every plugin is scanned in its OWN child process.** The app relaunches its own binary with
+  `--scan-plugin <format> <file>`; the child prints the `PluginDescription`s as XML on stdout and exits. A plugin
+  that crashes, hangs (30 s) or exits non-zero takes THE CHILD down and lands on the **blocklist**, so the next
+  scan skips it — the only honest way to run a machine full of other people's code, and what every host does.
+  `moreThanOneInstanceAllowed()` had to become conditional: Terminator is single-instance, so without that the
+  child would have handed its command line to the running app and scanned nothing.
+- **JUCE 9 note:** `AudioPluginFormatManager::addDefaultFormats()` is `= delete` in the headless module; the
+  UI-capable list comes from `juce::addDefaultFormatsToManager()` in `juce_audio_processors` (which the app links
+  explicitly now, on top of `juce_audio_utils`). `JUCE_PLUGINHOST_VST3=1` everywhere, `JUCE_PLUGINHOST_AU=1` on
+  macOS.
+- The known list, the blocklist and the extra folders live in `plugins.xml` beside settings.json — a scan happens
+  when he asks, not on every launch. `scan` skips what is already known; `rescanAll` re-reads everything AND clears
+  the blocklist (it is also the "try the failures again" button).
+- Verbs: `list` · `scan` {rescanAll?, folders?} · **`scanFile`** {file, format?} (one file through the same child
+  path — the probe's end-to-end check, and the way to add a plugin the folder walk missed) · `cancelScan` ·
+  `remove` · `clearBlocklist` · `setFolders`. Progress → `terminator.pluginScan` {done, total, current, found,
+  finished}.
+- Preferences → **PLUGINS** (native only): SCAN FOR NEW / RESCAN EVERYTHING / STOP, a filter, the list with
+  format + FX/INSTR, extra folders (ADD FOLDER… via the shell's own dialog), and the "did not load" list with
+  TRY THESE AGAIN. Help updated in the same commit.
+- **Gate: probe OK** — `plugins61` {ok, formats 2, scanFileOk, scanFileAdded}. The probe scans ONE file end to end:
+  `TERMINATOR_PROBE_PLUGIN=<a real .vst3>` locally (verified: **added 1** from AIR Tape Echo), and the app's own
+  binary in CI, which must come back "0 added" rather than hanging. No full scan in a gate — that is minutes of
+  other people's code.
+
+**NEXT (6.2):** host one as an INSERT — the engine gets a `plugin` FxType whose processing is a pointer the app
+hands in (the engine must not learn about `juce_audio_processors`), the editor opens in its own window, the state
+saves with the project, and the plugin's latency joins the PDC plan.
+
 ## Phase 5 — 5.1d DONE (THE RESAMPLE TAKE IS THE ENGINE'S, AND A TAKE IS NOT LATE ANY MORE), 2026-08-24
 
 **A BUG, not a preference: 🔁 TERMINATOR OUTPUT recorded SILENCE in the shell.** The page taps its own Web Audio

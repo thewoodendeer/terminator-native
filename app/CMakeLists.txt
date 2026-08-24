@@ -36,10 +36,15 @@ target_sources(Terminator PRIVATE
     src/SampleRegistry.h
     src/SampleRegistry.cpp
     src/ProcessHub.h
-    src/ProcessHub.cpp)
+    src/ProcessHub.cpp
+    src/PluginHub.h
+    src/PluginHub.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1
+    # PLUGINS (Phase 6): VST3 everywhere, AudioUnit on macOS. The scan runs in a child process (PluginHub).
+    JUCE_PLUGINHOST_VST3=1
+    $<$<PLATFORM_ID:Darwin>:JUCE_PLUGINHOST_AU=1>
     JUCE_USE_CURL=0
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:Terminator,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:Terminator,JUCE_VERSION>"
@@ -52,6 +57,7 @@ target_link_libraries(Terminator PRIVATE
     juce::juce_gui_extra
     juce::juce_gui_basics
     juce::juce_audio_utils
+    juce::juce_audio_processors
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags)
 terminator_set_warnings(Terminator)

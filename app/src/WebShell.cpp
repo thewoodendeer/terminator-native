@@ -225,8 +225,9 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     : engine_(engine), audioIO_(audioIO), midi_(midi), samples_(samples), loader_(loader), settings_(settings),
       services_(settings), registry_(engine, samples, loader),
       processes_([this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); }),
-      audioError_(std::move(audioError))
+      plugins_(settings.file().getSiblingFile("plugins.xml")), audioError_(std::move(audioError))
 {
+    plugins_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
     const auto probePath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_FILE", {});
     if (probePath.isNotEmpty())
     {
@@ -348,6 +349,10 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                 "terminatorSamples",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
                 { complete(registry_.handle(args.size() > 0 ? args[0] : juce::var())); })
+            .withNativeFunction(
+                "terminatorPlugins",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                { complete(plugins_.handle(args.size() > 0 ? args[0] : juce::var())); })
             .withNativeFunction(
                 "terminatorProcess",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -2034,6 +2039,38 @@ void WebShell::runProbe()
                     o->setProperty("enginePrepared", static_cast<bool>(engine_.snapshot().prepared));
                     o->setProperty("lastTriggeredPad", engine_.snapshot().lastTriggeredPad);
                     o->setProperty("record51c", probeRecordArm());
+                    {
+                        // 6.1: the plugin list over the real handler (a SCAN is not run — that is minutes of other
+                        // people's code; what the probe proves is that the hub loaded and answers).
+                        auto* req = new juce::DynamicObject();
+                        req->setProperty("verb", "list");
+                        const auto reply = plugins_.handle(juce::var(req));
+                        auto* p61 = new juce::DynamicObject();
+                        p61->setProperty("ok", reply.getProperty("ok", false));
+                        // …and the SCAN MACHINERY end to end on one file: the child process is spawned, its XML
+                        // comes back and the list takes it. TERMINATOR_PROBE_PLUGIN=<a real .vst3> makes that a real
+                        // plugin; without it the app's own binary stands in — a file that is definitely not a
+                        // plugin, which must come back "0 added" rather than hanging or crashing.
+                        {
+                            const auto probePlugin =
+                                juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_PLUGIN", {});
+                            auto* one = new juce::DynamicObject();
+                            one->setProperty("verb", "scanFile");
+                            one->setProperty("file", probePlugin.isNotEmpty() ? probePlugin
+                                                                              : juce::File::getSpecialLocation(
+                                                                                    juce::File::currentExecutableFile)
+                                                                                    .getFullPathName());
+                            const auto scanReply = plugins_.handle(juce::var(one));
+                            p61->setProperty("scanFileOk", scanReply.getProperty("ok", false));
+                            p61->setProperty("scanFileAdded", scanReply.getProperty("added", -1));
+                            p61->setProperty("scanFileReal", probePlugin.isNotEmpty());
+                        }
+                        const auto* formats = reply.getProperty("formats", juce::var()).getArray();
+                        p61->setProperty("formats", formats != nullptr ? formats->size() : 0);
+                        const auto* known = reply.getProperty("plugins", juce::var()).getArray();
+                        p61->setProperty("known", known != nullptr ? known->size() : 0);
+                        o->setProperty("plugins61", juce::var(p61));
+                    }
                     out = juce::JSON::toString(parsed, true);
                 }
                 else

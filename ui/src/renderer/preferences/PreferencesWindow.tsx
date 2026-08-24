@@ -3,6 +3,7 @@
 import '../native/ipc-native';
 import { isNative } from '../native/juceBridge';
 import NativeAudioPane from '../native/NativeAudioPane';
+import NativePluginsPane from '../native/NativePluginsPane';
 import NativeMidiPane from '../native/NativeMidiPane';
 import React, { useEffect, useState, useCallback, CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -436,7 +437,7 @@ function FoldersPane() {
 }
 
 function PreferencesApp() {
-  const [tab, setTab] = useState<'audio' | 'midi' | 'folders'>('audio');
+  const [tab, setTab] = useState<'audio' | 'midi' | 'plugins' | 'folders'>('audio');
   const [audio, setAudio] = useState<AudioPrefs>(DEFAULT_AUDIO);
   const [midi, setMidi] = useState<MidiPrefs>(DEFAULT_MIDI);
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
@@ -530,7 +531,10 @@ function PreferencesApp() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Title bar / tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg2)' }}>
-        {(['audio', 'midi', 'folders'] as const).map(t => (
+        {(isNative()
+          ? (['audio', 'midi', 'plugins', 'folders'] as const)
+          : (['audio', 'midi', 'folders'] as const)
+        ).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -548,6 +552,7 @@ function PreferencesApp() {
 
       {/* Body */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 14 }}>
+        {tab === 'plugins' && isNative() && <NativePluginsPane />}
         {tab === 'audio' && isNative() && (
           <>
             <NativeAudioPane />

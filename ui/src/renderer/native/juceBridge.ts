@@ -87,6 +87,12 @@ export const native = {
    *  number, else the driver's reported in + out latency) so frame 0 is the performance, not the latency;
    *  `compensate:false` turns that off, and a master take never needs it. */
   record: lazy<AnyRecord, AnyRecord>('terminatorRecord'),
+  /** Phase 6.1: the VST3 / AudioUnit list. `{verb:'list'|'scan'|'cancelScan'|'remove'|'clearBlocklist'|
+   *  'setFolders', …}` → `{ok, plugins[], blocklist[], folders[], formats[], scanning}`. The SCAN opens every
+   *  plugin in its own CHILD PROCESS (the app relaunches itself with `--scan-plugin`), so a plugin that crashes
+   *  or hangs kills the scanner and lands on the blocklist instead of taking Terminator down. Progress arrives as
+   *  the `terminator.pluginScan` event `{done, total, current, found, finished}`. */
+  plugins: lazy<AnyRecord, AnyRecord>('terminatorPlugins'),
 };
 
 /** Subscribe to a shell event (`terminator.snapshot` 20 Hz, `terminator.devicesChanged`, `terminator.midiChanged`,

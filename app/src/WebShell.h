@@ -25,6 +25,7 @@
 #include "terminator/io/SampleStore.h"
 #include "terminator/io/Settings.h"
 
+#include "PluginHub.h"
 #include "ProcessHub.h"
 #include "SampleRegistry.h"
 #include "ShellServices.h"
@@ -94,6 +95,7 @@ class WebShell final : public juce::Component, private juce::Timer
     std::map<juce::String, std::shared_ptr<std::atomic<bool>>> exportCancels_;
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
     ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
+    PluginHub plugins_;       // terminatorPlugins — the VST3/AU scan (in child processes) + the known list (6.1)
     juce::String audioError_;
     std::unique_ptr<Browser> browser_;
     std::unique_ptr<PrefsWindow> prefsWindow_; // Preferences = a second window hosting the React preferences page
