@@ -211,13 +211,21 @@ TEST_CASE("recorder: it takes the input channels it is told to", "[io][recorder]
 
 TEST_CASE("recorder: a bad path fails cleanly", "[io][recorder]")
 {
+    // The unwritable path has to be unwritable on BOTH platforms. "/does/not/exist/x.wav" is not: on Windows a
+    // leading slash resolves to the current DRIVE, so JUCE happily created the whole tree and the recorder
+    // correctly started — this test failed on CI for being wrong, not for finding anything.
+    // A directory cannot be created where a FILE already sits, on either OS.
+    const auto blocker = tempWav("terminator-rec-blocker");
+    blocker.deleteFile();
+    blocker.replaceWithText("not a directory");
     Recorder rec;
     RecorderConfig cfg;
-    cfg.file = juce::File("/this/directory/does/not/exist/and/cannot/be/made/x.wav");
+    cfg.file = blocker.getChildFile("x.wav");
     juce::String err;
     CHECK_FALSE(rec.start(cfg, err));
     CHECK(err.isNotEmpty());
     CHECK_FALSE(rec.recording());
     // …and a failed start leaves nothing behind that a later stop could trip over
     CHECK(rec.stop() == 0);
+    blocker.deleteFile();
 }

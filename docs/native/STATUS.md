@@ -1739,6 +1739,18 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## CI RED on `9b24b4d` — my own test, wrong on Windows (fixed 2026-08-24)
+
+Windows/MSVC failed `engine.recorder: a bad path fails cleanly`; mac universal, Intel and RTSan were all green.
+**The product was right and the TEST was wrong.** It used `/this/directory/does/not/exist/.../x.wav` as an
+"unwritable" path — but on Windows a leading slash resolves to the current DRIVE, so JUCE created the whole tree,
+the recorder started correctly, and the `CHECK_FALSE` failed. The gate was asserting a property of POSIX, not a
+property of the recorder.
+
+Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory cannot be created where a file
+already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
+something the filesystem itself guarantees.**
+
 ## Phase 5 — 5.1b DONE (THE RECORD BUTTON IS ON THE ENGINE), 2026-08-24
 
 RECORD SAMPLE now makes its take in the ENGINE when it is running in the shell and the input is a real one. The
