@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <memory>
@@ -1478,4 +1479,221 @@ TEST_CASE("limiter: finite, reset, block-invariant", "[fx][analog][lim]")
     const auto gb = run(*b, 8192, tone(150.0, 0.7), 31);
     for (std::size_t i = 0; i < ga.size(); ++i)
         REQUIRE(ga[i] == Approx(gb[i]).margin(1e-9));
+}
+
+// ---- RETRO (4.6h) ----------------------------------------------------------------------------------------------
+// Six modules in one box. The gates that matter here are about RESTRAINT and REPEATABILITY: every module at 0 must
+// mean the box is not in the signal at all, and every random element must be SEEDED — a character effect whose
+// noise and dropouts land differently in the bounce than they did on playback is a bug, not a texture.
+
+namespace
+{
+enum
+{
+    kNoise = 0,
+    kNType,
+    kWobble,
+    kDistort,
+    kDType,
+    kDigital,
+    kSpace,
+    kMagnetic
+};
+
+std::unique_ptr<RetroFx> makeRetro(double sr = kSr)
+{
+    auto fx = std::make_unique<RetroFx>();
+    fx->prepare(sr, kBlock);
+    return fx;
+}
+} // namespace
+
+TEST_CASE("retro: every module at 0 means the box is not there", "[fx][analog][retro]")
+{
+    REQUIRE(fxTypeFromId("retro") == FxType::retro);
+    REQUIRE(fxTypeInfo(FxType::retro).numParams == 9);
+    REQUIRE(fxOptionIndex(FxType::retro, 4, "CRUSH") == 7);
+
+    auto fx = makeRetro();
+    const int n = 4096;
+    std::vector<double> l(n), r(n), in(n);
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<std::size_t>(i)] = 0.5 * std::sin(kTwoPi * 220.0 * static_cast<double>(i) / kSr);
+        l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = in[static_cast<std::size_t>(i)];
+    }
+    fx->process(l.data(), r.data(), n);
+    for (int i = 0; i < n; ++i)
+        REQUIRE(l[static_cast<std::size_t>(i)] == Approx(in[static_cast<std::size_t>(i)]).margin(1e-12));
+}
+
+TEST_CASE("retro: the random parts are seeded, so a bounce is the take you heard", "[fx][analog][retro]")
+{
+    // Two fresh devices with the same settings must produce the SAME noise and the SAME dropouts, sample for
+    // sample. Anything less means the export does not match what was played.
+    const auto render = [](int block)
+    {
+        auto fx = makeRetro();
+        fx->setParam(kNoise, 80.0f, true);
+        fx->setParam(kMagnetic, 90.0f, true);
+        return run(*fx, 32768, [](int) { return 0.0; }, block);
+    };
+    const auto a = render(512);
+    const auto b = render(512);
+    for (std::size_t i = 0; i < a.size(); ++i)
+        REQUIRE(a[i] == Approx(b[i]).margin(1e-15));
+    // …and the block size must not change it either (the RNG advances per sample, not per block).
+    const auto c = render(37);
+    for (std::size_t i = 0; i < a.size(); ++i)
+        REQUIRE(a[i] == Approx(c[i]).margin(1e-12));
+}
+
+TEST_CASE("retro: NOISE is a floor you can hear, and the flavours differ", "[fx][analog][retro]")
+{
+    const auto floorOf = [](int type, float amount)
+    {
+        auto fx = makeRetro();
+        fx->setParam(kNType, static_cast<float>(type), true);
+        fx->setParam(kNoise, amount, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.5), [](int) { return 0.0; });
+        return rms(out, 0, static_cast<int>(out.size()));
+    };
+    CHECK(floorOf(0, 0.0f) < 1e-12); // 0 really is nothing
+    CHECK(floorOf(0, 100.0f) > 1e-3);
+    CHECK(floorOf(0, 100.0f) > floorOf(0, 30.0f)); // the knob is a level
+
+    // TAPE is hiss (bright); VINYL is rumble plus crackle (dark). The flavours have to be different or the
+    // selector is decoration.
+    const auto brightness = [](int type)
+    {
+        auto fx = makeRetro();
+        fx->setParam(kNType, static_cast<float>(type), true);
+        fx->setParam(kNoise, 100.0f, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.5), [](int) { return 0.0; });
+        return hfFraction(out, 0, static_cast<int>(out.size()), 4000.0, kSr);
+    };
+    CHECK(brightness(1) > brightness(0)); // tape hiss above vinyl rumble
+    CHECK(brightness(1) > brightness(3)); // …and above the narrow radio band
+}
+
+TEST_CASE("retro: eight distortion curves, all of them different", "[fx][analog][retro]")
+{
+    // Each DTYPE has to leave its own harmonic fingerprint. Comparing the 2nd/3rd/4th balance across all eight
+    // catches "they are all secretly tanh".
+    // Measured at a MODERATE setting: drive everything hard enough and every clipper converges on the same square,
+    // which says nothing about the curves (the PUNISH lesson from 4.6f).
+    std::vector<std::array<double, 3>> prints;
+    for (int type = 0; type < 8; ++type)
+    {
+        auto fx = makeRetro();
+        fx->setParam(kDType, static_cast<float>(type), true);
+        fx->setParam(kDistort, 50.0f, true);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.6), tone(200.0, 0.25));
+        const double f0 = magDb(out, 200.0);
+        prints.push_back({magDb(out, 400.0) - f0, magDb(out, 600.0) - f0, magDb(out, 800.0) - f0});
+        // "Does it distort" measured as everything that is NOT the fundamental, not as the 3rd harmonic: BITS is a
+        // QUANTISER, and its fingerprint is broadband noise between the harmonics (its 3rd sits at −52 dB while it
+        // is plainly, audibly dirty). A harmonic-only gate would have called it clean.
+        const double fundAmp = std::pow(10.0, f0 / 20.0);
+        const double total = rms(out, static_cast<int>(out.size()) / 2, static_cast<int>(out.size()));
+        const double dirt = std::max(1e-12, total * total * 2.0 - fundAmp * fundAmp);
+        INFO("type " << type << " dirt " << 10.0 * std::log10(dirt / (fundAmp * fundAmp)) << " dB");
+        CHECK(10.0 * std::log10(dirt / (fundAmp * fundAmp)) > -45.0);
+    }
+    for (std::size_t i = 0; i < prints.size(); ++i)
+        for (std::size_t j = i + 1; j < prints.size(); ++j)
+        {
+            const double d = std::abs(prints[i][0] - prints[j][0]) + std::abs(prints[i][1] - prints[j][1]) +
+                             std::abs(prints[i][2] - prints[j][2]);
+            INFO("types " << i << " and " << j << " differ by " << d << " dB");
+            CHECK(d > 0.5);
+        }
+}
+
+TEST_CASE("retro: DIGITAL drops the bits and the rate together", "[fx][analog][retro]")
+{
+    // A slow ramp in: with DIGITAL up the output has to become a STAIRCASE — far fewer distinct values than the
+    // 8192 that went in.
+    const auto distinctValues = [](float digital)
+    {
+        auto fx = makeRetro();
+        fx->setParam(kDigital, digital, true);
+        const auto out = run(*fx, 8192, [](int i) { return -1.0 + 2.0 * static_cast<double>(i) / 8192.0; });
+        std::vector<double> vals(out.begin() + 1024, out.end());
+        std::sort(vals.begin(), vals.end());
+        int distinct = 1;
+        for (std::size_t i = 1; i < vals.size(); ++i)
+            if (std::abs(vals[i] - vals[i - 1]) > 1e-9)
+                ++distinct;
+        return distinct;
+    };
+    CHECK(distinctValues(100.0f) < distinctValues(0.0f) / 4);
+}
+
+TEST_CASE("retro: WOBBLE moves it and MAGNETIC drops out", "[fx][analog][retro]")
+{
+    // WOBBLE is pitch movement: a steady tone comes back with its phase wandering, so it stops correlating with
+    // the tone that went in.
+    auto flat = makeRetro();
+    flat->setParam(kWobble, 0.0f, true);
+    auto wob = makeRetro();
+    wob->setParam(kWobble, 100.0f, true);
+    const auto a = run(*flat, static_cast<int>(kSr * 1.5), tone(400.0, 0.5));
+    const auto b = run(*wob, static_cast<int>(kSr * 1.5), tone(400.0, 0.5));
+    const int from = static_cast<int>(kSr * 0.5), to = static_cast<int>(kSr * 1.5);
+    CHECK(correlation(a, b, from, to) < 0.95);
+
+    // MAGNETIC: the level has to visibly dip somewhere in a long steady tone — that is a dropout.
+    auto mag = makeRetro();
+    mag->setParam(kMagnetic, 100.0f, true);
+    const auto m = run(*mag, static_cast<int>(kSr * 6.0), tone(300.0, 0.6));
+    const int win = static_cast<int>(kSr * 0.05);
+    double lowest = 1e9, highest = 0.0;
+    for (int w = 2; w + 1 < static_cast<int>(m.size()) / win; ++w)
+    {
+        const double e = rms(m, w * win, (w + 1) * win);
+        lowest = std::min(lowest, e);
+        highest = std::max(highest, e);
+    }
+    CHECK(lowest < highest * 0.9);
+}
+
+TEST_CASE("retro: SPACE, finiteness, reset", "[fx][analog][retro]")
+{
+    // SPACE puts a tail on an impulse where there was none.
+    auto dry = makeRetro();
+    auto wet = makeRetro();
+    wet->setParam(kSpace, 100.0f, true);
+    const auto a = run(*dry, static_cast<int>(kSr * 0.3), impulse());
+    const auto b = run(*wet, static_cast<int>(kSr * 0.3), impulse());
+    const int from = static_cast<int>(kSr * 0.05), to = static_cast<int>(kSr * 0.2);
+    CHECK(rms(b, from, to) > rms(a, from, to) + 1e-6);
+
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int dtype = 0; dtype < 8; ++dtype)
+        {
+            auto fx = makeRetro(sr);
+            fx->setParam(kNoise, 100.0f, true);
+            fx->setParam(kWobble, 100.0f, true);
+            fx->setParam(kDistort, 100.0f, true);
+            fx->setParam(kDType, static_cast<float>(dtype), true);
+            fx->setParam(kDigital, 100.0f, true);
+            fx->setParam(kSpace, 100.0f, true);
+            fx->setParam(kMagnetic, 100.0f, true);
+            const auto out =
+                run(*fx, static_cast<int>(sr * 0.2), [](int i) { return (i / 16) % 2 == 0 ? 1.0 : -1.0; }, 64);
+            for (const double v : out)
+            {
+                REQUIRE(std::isfinite(v));
+                REQUIRE(std::abs(v) < 6.0);
+            }
+        }
+
+    auto fx = makeRetro();
+    fx->setParam(kNoise, 100.0f, true);
+    run(*fx, 4096, tone(200.0, 0.5));
+    fx->reset();
+    CHECK(fx->param(kNoise) == Approx(0.0f));
+    const auto quiet = run(*fx, 4096, [](int) { return 0.0; });
+    CHECK(rms(quiet, 0, 4096) < 1e-15); // back to not being there at all
 }

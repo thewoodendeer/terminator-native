@@ -1739,6 +1739,42 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6h DONE (THE SEVENTH PREMIUM DEVICE: RETRO — THE CHARACTER BOX), 2026-08-24
+
+`RetroFx` in `AnalogFx.{h,cpp}`, `FxType::retro` appended. The RC-20 shape from B4, six modules in series: NOISE
+(VINYL / TAPE / STATIC / RADIO, with real crackle on the vinyl and static settings), WOBBLE, **DISTORT with EIGHT
+curves** (TUBE / TAPE / FUZZ / DIODE / FOLD / BITS / TRANSISTOR / CRUSH — his "a LOT of saturation and distortion
+options inside it"), DIGITAL (bit depth *and* sample rate falling together), SPACE, MAGNETIC (dropouts + head bump
++ the top going away).
+
+**Two rules this device is built on, both gated:**
+- **Every module does nothing at 0** — with all six down the box returns immediately and the signal is
+  bit-identical (1e-12). You can use one module and leave the rest.
+- **Everything random is SEEDED and re-seeded on reset**, so an export is the take you heard: two fresh devices
+  with the same settings agree sample for sample (1e-15), and the block size does not change it (the RNG advances
+  per sample, not per block). A character effect whose crackle lands somewhere else in the bounce is a bug.
+
+**Three issues, all gate-found:**
+1. **Four of the eight curves were the same sound.** At high drive FUZZ and CRUSH both became a square, as did
+   BITS and TRANSISTOR — physics, not a bug, but it makes the selector decoration. FUZZ is **asymmetric** now (the
+   two halves clip differently, so it makes even harmonics a hard clipper cannot) and BITS quantises to twelve
+   steps rather than six, so the staircase itself is the character instead of the clipping. The gate also moved to
+   a moderate DISTORT — the 4.6f lesson, again: drive anything hard enough and every clipper converges.
+2. **The DC blocker was smearing DIGITAL's staircase.** Run unconditionally at the end of the chain, it turned a
+   held bit-crushed value into a decaying one — 7168 distinct output values where a staircase should have a few
+   dozen. It now runs only where DC can actually come from (the asymmetric curves and the crackle).
+3. **"Does it distort" cannot be measured as one harmonic.** BITS is a QUANTISER: its 3rd harmonic sits at −52 dB
+   while it is plainly, audibly dirty, because its fingerprint is broadband noise *between* the harmonics. The gate
+   measures everything that is not the fundamental instead — otherwise it would have called a bit-crusher clean.
+
+**Gates (4.6h):** 7 more cases — all-zero is bit-identical · seeded and block-invariant · NOISE is a level and the
+four flavours differ in brightness · eight curves, each dirty and all eight distinguishable pairwise · DIGITAL
+really is a staircase (a quarter of the distinct values) · WOBBLE decorrelates a steady tone and MAGNETIC dips the
+level · SPACE puts a tail where there was none, finite at 3 rates × 8 curves with every module at 100, reset back
+to silent.
+**mac-debug ctest 346/346 · RTSan 347/347 · ui typecheck 5 = baseline · vite clean · format clean · ASCII grep
+silent.** Page side: `retro` in `FX_REGISTRY` as **RETRO** + Help.
+
 ## Phase 4 — 4.6g DONE (THE SIXTH PREMIUM DEVICE: LIMITER — AND A REAL PDC BUG IT UNCOVERED), 2026-08-24
 
 `LimiterFx` in `AnalogFx.{h,cpp}`, `FxType::limiter` appended. Seven styles (TRANSPARENT / PUNCHY / DYNAMIC /

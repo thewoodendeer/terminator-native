@@ -26,6 +26,7 @@ import { TapeEchoFX } from './TapeEchoFX';
 import { PlateVerbFX } from './PlateVerbFX';
 import { SaturatorFX } from './SaturatorFX';
 import { LimiterFX } from './LimiterFX';
+import { RetroFX } from './RetroFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -33,7 +34,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -163,6 +164,22 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
       { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
     ],
     create: (c) => new LadderFX(c),
+  },
+  retro: {
+    name: 'RETRO',
+    desc: 'The character box: NOISE (vinyl crackle, tape hiss, static, radio), WOBBLE (a worn transport), DISTORT with EIGHT curves (tube, tape, fuzz, diode, fold, bits, transistor, crush), DIGITAL (bit depth and sample rate falling together, the sound of an early sampler), SPACE and MAGNETIC (tape dropouts and the top going away). Every module does nothing at 0, and everything random in it is seeded — the bounce is the take you heard. Rendered by the app\'s engine',
+    params: [
+      { key: 'NOISE', label: 'NOISE', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      sel('NTYPE', 'N TYPE', ['VINYL', 'TAPE', 'STATIC', 'RADIO']),
+      { key: 'WOBBLE', label: 'WOBBLE', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'DISTORT', label: 'DIST', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      sel('DTYPE', 'D TYPE', ['TUBE', 'TAPE', 'FUZZ', 'DIODE', 'FOLD', 'BITS', 'TRANSISTOR', 'CRUSH']),
+      { key: 'DIGITAL', label: 'DIGITAL', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'SPACE', label: 'SPACE', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'MAGNETIC', label: 'MAGNET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new RetroFX(c),
   },
   limiter: {
     name: 'LIMITER',
@@ -325,7 +342,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'saturator', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
+  'vinyl', 'retro', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

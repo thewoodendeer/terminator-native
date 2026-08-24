@@ -30,6 +30,8 @@ const char* const kVerbPrograms[] = {"HALL", "CHAMBER", "PLATE", "ROOM", "AMBIEN
 const char* const kSatStyles[] = {"A TUBE", "E GERM", "N BRIT", "T XFMR", "P PUNISH"};
 const char* const kOffOn[] = {"OFF", "ON"};
 const char* const kLimStyleNames[] = {"TRANSPARENT", "PUNCHY", "DYNAMIC", "ALLROUND", "AGGRESSIVE", "BUS", "SAFE"};
+const char* const kRetroNoise[] = {"VINYL", "TAPE", "STATIC", "RADIO"};
+const char* const kRetroDist[] = {"TUBE", "TAPE", "FUZZ", "DIODE", "FOLD", "BITS", "TRANSISTOR", "CRUSH"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -166,6 +168,17 @@ const FxParamDef kLimiterParams[] = {
     {"TP", 0.0f, 1.0f, 0.0f, kOffOn, 2},
     {"LINK", 0.0f, 100.0f, 100.0f},
 };
+const FxParamDef kRetroParams[] = {
+    {"NOISE", 0.0f, 100.0f, 0.0f},
+    {"NTYPE", 0.0f, 3.0f, 0.0f, kRetroNoise, 4},
+    {"WOBBLE", 0.0f, 100.0f, 0.0f},
+    {"DISTORT", 0.0f, 100.0f, 0.0f},
+    {"DTYPE", 0.0f, 7.0f, 0.0f, kRetroDist, 8},
+    {"DIGITAL", 0.0f, 100.0f, 0.0f},
+    {"SPACE", 0.0f, 100.0f, 0.0f},
+    {"MAGNETIC", 0.0f, 100.0f, 0.0f},
+    {"WET", 0.0f, 100.0f, 100.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -200,6 +213,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::plateverb, "plateverb", kPlateVerbParams, 9, 8},
     {FxType::saturator, "saturator", kSaturatorParams, 8, 7},
     {FxType::limiter, "limiter", kLimiterParams, 7, -1}, // fully wet: a limiter is not a parallel device
+    {FxType::retro, "retro", kRetroParams, 9, 8},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -241,6 +255,8 @@ int capacityOf(FxType t) noexcept
     case FxType::saturator:
         return 32;
     case FxType::limiter:
+        return 16;
+    case FxType::retro:
         return 16;
     case FxType::wide:
     case FxType::mseq:
@@ -286,6 +302,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<SaturatorFx>();
     case FxType::limiter:
         return std::make_unique<LimiterFx>();
+    case FxType::retro:
+        return std::make_unique<RetroFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

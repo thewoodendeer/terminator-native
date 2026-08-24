@@ -1409,4 +1409,348 @@ void LimiterFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOC
     grDb_ = static_cast<float>(20.0 * std::log10(std::max(held_, 1e-6)));
 }
 
+// ---- RETRO --------------------------------------------------------------------------------------------------
+
+namespace
+{
+constexpr double kRetroSpaceApMs[RetroFx::kSpaceStages] = {5.9, 3.7, 8.3};
+constexpr double kRetroSpaceFbMs = 27.0;
+constexpr double kRetroWowHz = 0.55, kRetroFlutHz = 6.1;
+} // namespace
+
+double RetroFx::rnd() noexcept TERMINATOR_NONBLOCKING
+{
+    rng_ ^= rng_ << 13;
+    rng_ ^= rng_ >> 17;
+    rng_ ^= rng_ << 5;
+    return static_cast<double>(rng_) * (2.0 / 4294967295.0) - 1.0;
+}
+
+void RetroFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    wobL_.prepare(static_cast<int>(0.02 * sampleRate) + 8);
+    wobR_.prepare(static_cast<int>(0.02 * sampleRate) + 8);
+    for (int i = 0; i < kSpaceStages; ++i)
+    {
+        const int n = static_cast<int>(kRetroSpaceApMs[i] * 0.001 * sampleRate) + 8;
+        spaceApL_[i].prepare(n);
+        spaceApR_[i].prepare(n);
+    }
+    const int fb = static_cast<int>(kRetroSpaceFbMs * 0.001 * sampleRate) + 8;
+    spaceFbL_.prepare(fb);
+    spaceFbR_.prepare(fb);
+    reset();
+}
+
+void RetroFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    nType_ = 0.0f;
+    dType_ = 0.0f;
+    noise_.set(0.0f, true);
+    wobble_.set(0.0f, true);
+    distort_.set(0.0f, true);
+    digital_.set(0.0f, true);
+    space_.set(0.0f, true);
+    magnetic_.set(0.0f, true);
+    // SEEDED, and re-seeded here: a render that starts from a fresh device gets the same crackle and the same
+    // dropouts as the last one. Random is a texture, not a lottery.
+    rng_ = 0x9e3779b9u;
+    noiseLpL_.reset();
+    noiseLpR_.reset();
+    noiseHpL_.reset();
+    noiseHpR_.reset();
+    wobL_.reset();
+    wobR_.reset();
+    wowPh_ = 0.0;
+    flutPh_ = 0.31;
+    holdL_ = holdR_ = holdAcc_ = 0.0;
+    for (int i = 0; i < kSpaceStages; ++i)
+    {
+        spaceApL_[i].reset();
+        spaceApR_[i].reset();
+    }
+    spaceFbL_.reset();
+    spaceFbR_.reset();
+    spaceLpL_.reset();
+    spaceLpR_.reset();
+    spaceStL_ = spaceStR_ = 0.0;
+    magLpL_.reset();
+    magLpR_.reset();
+    magBumpL_.reset();
+    magBumpR_.reset();
+    crackleHoldL_ = crackleHoldR_ = 0.0;
+    dropEnv_ = 1.0;
+    dropTimer_ = 0.0;
+    dcInL_ = dcOutL_ = dcInR_ = dcOutR_ = 0.0;
+    dcR_ = 1.0 - 2.0 * kPi * 5.0 / sr_;
+    spaceLpL_.set(Biquad::Type::lowpass, 4200.0, 0.0, 0.0, sr_);
+    spaceLpR_.set(Biquad::Type::lowpass, 4200.0, 0.0, 0.0, sr_);
+    recompute();
+}
+
+void RetroFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        noise_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 1:
+        nType_ = clampf(std::floor(value), 0.0f, 3.0f);
+        break;
+    case 2:
+        wobble_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 3:
+        distort_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 4:
+        dType_ = clampf(std::floor(value), 0.0f, 7.0f);
+        break;
+    case 5:
+        digital_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 6:
+        space_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 7:
+        magnetic_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    default:
+        break;
+    }
+    if (immediate)
+        recompute();
+}
+
+float RetroFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return noise_.target;
+    case 1:
+        return nType_;
+    case 2:
+        return wobble_.target;
+    case 3:
+        return distort_.target;
+    case 4:
+        return dType_;
+    case 5:
+        return digital_.target;
+    case 6:
+        return space_.target;
+    case 7:
+        return magnetic_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+void RetroFx::recompute() noexcept TERMINATOR_NONBLOCKING
+{
+    // Each NOISE flavour is a different filter on the same seeded stream: vinyl is rumble plus crackle, tape is
+    // hiss, static is wide and spitty, radio is a narrow band.
+    switch (static_cast<int>(nType_))
+    {
+    case 0: // VINYL
+        noiseLpL_.set(Biquad::Type::lowpass, 5500.0, 0.0, 0.0, sr_);
+        noiseHpL_.set(Biquad::Type::highpass, 30.0, 0.0, 0.0, sr_);
+        break;
+    case 1: // TAPE — hiss
+        noiseLpL_.set(Biquad::Type::lowpass, 16000.0, 0.0, 0.0, sr_);
+        noiseHpL_.set(Biquad::Type::highpass, 900.0, 0.0, 0.0, sr_);
+        break;
+    case 2: // STATIC
+        noiseLpL_.set(Biquad::Type::lowpass, 18000.0, 0.0, 0.0, sr_);
+        noiseHpL_.set(Biquad::Type::highpass, 200.0, 0.0, 0.0, sr_);
+        break;
+    default: // RADIO — a narrow band, like something coming through a speaker in another room
+        noiseLpL_.set(Biquad::Type::lowpass, 3000.0, 0.0, 0.0, sr_);
+        noiseHpL_.set(Biquad::Type::highpass, 400.0, 0.0, 0.0, sr_);
+        break;
+    }
+    noiseLpR_ = noiseLpL_;
+    noiseHpR_ = noiseHpL_;
+    const double mag = static_cast<double>(magnetic_.cur) * 0.01;
+    magLpL_.set(Biquad::Type::lowpass, std::clamp(19000.0 - 13000.0 * mag, 1200.0, 0.45 * sr_), 0.0, 0.0, sr_);
+    magLpR_ = magLpL_;
+    magBumpL_.set(Biquad::Type::peaking, 110.0, 1.0, 4.0 * mag, sr_);
+    magBumpR_ = magBumpL_;
+}
+
+/// One sample of the chosen noise flavour. VINYL adds CRACKLE — sparse, seeded impulses with a decay — which is
+/// the part people actually recognise; hiss alone just sounds like a bad converter.
+double RetroFx::noiseSample(int ch) noexcept TERMINATOR_NONBLOCKING
+{
+    double n = rnd();
+    n = ch == 0 ? noiseHpL_.process(noiseLpL_.process(n)) : noiseHpR_.process(noiseLpR_.process(n));
+    if (static_cast<int>(nType_) == 0 || static_cast<int>(nType_) == 2)
+    {
+        double& hold = ch == 0 ? crackleHoldL_ : crackleHoldR_;
+        if (std::abs(rnd()) > 0.99985)
+            hold = rnd() * 0.9;
+        hold *= 0.995;
+        n += hold;
+    }
+    return n;
+}
+
+/// Eight curves, so DISTORT is a palette. Every one is bounded (the 4.6c/4.6f rule) and the asymmetric ones are
+/// cleaned up by the DC blocker at the end of the chain.
+double RetroFx::distort(double x) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (static_cast<int>(dType_))
+    {
+    case 0: // TUBE
+        return ftanh(x + 0.3 * x * x);
+    case 1: // TAPE
+        return ftanh(x * 0.9) * 1.05;
+    case 2: // FUZZ — ASYMMETRIC on purpose: a symmetric hard fuzz is indistinguishable from CRUSH once it is
+            // driven, and then the selector is decoration. The two halves clip differently, so it makes even
+            // harmonics that the hard clipper cannot.
+        return x >= 0.0 ? ftanh(x * 5.0) * 0.85 : ftanh(x * 2.0) * 0.55;
+    case 3: // DIODE — a soft knee one way, hard the other
+        return x >= 0.0 ? ftanh(x * 1.5) : ftanh(x * 3.5) * 0.7;
+    case 4: // FOLD — wave folding, the sound of something wired wrong
+    {
+        const double t = ftanh(x);
+        return std::sin(2.2 * t) * 0.8;
+    }
+    case 5: // BITS — a staircase, and a FINE one: with only a handful of steps it just clips like everything else
+            // at high drive. Twelve keeps the quantisation itself the character.
+        return std::floor(std::clamp(x, -1.2, 1.2) * 12.0 + 0.5) / 12.0;
+    case 6: // TRANSISTOR
+        return std::clamp(x, -1.0, 1.0) * (1.0 - 0.25 * std::abs(std::clamp(x, -1.0, 1.0)));
+    default: // CRUSH — hard clip
+        return std::clamp(x * 2.5, -0.85, 0.85);
+    }
+}
+
+void RetroFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (noise_.moving() || wobble_.moving() || distort_.moving() || digital_.moving() || space_.moving() ||
+        magnetic_.moving())
+    {
+        noise_.advance(n, sr_, kFxTau);
+        wobble_.advance(n, sr_, kFxTau);
+        distort_.advance(n, sr_, kFxTau);
+        digital_.advance(n, sr_, kFxTau);
+        space_.advance(n, sr_, kFxTau);
+        magnetic_.advance(n, sr_, kFxTau);
+        recompute();
+    }
+    const double noiseAmt = static_cast<double>(noise_.cur) * 0.01;
+    const double wobAmt = static_cast<double>(wobble_.cur) * 0.01;
+    const double distAmt = static_cast<double>(distort_.cur) * 0.01;
+    const double digAmt = static_cast<double>(digital_.cur) * 0.01;
+    const double spaceAmt = static_cast<double>(space_.cur) * 0.01;
+    const double magAmt = static_cast<double>(magnetic_.cur) * 0.01;
+    const bool anything =
+        noiseAmt > 0.0 || wobAmt > 0.0 || distAmt > 0.0 || digAmt > 0.0 || spaceAmt > 0.0 || magAmt > 0.0;
+    if (!anything)
+        return; // every module at 0 = the box is not there at all
+
+    const double wobBase = 0.004 * sr_; // 4 ms of tape under the head
+    const double digBits = 16.0 - 13.0 * digAmt;
+    const double digStep = std::pow(2.0, digBits - 1.0);
+    const double digRate = std::max(1.0, sr_ / std::max(1.0, sr_ * (1.0 - 0.93 * digAmt)));
+
+    for (int i = 0; i < n; ++i)
+    {
+        double xl = l[i], xr = r[i];
+
+        if (wobAmt > 0.0)
+        {
+            wowPh_ = advancePhase(wowPh_, kRetroWowHz, sr_);
+            flutPh_ = advancePhase(flutPh_, kRetroFlutHz, sr_);
+            const double d = wobBase * (1.0 + wobAmt * (0.09 * lfoSine(wowPh_) + 0.02 * lfoSine(flutPh_)));
+            xl = wobL_.process(xl, d);
+            xr = wobR_.process(xr, d);
+        }
+
+        if (distAmt > 0.0)
+        {
+            const double drive = 1.0 + 7.0 * distAmt;
+            const double dl = distort(xl * drive), dr = distort(xr * drive);
+            const double comp = 1.0 / std::sqrt(drive);
+            xl = xl * (1.0 - distAmt) + dl * comp * distAmt;
+            xr = xr * (1.0 - distAmt) + dr * comp * distAmt;
+        }
+
+        if (digAmt > 0.0)
+        {
+            // bit depth AND sample rate fall together, which is what an early sampler actually did
+            holdAcc_ += 1.0;
+            if (holdAcc_ >= digRate)
+            {
+                holdAcc_ -= digRate;
+                holdL_ = std::floor(xl * digStep + 0.5) / digStep;
+                holdR_ = std::floor(xr * digStep + 0.5) / digStep;
+            }
+            xl = xl * (1.0 - digAmt) + holdL_ * digAmt;
+            xr = xr * (1.0 - digAmt) + holdR_ * digAmt;
+        }
+
+        if (magAmt > 0.0)
+        {
+            // DROPOUTS: the tape briefly loses contact. Seeded, so a bounce drops out in the same places.
+            dropTimer_ -= 1.0;
+            if (dropTimer_ <= 0.0)
+            {
+                dropTimer_ = (0.25 + 0.75 * std::abs(rnd())) * sr_ * (1.0 + 4.0 * (1.0 - magAmt));
+                if (std::abs(rnd()) < magAmt * 0.6)
+                    dropEnv_ = 1.0 - magAmt * (0.25 + 0.55 * std::abs(rnd()));
+            }
+            dropEnv_ += (1.0 - dropEnv_) * 0.0012;
+            xl = magBumpL_.process(magLpL_.process(xl)) * dropEnv_;
+            xr = magBumpR_.process(magLpR_.process(xr)) * dropEnv_;
+        }
+
+        if (noiseAmt > 0.0)
+        {
+            const double g = noiseAmt * noiseAmt * 0.25;
+            xl += noiseSample(0) * g;
+            xr += noiseSample(1) * g;
+        }
+
+        if (spaceAmt > 0.0)
+        {
+            double vl = xl + 0.5 * spaceStL_, vr = xr + 0.5 * spaceStR_;
+            for (int k = 0; k < kSpaceStages; ++k)
+            {
+                vl = springAllpass(spaceApL_[k], vl, kRetroSpaceApMs[k] * 0.001 * sr_, 0.55);
+                vr = springAllpass(spaceApR_[k], vr, kRetroSpaceApMs[k] * 0.001 * sr_, 0.55);
+            }
+            const double tl = spaceFbL_.readAt(kRetroSpaceFbMs * 0.001 * sr_);
+            const double tr = spaceFbR_.readAt(kRetroSpaceFbMs * 0.001 * sr_);
+            spaceFbL_.write(vl);
+            spaceFbR_.write(vr);
+            spaceStL_ = spaceLpL_.process(tl);
+            spaceStR_ = spaceLpR_.process(tr);
+            xl = xl * (1.0 - spaceAmt * 0.6) + tl * spaceAmt * 0.6;
+            xr = xr * (1.0 - spaceAmt * 0.6) + tr * spaceAmt * 0.6;
+        }
+
+        // The DC blocker runs only where DC can come from — the asymmetric curves and the crackle. Run
+        // unconditionally it also smears anything held: DIGITAL's staircase came out with 7168 distinct values
+        // instead of a few dozen, because every step was decaying towards zero on its way past.
+        if (distAmt > 0.0 || noiseAmt > 0.0)
+        {
+            const double bl = xl - dcInL_ + dcR_ * dcOutL_;
+            dcInL_ = xl;
+            dcOutL_ = bl;
+            const double br = xr - dcInR_ + dcR_ * dcOutR_;
+            dcInR_ = xr;
+            dcOutR_ = br;
+            xl = bl;
+            xr = br;
+        }
+        l[i] = xl;
+        r[i] = xr;
+    }
+}
+
 } // namespace terminator

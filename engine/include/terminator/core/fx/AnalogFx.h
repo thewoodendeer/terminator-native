@@ -7,6 +7,8 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · RetroFx — RETRO: the RC-20-shaped multi-effect — NOISE, WOBBLE, DISTORT (eight curves), DIGITAL, SPACE and
+//     MAGNETIC in one box, every random element seeded so a bounce is the same take you heard.
 //   · LimiterFx — LIMITER: a modern mastering limiter (styles, look-ahead, true peak). The ONE thing it must never
 //     do is exceed its ceiling, so the applied gain is hard-clamped to the gain that sample actually needs — the
 //     smoothing shapes how it gets there, it never decides whether it arrives.
@@ -132,6 +134,56 @@ class FetCompFx final : public Effect
 
 /// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
 double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// RETRO — the RC-20-shaped character box (Phase 4.6h). Six modules in series, each doing nothing at 0.
+///   NOISE / NTYPE  0..100 · VINYL | TAPE | STATIC | RADIO — the floor a record has and a plugin does not.
+///   WOBBLE   0..100 — the worn transport (wow + flutter on a delay line).
+///   DISTORT / DTYPE  0..100 · TUBE | TAPE | FUZZ | DIODE | FOLD | BITS | TRANSISTOR | CRUSH — eight curves, so
+///            "distort" is a palette rather than one sound.
+///   DIGITAL  0..100 — bit depth AND sample rate falling together, the sound of an early sampler.
+///   SPACE    0..100 — a small diffuse room, for the "recorded in a place" feeling.
+///   MAGNETIC 0..100 — tape: dropouts, head-bump and the top going away.
+///   WET      0..100 (the CHAIN crossfades).
+/// **Everything random is SEEDED and reset with the device**, so an export is the take you heard, not a new roll.
+class RetroFx final : public Effect
+{
+  public:
+    static constexpr int kSpaceStages = 3;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::retro; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    void recompute() noexcept TERMINATOR_NONBLOCKING;
+    double rnd() noexcept TERMINATOR_NONBLOCKING; // −1..1, seeded
+    double noiseSample(int ch) noexcept TERMINATOR_NONBLOCKING;
+    double distort(double x) const noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    float nType_ = 0.0f, dType_ = 0.0f;
+    Glide noise_, wobble_, distort_, digital_, space_, magnetic_;
+    std::uint32_t rng_ = 0x9e3779b9u;
+    // NOISE
+    Biquad noiseLpL_, noiseLpR_, noiseHpL_, noiseHpR_;
+    double crackleHoldL_ = 0.0, crackleHoldR_ = 0.0;
+    // WOBBLE
+    DelayLine wobL_, wobR_;
+    double wowPh_ = 0.0, flutPh_ = 0.0;
+    // DIGITAL
+    double holdL_ = 0.0, holdR_ = 0.0, holdAcc_ = 0.0;
+    // SPACE
+    DelayLine spaceApL_[kSpaceStages], spaceApR_[kSpaceStages], spaceFbL_, spaceFbR_;
+    Biquad spaceLpL_, spaceLpR_;
+    double spaceStL_ = 0.0, spaceStR_ = 0.0;
+    // MAGNETIC
+    Biquad magLpL_, magLpR_, magBumpL_, magBumpR_;
+    double dropEnv_ = 1.0, dropTimer_ = 0.0;
+    double dcInL_ = 0.0, dcOutL_ = 0.0, dcInR_ = 0.0, dcOutR_ = 0.0, dcR_ = 0.999;
+};
 
 /// LIMITER — the mastering limiter (Phase 4.6g).
 ///   STYLE     TRANSPARENT | PUNCHY | DYNAMIC | ALLROUND | AGGRESSIVE | BUS | SAFE — the release law and how much
