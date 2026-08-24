@@ -374,6 +374,15 @@ function MixerSectionImpl({ engine, clip, onClip, palette, transportOn }: {
   // PLUGINS (6.2): the scanned effects, fetched once and cached in pluginSlots (empty outside the shell).
   const [pluginList, setPluginList] = useState(cachedPlugins());
   const [instMidi, setInstMidi] = useState(false); // 6.3: MIDI notes to the hosted instrument (off = the pads)
+  /** A slot's label. A PLUGIN slot wears the PLUGIN'S OWN NAME (6.2) — three slots all reading "PLUGIN" tell you
+   *  nothing about the chain you built. */
+  const slotLabel = (ch: string, idx: number, id: FxId): string => {
+    if (id !== 'plugin') return FX_REGISTRY[id].name;
+    const strip = ch === 'master' ? engine.master : engine.getChannel(ch as ChannelName);
+    const chosen = String(strip?.fx[idx]?.params.PLUGIN ?? '');
+    const found = chosen ? pluginList.find(p => p.id === chosen) : undefined;
+    return found ? found.name.toUpperCase().slice(0, 14) : 'PLUGIN';
+  };
   useEffect(() => { if (isNative()) void listPlugins().then(setPluginList); }, []);
   const [renaming, setRenaming] = useState<string | null>(null);
 
@@ -1078,7 +1087,7 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
           title={bypassed[idx] ? 'Bypassed — click to enable' : 'Active — click to bypass'}
           onClick={e => { e.stopPropagation(); if (e.metaKey || e.ctrlKey) return; strip.toggleBypass(idx); force(); }} />
         <span className="mx-fx-name" onClick={e => { if (e.metaKey || e.ctrlKey) return; togglePanel(`${key}:${idx}`); }}
-          title={`${FX_REGISTRY[fxIds[idx]!].desc} · click to open its panel`}>{FX_REGISTRY[fxIds[idx]!].name}</span>
+          title={`${FX_REGISTRY[fxIds[idx]!].desc} · click to open its panel`}>{slotLabel(key, idx, fxIds[idx]!)}</span>
         <button className="mx-fx-rm" title="Remove"
           onClick={e => {
             e.stopPropagation();
@@ -1211,7 +1220,7 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
               onDoubleClick={() => toggleCollapse(key)}
               title={collapsed ? 'Double-click to expand' : 'Double-click to collapse'}>
               <div className="mx-device-head">
-                <span className="mx-device-title" style={{ color: chColor }}>{def.name}</span>
+                <span className="mx-device-title" style={{ color: chColor }}>{slotLabel(ch, idx, id)}</span>
                 <span className="mx-device-sub">{chLabel}</span>
                 {/* M/S everywhere (4.7a): the SLOT's route. Engine-side, so it applies to every device. */}
                 <select className="mx-device-route" value={strip?.fxRoutes?.[idx] ?? 'STEREO'}
