@@ -1739,6 +1739,19 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## CI RED on `25cf0cc`, and it was the ASCII rule again (fixed 2026-08-24)
+
+**Windows x64 (MSVC) failed one test: `engine.4× oversampling buys real aliasing rejection`** — and not on the
+measurement. The log says it all: `No test cases matched '"4? oversampling buys real aliasing rejection"'`. ctest
+passes the case NAME to the binary as a filter, and MSVC's console cannot round-trip the `×`, so the filter matched
+nothing, no tests ran, and "no tests ran" is a failure. Mac/RTSan/Intel were all green because their filter survives
+the character.
+
+**This is the gotcha already at the top of the list — "every Catch2 TEST_CASE/SECTION name ASCII (MSVC)" — and it
+still got through**, because a `×` reads as harmless when you are typing "4× oversampling" in a sentence. The fix is
+the rename (`4x`), with the reason on the line so the next person does not re-introduce it. A grep is the only real
+guard: `grep -nP "TEST_CASE|SECTION\(" tests/engine/*.cpp | grep -P "[^\x00-\x7F]"` must print nothing.
+
 ## Phase 4 — 4.6c DONE (THE SECOND PREMIUM DEVICE: FET COMP), 2026-08-24
 
 The Distressor-shaped compressor from B4's brief, `FetCompFx` beside the ladder in `AnalogFx.{h,cpp}` (which is why

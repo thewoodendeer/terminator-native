@@ -279,7 +279,7 @@ TEST_CASE("DRIVE is colour, not level", "[fx][analog]")
     CHECK(h3Dirty > h3Clean + 20.0);
 }
 
-TEST_CASE("4× oversampling buys real aliasing rejection", "[fx][analog]")
+TEST_CASE("4x oversampling buys real aliasing rejection", "[fx][analog]") // ASCII: MSVC cannot filter a non-ASCII name
 {
     // 6 kHz driven hard: at 1× the folded harmonics would land all over the spectrum. Measured through the device
     // (4×) the non-harmonic floor has to sit far below the fundamental.
