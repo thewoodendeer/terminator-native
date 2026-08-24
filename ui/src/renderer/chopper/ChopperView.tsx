@@ -25,6 +25,13 @@ const RECORD_INPUT_KEY = 'terminator_record_input';
 // RECORD SAMPLE, natively (5.1c): the count-in the take starts on (beats, 0 = straight away) and whether the
 // interface is monitored through the engine while the panel is open.
 const RECORD_COUNTIN_KEY = 'terminator_record_countin';
+/** A recording input that is a CHANNEL (or pair) of the interface, taken by the engine: `native-in:0,1`. */
+const NATIVE_INPUT_PREFIX = 'native-in:';
+const nativeInputChannels = (id: string | null): number[] | null => {
+  if (!id || !id.startsWith(NATIVE_INPUT_PREFIX)) return null;
+  const chans = id.slice(NATIVE_INPUT_PREFIX.length).split(',').map(n => Number(n)).filter(n => Number.isFinite(n) && n >= 0);
+  return chans.length ? chans : null;
+};
 // Sentinel input id for the "System Audio (what's playing)" choice — captured via
 // getDisplayMedia + the main-process setDisplayMediaRequestHandler loopback, not
 // a real device id.
@@ -3383,6 +3390,24 @@ export function ChopperView() {
   // Re-run after the first getUserMedia so device labels (only exposed once mic
   // permission is granted) fill in. System audio is a fixed option, not enumerated.
   const loadRecordInputs = async () => {
+    // INSIDE THE SHELL the take is made by the ENGINE, off the interface's own channels — so the list is the
+    // INTERFACE'S CHANNELS, not the browser's idea of devices (which the engine does not use for a take at all).
+    // Pairs first (a stereo take), then each channel on its own (a mono take from input 3).
+    if (isNative()) {
+      try {
+        const r: any = await native.audio({ verb: 'list' });
+        const dev = r?.device ?? {};
+        const names: string[] = Array.isArray(dev.inputChannelNames) ? dev.inputChannelNames : [];
+        const active: number[] = Array.isArray(dev.activeInputChannels) ? dev.activeInputChannels : [];
+        const label = (i: number) => (names[i] || `Input ${i + 1}`);
+        const list: Array<{ id: string; name: string }> = [];
+        for (let i = 0; i + 1 < active.length; i += 2)
+          list.push({ id: `${NATIVE_INPUT_PREFIX}${active[i]},${active[i + 1]}`, name: `${label(active[i])} + ${label(active[i + 1])} — stereo` });
+        for (const ch of active) list.push({ id: `${NATIVE_INPUT_PREFIX}${ch}`, name: `${label(ch)} — mono` });
+        setAudioDevices(list);
+        return;
+      } catch { /* no device open yet — fall through to the browser list */ }
+    }
     let devs: Array<{ id: string; name: string }> = [];
     try {
       let all = await navigator.mediaDevices.enumerateDevices();
@@ -3489,7 +3514,7 @@ export function ChopperView() {
     ctx.fillRect(0, Math.round(h * 0.25), Math.round(w * frac), Math.round(h * 0.5));
   };
 
-  const startNativeRecording = async (source: 'inputs' | 'master' = 'inputs'): Promise<boolean> => {
+  const startNativeRecording = async (source: 'inputs' | 'master' = 'inputs', inputs?: number[]): Promise<boolean> => {
     const boot = nativeBoot();
     const dir = boot?.dirs?.temp ?? boot?.dirs?.dataDir;
     if (!dir) return false;
@@ -3497,7 +3522,12 @@ export function ChopperView() {
     // 24-bit, stereo, the first two inputs — the same shape the page path produced, but without the round trip
     // through WebKit. With a COUNT-IN (5.1c) the engine opens the file now and starts capturing on the downbeat
     // itself, so the take's first frame IS the downbeat — nothing to trim.
-    const res = await native.record({ verb: 'start', path, channels: 2, bitDepth: 24, countIn: recordCountIn, source });
+    const res = await native.record({
+      verb: 'start', path, bitDepth: 24, countIn: recordCountIn, source,
+      // the channels he picked, in that order — a mono take is ONE channel, not a silent second one
+      channels: source === 'master' ? 2 : Math.max(1, Math.min(2, inputs?.length ?? 2)),
+      ...(inputs && inputs.length ? { inputs } : {}),
+    });
     if (!res?.ok) { setError(String(res?.error ?? 'Recording failed to start')); return false; }
     // The level meter reads the ENGINE's own peaks — there is no MediaStream to hang an analyser on, and the
     // engine's number is the true one anyway (it is the interface's sample, before anything of ours). The same
@@ -3531,7 +3561,9 @@ export function ChopperView() {
    *  the panel — an open monitor you forgot about is a feedback loop waiting for the next time you unmute. */
   const setNativeMonitor = (on: boolean) => {
     setRecordMonitor(on);
-    if (isNative()) void native.record({ verb: 'monitor', enabled: on, inputs: [0, 1] });
+    // the monitor listens to the SAME channels the take will use, so what you hear is what you are about to record
+    const chans = nativeInputChannels(recordInputId) ?? [0, 1];
+    if (isNative()) void native.record({ verb: 'monitor', enabled: on, inputs: chans.length > 1 ? chans : [chans[0], -1] });
   };
 
   const finalizeNativeRecording = async () => {
@@ -3599,7 +3631,8 @@ export function ChopperView() {
       // the shell — the TS engine's voices are muted because the native engine plays them — so this is a fix, not
       // a preference. System audio is the OS's and never reaches us; it stays on the page path.
       const source = recordInputId === INTERNAL_OUTPUT_ID ? 'master' : 'inputs';
-      if (await startNativeRecording(source)) {
+      const chans = nativeInputChannels(recordInputId) ?? undefined;
+      if (await startNativeRecording(source, chans)) {
         if (source === 'master') flash('RECORDING TERMINATOR OUTPUT — play pads, the seq, anything: STOP lands it on the next empty pad');
         return;
       }
@@ -5279,9 +5312,11 @@ export function ChopperView() {
                 }}
               >
                 {!isWeb && <option value="">— choose an input —</option>}
-                <option value={DEFAULT_INPUT_ID}>🎙 Microphone / plugged-in input (default)</option>
+                {/* Natively the engine takes the take off the INTERFACE'S OWN CHANNELS (Preferences → AUDIO picks
+                    the device); the browser's default-microphone option would record through WebKit instead. */}
+                {!isNative() && <option value={DEFAULT_INPUT_ID}>🎙 Microphone / plugged-in input (default)</option>}
                 {audioDevices.length > 0 && (
-                  <optgroup label="Mic / Interface">
+                  <optgroup label={isNative() ? 'Your interface' : 'Mic / Interface'}>
                     {audioDevices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </optgroup>
                 )}
@@ -5355,7 +5390,8 @@ export function ChopperView() {
             )}
           </div>
           <div className="record-hint">
-            {recordState === 'idle' && (isWeb ? 'Press REC — the mic (or whatever is plugged in) records; STOP loads it into the waveform. Interfaces and virtual devices (Loopback, BlackHole) list under MIC / INTERFACE once the mic is allowed.' : 'Pick an input — your interface and virtual devices (Loopback, BlackHole) list under MIC / INTERFACE — then press REC.')}
+            {recordState === 'idle' && isNative() && 'Pick a channel of your interface (Preferences → AUDIO chooses the device and which channels are on). MONITOR lets you hear it while you set the level; COUNT-IN starts the take on the downbeat. 🔁 records what Terminator itself is playing.'}
+            {recordState === 'idle' && !isNative() && (isWeb ? 'Press REC — the mic (or whatever is plugged in) records; STOP loads it into the waveform. Interfaces and virtual devices (Loopback, BlackHole) list under MIC / INTERFACE once the mic is allowed.' : 'Pick an input — your interface and virtual devices (Loopback, BlackHole) list under MIC / INTERFACE — then press REC.')}
             {recordState === 'armed' && 'Counting in — the clicks are the count. Recording starts on the downbeat itself, so the take needs no trimming. Click again to cancel.'}
             {recordState === 'recording' && (isWeb ? 'Recording… press STOP to load it. It is saved with the project (⇩ FILE / SAVE PROJECT).' : 'Recording… press STOP to save + load.')}
           </div>

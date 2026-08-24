@@ -1751,6 +1751,15 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 5 — 5.1e DONE (THE INPUT LIST IS YOUR INTERFACE'S CHANNELS), 2026-08-24
+
+RECORD SAMPLE's INPUT list was still the BROWSER's devices in the shell — a list the engine does not use for a
+take at all (it records off the interface's own channels). Natively it now lists **the interface's channels**:
+every enabled pair as a stereo take, then each channel on its own as a mono one, named the way the driver names
+them. The engine records exactly those channels, in that order, and a mono pick makes a MONO file rather than one
+with a silent second side. The MONITOR listens to the same channels, so what you hear is what you are about to
+record. The browser list stays for the web build; 🔁 and system audio are unchanged.
+
 ## Phase 6 — 6.4 DONE (AND THE EXPORT HAS THEM TOO), 2026-08-24
 
 A plugin you can hear live but not in the file is exactly the trap this project already walked into once (4.6, the
