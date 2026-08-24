@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "terminator/core/fx/AnalogFx.h"
 #include "terminator/core/fx/BasicFx.h"
 #include "terminator/core/fx/DynamicsFx.h"
 #include "terminator/core/fx/ModFx.h"
@@ -20,6 +21,7 @@ const char* const kUtilityPhases[] = {"normal", "inverted"};
 const char* const kFilterTypes[] = {"lowpass", "highpass", "bandpass", "notch"};
 const char* const kPhaserStages[] = {"4", "6", "8", "12"};
 const char* const kCompStyles[] = {"OFF", "LIGHT", "PUNCHY", "NY-PARALLEL", "AGGRESSIVE"};
+const char* const kLadderModes[] = {"LP24", "LP18", "LP12", "LP6", "HP24", "HP12", "BP24", "BP12"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -98,6 +100,13 @@ const FxParamDef kDelayParams[] = {
     {"WET", 0.0f, 100.0f, 30.0f},
     {"PINGPONG", 0.0f, 1.0f, 0.0f},
 };
+const FxParamDef kLadderParams[] = {
+    {"MODE", 0.0f, 7.0f, 0.0f, kLadderModes, 8},
+    {"CUTOFF", 20.0f, 20000.0f, 20000.0f},
+    {"RESO", 0.0f, 100.0f, 0.0f},
+    {"DRIVE", 0.0f, 100.0f, 0.0f},
+    {"WET", 0.0f, 100.0f, 100.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -126,6 +135,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::delay, "delay", kDelayParams, 4, 2},
     {FxType::reverb, "reverb", kReverbParams, 4, 3},
     {FxType::utility, "utility", kUtilityParams, 3, -1},
+    {FxType::ladder, "ladder", kLadderParams, 5, 4},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -156,6 +166,8 @@ int capacityOf(FxType t) noexcept
     case FxType::eq:
     case FxType::filter:
         return 64;
+    case FxType::ladder:
+        return 24;
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -188,6 +200,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<EqFx>();
     case FxType::filter:
         return std::make_unique<FilterFx>();
+    case FxType::ladder:
+        return std::make_unique<LadderFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

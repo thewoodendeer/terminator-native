@@ -23,6 +23,7 @@ add_library(terminator_engine STATIC
     include/terminator/core/Mixer.h
     include/terminator/core/LoudnessMeter.h
     include/terminator/core/fx/Effect.h
+    include/terminator/core/fx/AnalogFx.h
     include/terminator/core/fx/BasicFx.h
     include/terminator/core/fx/FxDsp.h
     include/terminator/core/fx/ShaperFx.h
@@ -66,6 +67,7 @@ add_library(terminator_engine STATIC
     src/core/Metronome.cpp
     src/core/Mixer.cpp
     src/core/LoudnessMeter.cpp
+    src/core/fx/AnalogFx.cpp
     src/core/fx/BasicFx.cpp
     src/core/fx/FxDsp.cpp
     src/core/fx/ShaperFx.cpp

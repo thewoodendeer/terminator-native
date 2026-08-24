@@ -1739,6 +1739,65 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6a DONE (THE FIRST PREMIUM DEVICE: THE ANALOG FILTER — A REAL MOOG LADDER), 2026-08-24 thirteenth session
+
+The parity floor is finished, so this is the first device from B4's **VICTOR'S PHASE-4 BRIEF** — the stock devices
+built on top of the ports, not instead of them. Nothing about the 4.2 devices changes: `FxType::ladder` is
+APPENDED to the type enum so every existing type keeps its index and every saved chain still resolves.
+
+**What it is.** `engine/…/fx/AnalogFx.{h,cpp}` — the Moog transistor ladder (D'Angelo–Välimäki nonlinear model)
+as a mixer insert: MODE (LP24 / LP18 / LP12 / LP6 / HP24 / HP12 / BP24 / BP12) · CUTOFF 20–20000 · RESO 0–100 ·
+DRIVE 0–100 · WET. Four nonlinear one-pole stages with the resonant feedback path, run **4× oversampled** (ZOH up,
+a 4-pole Butterworth decimator at 0.47·sr) and mixed from the stage taps Oberheim-style — one filter core gives
+every slope and the highpass / bandpass shapes without a second filter.
+
+**Three things the model taught, each now a gate:**
+- **DRIVE cannot live inside the ladder.** The tanh appears on BOTH sides of every pole, so in steady state the
+  stages track their input exactly and a bare input gain adds *no colour at all* below the cutoff (measured: the
+  3rd harmonic did not move). The drive is a compensated tanh input stage in FRONT of the ladder (1..16×, √g
+  makeup), crossfaded in by the knob so **DRIVE 0 is bit-clean** and DRIVE 100 is +20 dB of 3rd harmonic at the
+  same level. Gated both ways.
+- **RESO 100 must sing from silence.** A digital ladder from a zeroed state stays at exactly zero forever. The
+  model carries its own ≈ −120 dBFS noise floor, which is what bootstraps the self-oscillation — gated: no input
+  at all, RESO 100 → a bounded sine within 15 % of the cutoff, and RMS < 1e-4 when RESO is down.
+- **Wide open is not bypass, and the gate says the honest number.** Four poles at 20 kHz still cost ≈ 3.9 dB at
+  8 kHz. Resonance also steals the bottom (the feedback path divides DC by 1 + res) — both are what the hardware
+  does, both are now numbers that cannot drift.
+- (Method) **A cascade of one-poles only reaches its asymptotic slope well past the corner.** Measured between
+  2·fc and 4·fc a PERFECT 4-pole reads −21 dB, not −24 — arithmetic, not a fault. The slope gate measures
+  8·fc → 16·fc.
+
+**Zero latency by design** (`latencySamples() == 0`): the decimator is minimum-phase IIR rather than a linear-phase
+halfband, so putting an ANALOG FILTER on a live pad does not push the whole strip back through PDC.
+
+**Gates (4.6a):** `tests/engine/test_analog_fx.cpp`, 10 cases — registry ids/ranges/WET index + pool build + zero
+latency · the four LP slopes and the HP/BP shapes · the cutoff is where the knob says (−12 dB at fc, flat an octave
+below) · RESO rings, robs the bottom, self-oscillates from silence · DRIVE is colour not level · the 4×
+oversampling holds the non-harmonic floor below −45 dB on a driven 6 kHz tone · neutral is transparent · finite at
+44.1/48/96/192 k through every mode at full RESO+DRIVE with the cutoff sweeping · reset clears · **block-size
+invariance to 1e-9 (8192 vs 37)**. mac-debug 0 warnings + ctest **295/295** · RTSan **296/296** · clang-format clean.
+
+### THE BLOCKER THIS UNCOVERED — a premium device is heard but NOT exported (needs Victor's call)
+`exportProjectNative` (the whole of 4.5) is wired to **the probe only**. The shipping EXPORT dialog calls the
+PAGE's `exportArrangement` → `renderArrangementDAW`, i.e. the Web Audio mixer, because that is the only thing that
+knows the Beat Finisher arrangement (sections × bars, per-section patterns, bass notes/bends). So a device that
+exists only natively — which every B4 premium device will be — would be **heard live and silently missing from the
+file**. That is worse than not having it.
+
+Two ways out, and it is Victor's call because it decides the shape of the rest of Phase 4:
+1. **Make the export native** (recommended): teach `render::ProjectRenderer` the arrangement (flatten sections →
+   absolute-time chop/drum/bass events, which is exactly what `exportArrangement` does in TS today) and point the
+   dialog at `exportProjectNative`. Then "export == what you hear" is true by construction, the native mixer /
+   console / PDC / limiter are in the file, and every premium device is exportable the day it lands.
+2. **Twin every premium device in Web Audio** so the page's exporter carries it. That is a second implementation
+   of every device to keep in step — the exact drift the bass-parser move (4.5d) was made to prevent — and it is
+   absurd for a Lexicon 224 or a Pro-Q 4.
+
+Until that is decided the ANALOG FILTER is **engine-side only**: it is built, pooled and gated, but it is NOT in
+the page's `FX_REGISTRY`, so nothing can insert it yet. Adding the page entry is one small commit either way (a
+registry entry + the panel renders itself from the ParamSpec list + a Help line) — it is deliberately held so that
+no one can put a device on a strip that a bounce would drop.
+
 ## CI — the live-record PATH check now retries up to 5 times (2026-08-23), BOTH halves
 
 **Follow-up (2026-08-24):** the retry fixed the CHOP half (`liveRecExact: true`, attempt 1) but universal went red
