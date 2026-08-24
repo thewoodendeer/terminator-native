@@ -43,6 +43,7 @@ add_executable(terminator-tests
     engine/test_export_project.cpp
     engine/test_export_drums.cpp
     engine/test_export_bass.cpp
+    engine/test_export_arrangement.cpp
     engine/test_export_files.cpp)
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE

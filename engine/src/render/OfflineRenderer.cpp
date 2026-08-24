@@ -355,13 +355,17 @@ RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callba
             engine.commands().push(Command::drumSetLane(static_cast<std::uint16_t>(l.lane), l.volume, l.audible,
                                                         static_cast<std::int16_t>(l.muteGroup)));
         }
-        if (spec.drums.graphs != nullptr)
-            engine.commands().push(Command::drumSetGraphs(spec.drums.graphs.get()));
-        if (spec.drums.pattern != nullptr)
-            engine.commands().push(Command::drumSetPattern(spec.drums.pattern.get()));
-        engine.commands().push(Command::drumSetParams(spec.drums.swing, spec.drums.masterVolume,
-                                                      static_cast<std::uint16_t>(spec.drums.ppq)));
-        engine.commands().push(Command::drumPlay());
+        // ARRANGEMENT (4.7): the lanes are bound above; the hits come as events, so the sequencer stays out of it.
+        if (!spec.drums.eventDriven)
+        {
+            if (spec.drums.graphs != nullptr)
+                engine.commands().push(Command::drumSetGraphs(spec.drums.graphs.get()));
+            if (spec.drums.pattern != nullptr)
+                engine.commands().push(Command::drumSetPattern(spec.drums.pattern.get()));
+            engine.commands().push(Command::drumSetParams(spec.drums.swing, spec.drums.masterVolume,
+                                                          static_cast<std::uint16_t>(spec.drums.ppq)));
+            engine.commands().push(Command::drumPlay());
+        }
     }
     // the BASS (Phase 4.5d): the engine's own BassSequencer + BassSynth, so the patch, the slides and the BEND lane
     // in a bounce are the ones that were playing
@@ -373,7 +377,15 @@ RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callba
             engine.commands().push(Command::bassSetPatch(spec.bass.patch.get()));
         if (spec.bass.pattern != nullptr)
             engine.commands().push(Command::bassSetPattern(spec.bass.pattern.get()));
-        engine.commands().push(Command::bassPlay());
+        // ARRANGEMENT (4.7): the timeline drives the synth by absolute sample, independent of the pattern
+        // transport — exactly as the live arranger preview drives it.
+        if (spec.bass.timeline != nullptr)
+        {
+            engine.commands().push(Command::bassArrangerDriven(true));
+            engine.commands().push(Command::bassSetTimeline(spec.bass.timeline.get()));
+        }
+        if (spec.bass.pattern != nullptr)
+            engine.commands().push(Command::bassPlay());
     }
     engine.commands().push(Command::setMasterGain(spec.masterGain));
     engine.commands().push(
@@ -394,6 +406,20 @@ RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callba
             engine.commands().push(Command::setPadStems(p.params.pad, planes, p.stemMask));
         }
     }
+
+    // A mutable copy of every pad's params, so a per-HIT reverse override can flip exactly the field the page's
+    // shadow flips and re-send the pad rather than inventing a second reverse path.
+    std::vector<PadParams> livePadParams;
+    livePadParams.reserve(spec.pads.size());
+    for (const auto& p : spec.pads)
+        livePadParams.push_back(p.params);
+    const auto padParamsFor = [&livePadParams](std::uint16_t pad) -> PadParams*
+    {
+        for (auto& p : livePadParams)
+            if (p.pad == pad)
+                return &p;
+        return nullptr;
+    };
 
     // events sorted by time; pushed per block so the queue never holds more than one block's worth
     std::vector<const RenderEvent*> events;
@@ -434,13 +460,34 @@ RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callba
             switch (e->type)
             {
             case RenderEvent::Type::on:
-                engine.commands().push(Command::triggerPadAtSample(e->pad, e->velocity, clamped));
+                // A per-HIT reverse flips the pad param first — the same order the live shadow sends it in, and
+                // commands are drained in order, so the voice this trigger starts reads the flipped setting.
+                if (e->reverse >= 0)
+                {
+                    auto* p = padParamsFor(e->pad);
+                    if (p != nullptr && p->reverse != static_cast<std::uint8_t>(e->reverse))
+                    {
+                        p->reverse = static_cast<std::uint8_t>(e->reverse);
+                        engine.commands().push(Command::setPadParams(*p));
+                    }
+                }
+                if (e->hasPan || e->subHit)
+                    engine.commands().push(
+                        Command::triggerPadAtSampleEx(e->pad, e->velocity, clamped, e->hasPan, e->pan, e->subHit));
+                else
+                    engine.commands().push(Command::triggerPadAtSample(e->pad, e->velocity, clamped));
                 break;
             case RenderEvent::Type::off:
                 engine.commands().push(Command::releasePadAtSample(e->pad, clamped));
                 break;
             case RenderEvent::Type::stop:
                 engine.commands().push(Command::stopPad(e->pad));
+                break;
+            case RenderEvent::Type::stopAt:
+                engine.commands().push(Command::stopPadAtSample(e->pad, clamped));
+                break;
+            case RenderEvent::Type::chokeSubHits:
+                engine.commands().push(Command::chokeSubHitsAtSample(e->pad, clamped));
                 break;
             }
             ++nextEvent;

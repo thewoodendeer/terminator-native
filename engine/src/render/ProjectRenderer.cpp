@@ -627,57 +627,99 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         runDur += durationOf(sq);
     const double patternDur = runDur;
     double lastEnd = 0.0;
-    for (int loop = 0; loop < std::max(1, opts.loops); ++loop)
+    // ARRANGEMENT MODE (4.7): the page's flattened song replaces the sequence schedule. A hit on a pad the bank has
+    // no audio for is dropped exactly as a sequence hit is; DRUM pads (kDrumPadBase + lane) are not chop pads and
+    // are always kept — their audio is the drum lane's.
+    if (opts.isArrangement())
     {
-        std::vector<SeqEvent> evs;
-        double cursor = loop * runDur;
-        for (const auto& sq : run)
+        for (const auto& e : opts.arrangementEvents)
         {
-            const auto part = planner.patternToEvents(sq, cursor);
-            evs.insert(evs.end(), part.begin(), part.end());
-            cursor += durationOf(sq);
-        }
-        for (const auto& e : evs)
-        {
-            if (padSlot.find(e.pad) == padSlot.end())
-                continue; // pad has no audio in the bank
-            RenderEvent on;
-            on.pad = static_cast<std::uint16_t>(e.pad);
-            on.timeSec = e.time;
-            on.velocity = e.velocity;
-            on.type = RenderEvent::Type::on;
-            spec.events.push_back(on);
-            // stop at the tail-group boundary (matches the sequencer's cut; a shorter one-shot ends on its own)
-            RenderEvent stop;
-            stop.pad = on.pad;
-            stop.timeSec = e.time + e.maxDur;
-            stop.type = RenderEvent::Type::stop;
-            spec.events.push_back(stop);
-            lastEnd = std::max(lastEnd, e.time + e.maxDur);
+            const bool isDrumPad = e.pad >= kDrumPadBase;
+            if (!isDrumPad && padSlot.find(static_cast<int>(e.pad)) == padSlot.end())
+                continue;
+            spec.events.push_back(e);
+            lastEnd = std::max(lastEnd, e.timeSec);
         }
     }
-    spec.lengthSeconds = std::max(patternDur * std::max(1, opts.loops), lastEnd) + opts.tailSeconds;
+    else
+    {
+        for (int loop = 0; loop < std::max(1, opts.loops); ++loop)
+        {
+            std::vector<SeqEvent> evs;
+            double cursor = loop * runDur;
+            for (const auto& sq : run)
+            {
+                const auto part = planner.patternToEvents(sq, cursor);
+                evs.insert(evs.end(), part.begin(), part.end());
+                cursor += durationOf(sq);
+            }
+            for (const auto& e : evs)
+            {
+                if (padSlot.find(e.pad) == padSlot.end())
+                    continue; // pad has no audio in the bank
+                RenderEvent on;
+                on.pad = static_cast<std::uint16_t>(e.pad);
+                on.timeSec = e.time;
+                on.velocity = e.velocity;
+                on.type = RenderEvent::Type::on;
+                spec.events.push_back(on);
+                // stop at the tail-group boundary (matches the sequencer's cut; a shorter one-shot ends on its own)
+                RenderEvent stop;
+                stop.pad = on.pad;
+                stop.timeSec = e.time + e.maxDur;
+                stop.type = RenderEvent::Type::stop;
+                spec.events.push_back(stop);
+                lastEnd = std::max(lastEnd, e.time + e.maxDur);
+            }
+        }
+    }
+    spec.lengthSeconds = opts.isArrangement()
+                             ? std::max(opts.arrangementLengthSeconds, lastEnd) + opts.tailSeconds
+                             : std::max(patternDur * std::max(1, opts.loops), lastEnd) + opts.tailSeconds;
     // the mix LAST: the strips a pad routed to must exist, and the namer has been handing out their indices as the
     // pads asked for them, so the blob's channels and the routed ones land on the same numbering
     spec.tempoBpm = tempo;
     if (opts.renderDrums)
     {
         spec.drums = buildDrumsSpec(project, bank, opts.useMixer ? &namer : nullptr);
+        if (opts.isArrangement())
+        {
+            // the lanes stay (samples, volumes, mute groups, strips); the sequencer does not run — the song's hits
+            // are in the event list, already carrying swing, VELOCITY, SHIFT, PAN and the REPEAT sub-hits
+            spec.drums.eventDriven = true;
+            spec.drums.pattern.reset();
+            spec.drums.graphs.reset();
+        }
         for (const auto& l : spec.drums.lanes)
             if (l.strip >= 0)
                 routed.push_back(l.key);
-        // a drum lane rings past the last hit like any one-shot: give the tail the same room the chops get
-        if (spec.drums.enabled)
+        // a drum lane rings past the last hit like any one-shot: give the tail the same room the chops get.
+        // In ARRANGEMENT mode the song's own length already bounds the render — the project's pattern duration says
+        // nothing about it and must not stretch (or shorten) the file.
+        if (spec.drums.enabled && !opts.isArrangement())
             spec.lengthSeconds = std::max(spec.lengthSeconds, patternDur * std::max(1, opts.loops) + opts.tailSeconds);
     }
     if (opts.renderBass)
     {
         spec.bass = buildBassSpec(project, opts.useMixer ? &namer : nullptr);
+        if (opts.isArrangement())
+        {
+            // the song's bass is a timeline, not the project's 8-bar pattern (a pattern cannot hold a song)
+            spec.bass.pattern.reset();
+            spec.bass.timeline = opts.arrangementBass;
+            if (opts.arrangementBassPatch != nullptr)
+                spec.bass.patch = opts.arrangementBassPatch; // the patch the SECTIONS were written with
+            spec.bass.enabled = spec.bass.timeline != nullptr && spec.bass.timeline->count > 0;
+            if (spec.bass.patch == nullptr && spec.bass.enabled)
+                spec.bass.patch = std::make_shared<BassPatch>();
+        }
         if (spec.bass.enabled)
         {
             if (spec.bass.strip >= 0)
                 routed.push_back("bass");
-            spec.lengthSeconds = std::max(spec.lengthSeconds, patternDur * std::max(1, opts.loops) + opts.tailSeconds);
+            if (!opts.isArrangement())
+                spec.lengthSeconds =
+                    std::max(spec.lengthSeconds, patternDur * std::max(1, opts.loops) + opts.tailSeconds);
         }
     }
     if (opts.useMixer)

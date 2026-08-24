@@ -32,12 +32,18 @@ enum class CommandType : std::uint32_t
                         // current block it fires at that offset, past it the engine books it (a 64-slot RT ring) and
                         // fires it sample-exact in the block that contains it (quantized live-record hits)
     releasePadAtSample, // trigger — same, for note-off
-    stopPad,            // trigger — stop the pad's voices (3 ms fade)
-    setNoteMap,         // noteMap — MIDI note → pad (−1 = unmapped)
-    startCalibration,   // calibration — emit a click on out channel, record in channel
-    setPadLoopBuffer,   // padLoop — attach/clear a pad's pre-rendered crossfade-loop buffer + its steady bracket
-    setPadStems,        // padStems — attach the pad's stem planes (drums/bass/other/vocals) + its 4-bit mask; a ringing
-                        // voice re-stems live (12 ms crossfade)
+    /// ARRANGEMENT hits (Phase 4.7): triggerPadAtSample plus the two things a drum lane needs and a plain trigger
+    /// cannot say — this hit's own PAN, and that it is a note-repeat SUB-HIT (chokes nothing; its end is booked
+    /// separately, exactly as the live DrumSequencer books it).
+    triggerPadAtSampleEx, // trigger — pan / subHit honoured
+    chokeSubHitsAtSample, // trigger — fade only this pad's SUB-HIT voices from that sample (a roll's self-choke)
+    stopPadAtSample,      // trigger — stop the pad's voices from that sample (the chop's own 3 ms fade)
+    stopPad,              // trigger — stop the pad's voices (3 ms fade)
+    setNoteMap,           // noteMap — MIDI note → pad (−1 = unmapped)
+    startCalibration,     // calibration — emit a click on out channel, record in channel
+    setPadLoopBuffer,     // padLoop — attach/clear a pad's pre-rendered crossfade-loop buffer + its steady bracket
+    setPadStems, // padStems — attach the pad's stem planes (drums/bass/other/vocals) + its 4-bit mask; a ringing
+                 // voice re-stems live (12 ms crossfade)
     // ---- the chop sequencer on the native transport (Phase 3.1, core/ChopSequencer.h) ----
     seqSetPattern,   // seq — live replace: the steps not fired yet read the new pattern (pointer owned by the shell)
     seqQueuePattern, // seq — switch at the next step 0 (the loop boundary); not playing = take it now
@@ -198,6 +204,7 @@ struct Command
             float velocity;           // 0..1 linear gain
             std::uint16_t pad;
             std::uint8_t hasPan; // 1 = `pan` overrides the pad's PadParams::pan for this hit (a drum lane's PAN)
+            std::uint8_t subHit; // 1 = a note-repeat SUB-HIT (chokes nothing; ended by chokeSubHitsAtSample)
             float pan;           // −1..1
         } trigger;
 
@@ -382,6 +389,7 @@ struct Command
         c.payload.trigger.velocity = velocity;
         c.payload.trigger.hostTimeNs = hostTimeNs;
         c.payload.trigger.hasPan = 0;
+        c.payload.trigger.subHit = 0;
         c.payload.trigger.pan = 0.0f;
         return c;
     }
@@ -401,6 +409,7 @@ struct Command
         c.payload.trigger.velocity = 0.0f;
         c.payload.trigger.hostTimeNs = hostTimeNs;
         c.payload.trigger.hasPan = 0;
+        c.payload.trigger.subHit = 0;
         c.payload.trigger.pan = 0.0f;
         return c;
     }
@@ -408,6 +417,32 @@ struct Command
     {
         Command c = triggerPad(pad, velocity, samplePosition);
         c.type = CommandType::triggerPadAtSample;
+        return c;
+    }
+    /// An ARRANGEMENT hit: sample-exact, with its own pan and/or as a note-repeat SUB-HIT (Phase 4.7).
+    static Command triggerPadAtSampleEx(std::uint16_t pad, float velocity, std::uint64_t samplePosition, bool hasPan,
+                                        float pan, bool subHit) noexcept
+    {
+        Command c = triggerPad(pad, velocity, samplePosition);
+        c.type = CommandType::triggerPadAtSampleEx;
+        c.payload.trigger.hasPan = hasPan ? 1 : 0;
+        c.payload.trigger.pan = pan;
+        c.payload.trigger.subHit = subHit ? 1 : 0;
+        return c;
+    }
+    /// End the pad's ringing SUB-HITS at `samplePosition` (the roll's self-choke — the fade ENDS where the next
+    /// sub-hit starts, which is what the live sequencer books).
+    static Command chokeSubHitsAtSample(std::uint16_t pad, std::uint64_t samplePosition) noexcept
+    {
+        Command c = releasePad(pad, samplePosition);
+        c.type = CommandType::chokeSubHitsAtSample;
+        return c;
+    }
+    /// Stop the pad's voices from `samplePosition` (a chop that must end where the next one starts).
+    static Command stopPadAtSample(std::uint16_t pad, std::uint64_t samplePosition) noexcept
+    {
+        Command c = releasePad(pad, samplePosition);
+        c.type = CommandType::stopPadAtSample;
         return c;
     }
     static Command releasePadAtSample(std::uint16_t pad, std::uint64_t samplePosition) noexcept

@@ -134,8 +134,20 @@ class Engine
     std::int32_t offsetForHostTime(std::uint64_t hostTimeNs, int numSamples) const noexcept TERMINATOR_NONBLOCKING;
     void publish(int numSamples) noexcept TERMINATOR_NONBLOCKING;
     void firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    /// What a booked event does when its sample arrives.
+    enum class BookKind : std::uint8_t
+    {
+        trigger = 0,
+        release,
+        chokeSubHits, // fade the pad's SUB-HIT voices (a roll's self-choke)
+        stop          // the pad's own choke fade on every voice
+    };
     void bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release, int numSamples,
-                     bool hasPan = false, float pan = 0.0f) noexcept TERMINATOR_NONBLOCKING;
+                     bool hasPan = false, float pan = 0.0f, bool subHit = false,
+                     BookKind kind = BookKind::trigger) noexcept TERMINATOR_NONBLOCKING;
+    /// Fire one booked event at `offsetInBlock` (shared by bookTrigger's in-block path and firePendingTriggers).
+    void fireBooked(BookKind kind, std::uint16_t pad, float velocity, bool hasPan, float pan, bool subHit,
+                    std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING;
     void noteLiveHit(std::uint16_t pad, double atSample) noexcept TERMINATOR_NONBLOCKING
     {
         if (pad < kMaxPads)
@@ -211,6 +223,8 @@ class Engine
         bool release;
         bool hasPan;
         bool used;
+        bool subHit = false;
+        BookKind kind = BookKind::trigger;
     };
     PendingTrigger pendingTrig_[kMaxPendingTriggers] = {};
 

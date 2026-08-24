@@ -1487,6 +1487,77 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
     opts.masterLimiter = static_cast<bool>(req.getProperty("limiter", true));
     // `song` = every sequence back to back (the app's Master Mixdown); off = the current pattern on repeat
     opts.allSequences = static_cast<bool>(req.getProperty("song", false));
+    // ARRANGEMENT (Phase 4.7): `arrangement` = the Beat Finisher song, flattened by the page into absolute-time
+    // hits — the same flattening its own arranger preview runs, so there is ONE implementation of what plays when.
+    // Everything about the sound still comes from the project; only the schedule is the arrangement's.
+    //   { lengthSec, hits: [{pad, t, vel?, pan?, sub?, rev?, stop?}], bass: [{kind, t, note?, vel?, value?}],
+    //     bassPatch? }
+    // `stop` is an absolute time: a chop's cut at the next hit (stopAt — a one-shot ignores a note-off) or a REPEAT
+    // sub-hit's self-choke (chokeSubHits). Mute-group choke is NOT sent: the drum pads carry their groups, so the
+    // engine chokes in the same order playback does.
+    if (const auto arrangement = req.getProperty("arrangement", juce::var()); arrangement.isObject())
+    {
+        opts.arrangementLengthSeconds = std::max(0.0, static_cast<double>(arrangement.getProperty("lengthSec", 0.0)));
+        if (const auto* hits = arrangement.getProperty("hits", juce::var()).getArray())
+        {
+            opts.arrangementEvents.reserve(static_cast<std::size_t>(hits->size()) * 2);
+            for (const auto& h : *hits)
+            {
+                if (!h.isObject())
+                    continue;
+                RenderEvent e;
+                e.pad = static_cast<std::uint16_t>(std::clamp(static_cast<int>(h.getProperty("pad", 0)), 0, 255));
+                e.timeSec = std::max(0.0, static_cast<double>(h.getProperty("t", 0.0)));
+                e.velocity = std::clamp(static_cast<float>(static_cast<double>(h.getProperty("vel", 1.0))), 0.0f, 4.0f);
+                if (h.hasProperty("pan"))
+                {
+                    e.hasPan = true;
+                    e.pan = std::clamp(static_cast<float>(static_cast<double>(h.getProperty("pan", 0.0))), -1.0f, 1.0f);
+                }
+                e.subHit = static_cast<bool>(h.getProperty("sub", false));
+                if (h.hasProperty("rev"))
+                    e.reverse = static_cast<bool>(h.getProperty("rev", false)) ? 1 : 0;
+                opts.arrangementEvents.push_back(e);
+                if (h.hasProperty("stop"))
+                {
+                    const double at = static_cast<double>(h.getProperty("stop", 0.0));
+                    if (at > e.timeSec)
+                    {
+                        RenderEvent cut;
+                        cut.pad = e.pad;
+                        cut.timeSec = at;
+                        cut.type = e.subHit ? RenderEvent::Type::chokeSubHits : RenderEvent::Type::stopAt;
+                        opts.arrangementEvents.push_back(cut);
+                    }
+                }
+            }
+        }
+        if (const auto* bass = arrangement.getProperty("bass", juce::var()).getArray();
+            bass != nullptr && !bass->isEmpty())
+        {
+            auto tl = std::make_shared<BassTimeline>();
+            for (const auto& b : *bass)
+            {
+                if (!b.isObject())
+                    continue;
+                const auto kindName = b.getProperty("kind", "on").toString();
+                const auto kind = kindName == "off"     ? BassSynth::EventKind::off
+                                  : kindName == "slide" ? BassSynth::EventKind::slide
+                                  : kindName == "bend"  ? BassSynth::EventKind::bend
+                                                        : BassSynth::EventKind::on;
+                const auto at = static_cast<std::uint64_t>(
+                    std::max(0.0, static_cast<double>(b.getProperty("t", 0.0)) * opts.sampleRate));
+                if (!tl->add(kind, at, std::clamp(static_cast<int>(b.getProperty("note", 40)), 0, 127),
+                             std::clamp(static_cast<float>(static_cast<double>(b.getProperty("vel", 1.0))), 0.0f, 1.0f),
+                             static_cast<double>(b.getProperty("value", 0.0))))
+                    break; // the timeline is full (4096 events) — the rest of the line cannot be scheduled
+            }
+            opts.arrangementBass = tl;
+        }
+        // the patch travels WITH the arrangement (the Beat Finisher bakes what the sections were written with)
+        if (const auto patch = arrangement.getProperty("bassPatch", juce::var()); patch.isObject())
+            opts.arrangementBassPatch = std::make_shared<BassPatch>(render::bassPatchFromVar(patch));
+    }
     if (const auto* stems = req.getProperty("stems", juce::var()).getArray())
         for (const auto& s : *stems)
             opts.stemChannels.push_back(s.toString());

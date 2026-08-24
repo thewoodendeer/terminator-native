@@ -214,6 +214,19 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::releasePadAtSample:
         bookTrigger(c.payload.trigger.pad, 0.0f, c.payload.trigger.hostTimeNs, true, numSamples);
         break;
+    case CommandType::triggerPadAtSampleEx:
+        bookTrigger(c.payload.trigger.pad, c.payload.trigger.velocity, c.payload.trigger.hostTimeNs, false, numSamples,
+                    c.payload.trigger.hasPan != 0, c.payload.trigger.pan, c.payload.trigger.subHit != 0,
+                    BookKind::trigger);
+        break;
+    case CommandType::chokeSubHitsAtSample:
+        bookTrigger(c.payload.trigger.pad, 0.0f, c.payload.trigger.hostTimeNs, false, numSamples, false, 0.0f, false,
+                    BookKind::chokeSubHits);
+        break;
+    case CommandType::stopPadAtSample:
+        bookTrigger(c.payload.trigger.pad, 0.0f, c.payload.trigger.hostTimeNs, false, numSamples, false, 0.0f, false,
+                    BookKind::stop);
+        break;
     case CommandType::stopPad:
         sampler_.stopPad(c.payload.trigger.pad);
         break;
@@ -492,24 +505,44 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     ++commandsApplied_;
 }
 
-void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release, int numSamples,
-                         bool hasPan, float pan) noexcept TERMINATOR_NONBLOCKING
+void Engine::fireBooked(BookKind kind, std::uint16_t pad, float velocity, bool hasPan, float pan, bool subHit,
+                        std::int32_t offsetInBlock) noexcept TERMINATOR_NONBLOCKING
 {
+    switch (kind)
+    {
+    case BookKind::release:
+        sampler_.release(pad, offsetInBlock);
+        return;
+    case BookKind::chokeSubHits:
+        sampler_.stopSubHitsAt(pad, offsetInBlock);
+        return;
+    case BookKind::stop:
+        sampler_.stopPadAt(pad, offsetInBlock);
+        return;
+    case BookKind::trigger:
+        break;
+    }
+    if (hasPan || subHit)
+        sampler_.triggerEx(pad, velocity, offsetInBlock, hasPan ? pan : 0.0f, subHit);
+    else
+        sampler_.trigger(pad, velocity, offsetInBlock);
+}
+
+void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSample, bool release, int numSamples,
+                         bool hasPan, float pan, bool subHit, BookKind kind) noexcept TERMINATOR_NONBLOCKING
+{
+    if (release)
+        kind = BookKind::release;
     // inside this block (or in the past): fire now at its offset; later: wait in the ring (fired by
     // firePendingTriggers in the block that contains it — sample-exact, any lead)
     const std::uint64_t blockEnd = samplesProcessed_ + static_cast<std::uint64_t>(numSamples);
-    if (!release)
+    if (kind == BookKind::trigger)
         noteLiveHit(pad, static_cast<double>(atSample)); // the one-owner rule sees the booking immediately
     if (atSample < blockEnd)
     {
         const auto off = atSample > samplesProcessed_ ? static_cast<std::int64_t>(atSample - samplesProcessed_) : 0;
         const auto clampedOff = static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1));
-        if (release)
-            sampler_.release(pad, clampedOff);
-        else if (hasPan)
-            sampler_.triggerEx(pad, velocity, clampedOff, pan, false);
-        else
-            sampler_.trigger(pad, velocity, clampedOff);
+        fireBooked(kind, pad, velocity, hasPan, pan, subHit, clampedOff);
         return;
     }
     for (auto& t : pendingTrig_)
@@ -519,18 +552,15 @@ void Engine::bookTrigger(std::uint16_t pad, float velocity, std::uint64_t atSamp
             t.sample = atSample;
             t.velocity = velocity;
             t.pad = pad;
-            t.release = release;
+            t.release = kind == BookKind::release;
             t.hasPan = hasPan;
             t.pan = pan;
+            t.subHit = subHit;
+            t.kind = kind;
             return;
         }
     // ring full (64 hits booked ahead): fire now rather than lose it
-    if (release)
-        sampler_.release(pad, 0);
-    else if (hasPan)
-        sampler_.triggerEx(pad, velocity, 0, pan, false);
-    else
-        sampler_.trigger(pad, velocity, 0);
+    fireBooked(kind, pad, velocity, hasPan, pan, subHit, 0);
 }
 
 void Engine::firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING
@@ -542,16 +572,9 @@ void Engine::firePendingTriggers(int numSamples) noexcept TERMINATOR_NONBLOCKING
             continue;
         const auto off = t.sample > samplesProcessed_ ? static_cast<std::int64_t>(t.sample - samplesProcessed_) : 0;
         const auto clampedOff = static_cast<std::int32_t>(std::min<std::int64_t>(off, numSamples - 1));
-        if (t.release)
-            sampler_.release(t.pad, clampedOff);
-        else
-        {
-            if (t.hasPan)
-                sampler_.triggerEx(t.pad, t.velocity, clampedOff, t.pan, false);
-            else
-                sampler_.trigger(t.pad, t.velocity, clampedOff);
+        fireBooked(t.kind, t.pad, t.velocity, t.hasPan, t.pan, t.subHit, clampedOff);
+        if (t.kind == BookKind::trigger)
             noteLiveHit(t.pad, static_cast<double>(t.sample)); // re-stamp: a later booking of the same pad overwrote it
-        }
         t.used = false;
     }
 }

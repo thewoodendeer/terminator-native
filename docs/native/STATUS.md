@@ -1777,6 +1777,56 @@ oversampling holds the non-harmonic floor below −45 dB on a driven 6 kHz tone 
 44.1/48/96/192 k through every mode at full RESO+DRIVE with the cutoff sweeping · reset clears · **block-size
 invariance to 1e-9 (8192 vs 37)**. mac-debug 0 warnings + ctest **295/295** · RTSan **296/296** · clang-format clean.
 
+## Phase 4 — 4.7a DONE (THE ARRANGEMENT CAN RENDER NATIVELY: ENGINE + BRIDGE), 2026-08-24 thirteenth session
+
+**Victor's call on the 4.6a blocker: make the export native.** This is the engine half.
+
+**The contract.** The Beat Finisher song is a PAGE structure (sections × bars, per-section chop rows / drum rows /
+bass, the drum graphs, swing, REPEAT, mute groups) and the page has always flattened it to absolute-time hits for
+its own arranger PREVIEW. That flattening stays where it is — one implementation, already the one you hear when you
+press play in the arranger. What was missing is the other half: **an engine render that takes those hits.** So:
+the page decides WHAT plays and WHEN; the engine decides how it SOUNDS. `ProjectRenderOptions::arrangementEvents`
+(+ `arrangementBass`, `arrangementBassPatch`, `arrangementLengthSeconds`) REPLACE the sequence-driven schedule while
+every bit of the sound — the pads and their regions, the drum lanes' samples and mute groups, the bass patch, the
+mixer, the console, PDC, the limiter, the dither — still comes from the project.
+
+**What had to be added to say what a live lane already does:**
+- `RenderEvent` grew `hasPan` / `pan` (a drum lane's per-step PAN), `subHit` (a note-repeat sub-hit: **chokes
+  nothing** — live it bypasses the lane registry and the sequencer books its end), and `reverse` −1/0/1 (the chop
+  sequencer's per-cell REVERSE; live the shadow flips the pad param right before the trigger, and the offline
+  renderer now does exactly that — commands are drained in order, so the voice reads the flipped setting).
+- Two new event types: **`stopAt`** (a chop cut where the next one starts — `off` is a note-off and a ONE-SHOT
+  IGNORES IT, so cutting needs the pad's choke fade) and **`chokeSubHits`** (the roll's self-choke).
+- `Engine::bookTrigger` became kind-aware (`BookKind` trigger / release / chokeSubHits / stop) with one `fireBooked`
+  shared by the in-block path and the pending ring, so a sample-exact booking can now be any of the four.
+- `RenderDrumsSpec::eventDriven`: bind the lanes (samples, volumes, mute groups, 4 ms choke, strips) and **do not
+  start the sequencer**. Mute-group choke is still the ENGINE's — the pads keep their groups, so a bounce chokes in
+  the same order playback does, and the page never sends `groupCutAt`.
+- `RenderBassSpec::timeline`: the song's bass is the same **`BassTimeline`** the live arranger preview already sends
+  (absolute events, 4096 cap). **A `BassPattern` tops out at 8 bars / 512 notes — a song cannot BE a pattern**, which
+  is why this had to be the timeline and not a longer pattern.
+- The bridge (`terminatorExport`) parses `arrangement: {lengthSec, hits[{pad,t,vel,pan?,sub?,rev?,stop?}],
+  bass[{kind,t,note,vel,value}], bassPatch?}`. `stop` is absolute: a chop's cut, or a sub-hit's self-choke.
+
+**Caught while wiring it:** in arrangement mode the drum and bass legs were still stretching `lengthSeconds` to
+`patternDur × loops` — the PROJECT's pattern length, which says nothing about the song. It would have padded (or,
+with a long pattern, silently overrun) every arranged export. Both are now guarded.
+
+**Gates (4.7a):** `tests/engine/test_export_arrangement.cpp`, 8 cases — a hit lands on its sample at block sizes
+32/128/512/1024 · a hit's own PAN (hard left / hard right, and a pan-less hit untouched) · sub-hits stack instead of
+choking and their choke event ends only them · a chop cut where the next starts (with the negative control: uncut it
+rings on) · a per-hit REVERSE flips only that hit (read off a ramp) · drum lanes bound with the sequencer off, then
+the engine's own mute-group choke · the bass timeline plays where no pattern could · arrangement mode REPLACES the
+sequence schedule, keeps the project's sound, and takes the SONG's length. mac-debug 0 warnings + ctest **303/303**
+· clang-format clean.
+
+**NEXT (4.7b): the page side.** `exportNative.ts` takes the arrangement payload; a builder turns the live
+`Arrangement` + engine/drumEngine into it with the EXISTING exported helpers (`buildDrumTrackHits`, `drumGraphsOf`,
+and `buildChopEvents` once exported); the EXPORT dialog's master/stems targets route to `exportProjectNative` when
+running in the shell. MPC Project / Drum Rack stay on the page exporters (no .mpcsample/.adg writer natively). The
+key maps (`main` / `sources` / `drumLanes`) come from the live shadow's own SampleStore keys — every buffer the
+export needs is already uploaded because it is what is playing.
+
 ### THE BLOCKER THIS UNCOVERED — a premium device is heard but NOT exported (needs Victor's call)
 `exportProjectNative` (the whole of 4.5) is wired to **the probe only**. The shipping EXPORT dialog calls the
 PAGE's `exportArrangement` → `renderArrangementDAW`, i.e. the Web Audio mixer, because that is the only thing that

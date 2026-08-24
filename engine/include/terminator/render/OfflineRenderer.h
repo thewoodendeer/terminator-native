@@ -57,12 +57,24 @@ struct RenderEvent
     {
         on,
         off,
-        stop
+        stop,
+        /// Phase 4.7: end this pad's voices HERE with its own choke fade (a chop that must stop where the next one
+        /// starts — `off` is a note-off, which a one-shot ignores), and end only its note-repeat SUB-HITS.
+        stopAt,
+        chokeSubHits
     };
     std::uint16_t pad = 0;
     double timeSec = 0.0;
     float velocity = 1.0f;
     Type type = Type::on;
+    /// ARRANGEMENT hits (Phase 4.7). `hasPan` = this hit carries a drum lane's per-step PAN; `subHit` = it is a
+    /// note-repeat sub-hit (chokes nothing, ended by a chokeSubHits event); `reverse` −1 = the pad's own setting,
+    /// 0 / 1 = this hit's override (the chop sequencer's per-cell REVERSE, which live is a pad-param flip pushed
+    /// right before the trigger — commands keep their order, so an offline render does exactly the same).
+    bool hasPan = false;
+    bool subHit = false;
+    float pan = 0.0f;
+    std::int8_t reverse = -1;
 };
 
 /// One drum lane in an export (Phase 4.5c): what it plays, how loud, its mute group and its mixer strip. Lane L is
@@ -91,6 +103,12 @@ struct RenderDrumsSpec
     double swing = 0.0;
     float masterVolume = 1.0f;
     int ppq = 96;
+    /// Phase 4.7 (ARRANGEMENT): bind the lanes — sample, volume-in-the-hit, mute group, choke fade, strip — but do
+    /// NOT start the sequencer. The hits arrive as `RenderSpec::events` on pad kDrumPadBase + lane, already carrying
+    /// swing, VELOCITY, SHIFT, PAN and the REPEAT sub-hits, because a Beat Finisher arrangement is sections of rows
+    /// rather than one looping pattern. Mute-group choke is still the engine's (the pads keep their groups), so a
+    /// bounce chokes in the same order playback does.
+    bool eventDriven = false;
 };
 
 /// The BASS for an export (Phase 4.5d): the engine's own BassSequencer + BassSynth render it, so a bounce carries
@@ -100,6 +118,11 @@ struct RenderBassSpec
     bool enabled = false;
     std::shared_ptr<BassPatch> patch;
     std::shared_ptr<BassPattern> pattern;
+    /// Phase 4.7 (ARRANGEMENT): absolute-time events instead of a looping pattern — the same `BassTimeline` the
+    /// live arranger preview already sends (nativeBassShadow's `arr` tag), so a song's bass line is one list of
+    /// note-ons / offs / slides / bends rather than an 8-bar loop it cannot fit in. With a timeline and no pattern
+    /// the sequencer's ticks never run; the synth is driven entirely by the list.
+    std::shared_ptr<BassTimeline> timeline;
     int strip = -1; // the mixer strip the synth sums into (−1 = the Phase-3 direct path)
 };
 

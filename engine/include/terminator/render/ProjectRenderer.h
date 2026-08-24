@@ -58,6 +58,23 @@ struct ProjectRenderOptions
     /// app's own Master Mixdown does (ChopperEngine.exportMaster concatenates `sequences`). `loops` then repeats the
     /// whole run. Off = the current sequence only, which is what a pattern bounce wants.
     bool allSequences = false;
+    /// ARRANGEMENT MODE (Phase 4.7). Non-empty = the Beat Finisher song: the page has flattened its sections
+    /// (bars × per-section chop rows, drum rows, graphs, swing, REPEAT, bass) into absolute-time events, exactly as
+    /// its own arranger preview does, and these REPLACE the sequence-driven schedule. Everything about the SOUND
+    /// still comes from the project — the pads and their regions, the drum lanes' samples and mute groups, the bass
+    /// patch, the mixer, the console, PDC, the limiter — so the file is what the app plays; only the TIMING is the
+    /// arrangement's. Drums become `eventDriven` (lanes bound, sequencer off) and the bass runs off `arrangementBass`
+    /// instead of its 8-bar pattern.
+    std::vector<RenderEvent> arrangementEvents;
+    /// The song's bass line as absolute events (the same BassTimeline the live arranger preview sends).
+    std::shared_ptr<BassTimeline> arrangementBass;
+    /// The PATCH the song's bass renders through. It travels with the arrangement (Arrangement.bassPatch), which is
+    /// not necessarily the project's current one — the Beat Finisher bakes what the sections were written with.
+    /// Null = the project's patch.
+    std::shared_ptr<BassPatch> arrangementBassPatch;
+    /// The song's length in seconds (the sections' bars). 0 = derive it from the last event. `tailSeconds` is added.
+    double arrangementLengthSeconds = 0.0;
+    bool isArrangement() const { return !arrangementEvents.empty(); }
     /// The master's −1 dBFS safety limiter. The page always has it in, so exports carry it by default; off gives an
     /// UNLIMITED master bounce, which is also what makes the master exactly the sum of its trackouts.
     bool masterLimiter = true;
