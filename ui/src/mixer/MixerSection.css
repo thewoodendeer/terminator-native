@@ -612,6 +612,10 @@
 .mx-device-sub { font-size: 8px; color: var(--hw-muted, #6c7a8c); }
 /* M/S everywhere (4.7a): the slot's route, sitting with the device's name rather than among its params — it is
    not one of the device's controls, it decides what the device is pointed at. */
+/* GROUPS + BUSES (4.7d): the GROUP action, and a bus strip reading as its own thing rather than as one more
+   channel — a group you cannot pick out at a glance is a group you will forget you made. */
+.mx-group-btn { color: var(--hw-accent, #e7a977); border-color: var(--hw-accent, #e7a977); font-weight: 700; }
+.mx-strip-bus { box-shadow: inset 0 2px 0 var(--hw-accent, #e7a977); }
 .mx-device-route {
   margin-left: auto; font-size: 8px; letter-spacing: 0.5px;
   background: var(--hw-panel, #0e1626); color: var(--hw-muted, #8899aa);

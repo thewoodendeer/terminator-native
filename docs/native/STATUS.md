@@ -1739,6 +1739,44 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.7d DONE (GROUPS AND BUSES — THE LAST ITEM ON THE BRIEF), 2026-08-24
+
+The routing half of B4: "any channel can route to any channel to create groups and busses", and "multi-select
+several mixer tracks → group them into a bus in one gesture". **The engine already had all of it** — `setOutput`
+with a `reaches()` cycle guard and `StripKind::bus` have been there since 4.1. What was missing was everything
+above it: the page had no bus concept, no per-strip output, and the exporter never read a routing.
+
+- **Page model:** `ChannelStrip.outputTo`, `MixerEngine.setOutputTo()` (which re-wires the page's own Web Audio
+  graph too, so the browser build and the meters agree with the engine), `BUS_CHANNELS`, and `addChannel(name,
+  {kind: 'bus'})`.
+- **The gesture:** `groupChannels(names)` — a new `busN` appears, every selected strip is re-routed into it, the
+  bus goes to the master. In the UI it is a **GROUP** button that shows up as soon as two strips are selected (the
+  marquee selection was already there), and bus strips render with an accent bar so a group is visible at a glance.
+- **It survives a save:** the strip preset carries `out`, `restore()` re-creates `busN` strips as BUSES and applies
+  every routing **after all the strips exist** (a strip pointed at a bus that did not exist yet would silently have
+  stayed on the master).
+- **It survives an export:** `buildMixerSpec` resolves the saved name to a strip index, and a strip named `bus…`
+  becomes `StripKind::bus` so **PDC puts it in the bus tier** — a group returning on the channel tier would arrive
+  early against the channels feeding it.
+- **It survives an attach:** the shadow re-sends the routing with the strip, or a re-attached session would come
+  back with every group empty.
+
+**A guard the Mixer was missing, found by my own test:** `Mixer::process()` never checked `numSamples` against the
+block it was PREPARED for. A test that pushed 512 through a mixer prepared for 128 got **silence** back instead of
+a complaint — the friendlier of the two things that can happen when you run off the end of every internal buffer.
+There is an `TERMINATOR_RT_ASSERT` + a clamp now.
+
+**Gates (4.7d):** 3 more cases in `test_fx_route.cpp` — the exporter resolves routing by name (including an older
+project with no `out` key landing on the master, and the bus coming back as `StripKind::bus`) · the cycle guard
+refuses a loop, a self-route and a back-route while allowing the master · **and the audio really arrives at the
+bus**: pulling the BUS fader down takes the channel with it.
+**mac-debug ctest 367/367 · RTSan 368/368 · app probe PROBE OK · ui typecheck 5 = baseline · vite clean.**
+
+### B4's PHASE-4 BRIEF IS COMPLETE
+Every item: 64-bit summing · every effect rebuilt · the CONSOLE re-models · Analog Filter · Lexicon-224 reverb ·
+the multi-band EQ · tape echo · the Distressor-shaped comp · the SSL channel strip · Decapitator-shaped saturation ·
+RC-20-shaped RETRO · the Pro-L-shaped limiter · mid/side everywhere · groups and buses.
+
 ## Phase 4 — 4.7c DONE (CHANNEL: THE SSL 4000 G STRIP — THE LAST DEVICE ON THE BRIEF), 2026-08-24
 
 `ChannelStripFx`, `FxType::channelstrip`, 24 params. Filters (HPF 16–350, LPF 3k–22k, off at their ends as on the

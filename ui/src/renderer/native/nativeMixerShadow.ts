@@ -85,6 +85,11 @@ export class NativeMixerShadow {
       fxBypass: (name, index, on) => this.queue({ type: 'mixerSetFxBypass', strip: this.idxOf(name), index, on }),
       // M/S everywhere (4.7a): the SLOT's route. The engine owns the split (and the delay that keeps the untouched
       // half aligned when the device has latency), so only the choice crosses.
+      // GROUPS + BUSES (4.7d): where a strip's output goes. The engine refuses a cycle itself (Mixer::setOutput
+      // walks the graph with `reaches`), so an impossible routing is rejected there rather than half-applied here.
+      output: (name, target) => this.queue(target === 'master'
+        ? { type: 'mixerSetOutput', strip: this.idxOf(name), to: 'master' }
+        : { type: 'mixerSetOutput', strip: this.idxOf(name), to: 'strip', index: this.idxOf(target) }),
       fxRoute: (name, index, route) => this.queue({ type: 'mixerSetFxRoute', strip: this.idxOf(name), index, route }),
       fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value: this.fxValue(id, key, value) }),
       fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
@@ -93,7 +98,8 @@ export class NativeMixerShadow {
       pdc: (on) => this.queue({ type: 'mixerSetPdc', on }),
     });
     // the whole page mixer, as it stands: every strip + the master + the CLICK strip + the sources + CONSOLE
-    for (const [name, strip] of this.mixer.channels) this.mirror(name, strip.isSend ? 'send' : 'channel');
+    for (const [name, strip] of this.mixer.channels)
+      this.mirror(name, strip.isSend ? 'send' : name.startsWith('bus') ? 'bus' : 'channel');
     this.queue({ type: 'mixerSetFader', strip: 0, db: this.mixer.master.faderDb });
     this.mirrorChain('master');
     this.queue({ type: 'mixerSetConsole', on: this.mixer.console.on, flavour: this.mixer.console.flavour, amount: this.mixer.console.amount });
@@ -122,7 +128,7 @@ export class NativeMixerShadow {
    *  place. −1 when the pool is exhausted (63 strips). */
   stripFor(name: ChannelName): number {
     const have = this.names.get(name);
-    if (have !== undefined) { if (!this.live.has(have) && !this.detached) this.activate(have, name.startsWith('send') ? 'send' : 'channel', name); return have; }
+    if (have !== undefined) { if (!this.live.has(have) && !this.detached) this.activate(have, name.startsWith('send') ? 'send' : name.startsWith('bus') ? 'bus' : 'channel', name); return have; }
     const used = new Set(this.names.values());
     for (let i = FIRST_DYNAMIC_STRIP; i < MAX_STRIPS; i++) {
       if (used.has(i)) continue;
@@ -193,14 +199,14 @@ export class NativeMixerShadow {
   }
 
   // ── the mirror ──
-  private activate(idx: number, kind: 'channel' | 'send', name?: string): void {
+  private activate(idx: number, kind: 'channel' | 'send' | 'bus', name?: string): void {
     if (idx < 0 || idx >= MAX_STRIPS || this.live.has(idx)) return;
     this.live.add(idx);
     this.host.note('strips', 1);
     // the CONSOLE seed = the page's FNV-1a of the strip NAME (ConsoleStage seeds by name: "kick" is always the same kick)
     this.queue({ type: 'mixerSetStrip', strip: idx, kind, seed: fnv1a(name ?? nameOf(this.names, idx) ?? 'strip') });
   }
-  private mirror(name: ChannelName, kind: 'channel' | 'send'): void {
+  private mirror(name: ChannelName, kind: 'channel' | 'send' | 'bus'): void {
     const strip = this.mixer.channels.get(name);
     if (!strip) return;
     const idx = this.stripFor(name);
@@ -211,6 +217,10 @@ export class NativeMixerShadow {
     this.queue({ type: 'mixerSetMute', strip: idx, on: strip.muted });
     this.queue({ type: 'mixerSetSolo', strip: idx, on: strip.soloed });
     if (!strip.isSend) for (let i = 0; i < SEND_CHANNELS.length; i++) this.send(name, i, strip.sendDbs[i] ?? FADER_MIN_DB);
+    // GROUPS + BUSES (4.7d): a strip that feeds a group has to say so again on attach, or it would come back
+    // pointing at the master and the group would be empty.
+    if (strip.outputTo && strip.outputTo !== 'master')
+      this.queue({ type: 'mixerSetOutput', strip: idx, to: 'strip', index: this.stripFor(strip.outputTo) });
     this.mirrorChain(name);
   }
   /** The strip's whole insert chain, as it stands (attach / a channel re-created): clear natively, then add + params
@@ -242,7 +252,7 @@ export class NativeMixerShadow {
     return this.names.get(value) ?? this.stripFor(value as ChannelName);
   }
   private idxOf(name: ChannelName | 'master'): number { return name === 'master' ? 0 : this.stripFor(name); }
-  private channel(name: ChannelName, kind: 'channel' | 'send', present: boolean): void {
+  private channel(name: ChannelName, kind: 'channel' | 'send' | 'bus', present: boolean): void {
     if (this.detached) return;
     if (present) { this.mirror(name, kind); return; }
     const idx = this.names.get(name);

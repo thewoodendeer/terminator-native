@@ -12,6 +12,7 @@
 
 #include "terminator/core/Mixer.h"
 #include "terminator/core/fx/FxPool.h"
+#include "terminator/render/ProjectRenderer.h"
 
 using namespace terminator;
 using Catch::Approx;
@@ -207,4 +208,112 @@ TEST_CASE("route: when the compensation lines run out, the slot stays STEREO", "
     REQUIRE(mixer.addFx(5, FxType::ladder));
     mixer.setFxRoute(5, 0, FxRoute::side);
     CHECK(mixer.fxRoute(5, 0) == FxRoute::side);
+}
+
+// ---- GROUPS + BUSES (4.7d) -------------------------------------------------------------------------------------
+// A strip can feed another strip instead of the master, which is what a group bus is. The engine already owned the
+// routing graph and its cycle guard; what these gate is that the EXPORT resolves the page's saved routing — a
+// group that only exists during playback and collapses in the bounce would be worse than no groups at all.
+
+TEST_CASE("groups: the exporter resolves a strip's routing by name", "[mixer][route][groups]")
+{
+    juce::ValueTree project("Project");
+    juce::DynamicObject::Ptr chans(new juce::DynamicObject());
+    const auto channel = [&](const char* name, const char* out)
+    {
+        juce::DynamicObject::Ptr c(new juce::DynamicObject());
+        c->setProperty("fader", 0.0);
+        if (out != nullptr)
+            c->setProperty("out", juce::String(out));
+        chans->setProperty(juce::Identifier(name), juce::var(c.get()));
+    };
+    channel("kick", "bus1");
+    channel("snare", "bus1");
+    channel("hat", nullptr); // no key at all = an older project = the master
+    channel("bus1", "master");
+    juce::DynamicObject::Ptr blob(new juce::DynamicObject());
+    blob->setProperty("channels", juce::var(chans.get()));
+    project.setProperty("mixer", juce::var(blob.get()), nullptr);
+
+    render::StripNamer namer;
+    const auto spec = render::buildMixerSpec(project, namer, {}, {}, true);
+    const auto find = [&](const juce::String& name)
+    {
+        const int idx = namer(name);
+        for (const auto& st : spec.strips)
+            if (st.index == idx)
+                return st;
+        FAIL("strip not in the spec: " << name);
+        return RenderStripSpec{};
+    };
+    const auto kick = find("kick"), snare = find("snare"), hat = find("hat"), bus = find("bus1");
+    CHECK(kick.outKind == StripOutput::strip);
+    CHECK(kick.outIndex == bus.index);
+    CHECK(snare.outIndex == bus.index);
+    CHECK(hat.outKind == StripOutput::master); // the safe default, and where it was before groups existed
+    CHECK(bus.outKind == StripOutput::master);
+    // …and the bus is a BUS, so PDC puts it in the bus tier with the sends rather than with the channels feeding it
+    CHECK(bus.kind == StripKind::bus);
+    CHECK(kick.kind == StripKind::channel);
+}
+
+TEST_CASE("groups: the engine refuses a routing cycle", "[mixer][route][groups]")
+{
+    // The page never has to police this — the guard is here, where the graph is.
+    FxPool pool;
+    pool.prepare(kSr, kBlock);
+    Mixer mixer;
+    mixer.setPool(&pool);
+    mixer.prepare(kSr, kBlock);
+    mixer.setStripKind(1, StripKind::channel);
+    mixer.setStripKind(2, StripKind::bus);
+    mixer.setStripKind(3, StripKind::bus);
+    CHECK(mixer.setOutput(1, StripOutput::strip, 2));       // channel → bus
+    CHECK(mixer.setOutput(2, StripOutput::strip, 3));       // bus → bus
+    CHECK_FALSE(mixer.setOutput(3, StripOutput::strip, 2)); // …would close the loop
+    CHECK_FALSE(mixer.setOutput(3, StripOutput::strip, 1)); // …so would going back to the channel
+    CHECK_FALSE(mixer.setOutput(2, StripOutput::strip, 2)); // and a strip cannot feed itself
+    CHECK(mixer.setOutput(3, StripOutput::master, 0));      // the master is always allowed
+}
+
+TEST_CASE("groups: audio really arrives at the bus and not at the master", "[mixer][route][groups]")
+{
+    FxPool pool;
+    pool.prepare(kSr, kBlock);
+    Mixer mixer;
+    mixer.setPool(&pool);
+    mixer.prepare(kSr, kBlock);
+    mixer.setStripKind(1, StripKind::channel);
+    mixer.setStripKind(2, StripKind::bus);
+    REQUIRE(mixer.setOutput(1, StripOutput::strip, 2));
+
+    const int n = kBlock; // NEVER more than the block the mixer was prepared for — its buffers are sized for it
+    std::vector<float> bl(static_cast<std::size_t>(n)), br(static_cast<std::size_t>(n));
+    float* outs[2] = {bl.data(), br.data()};
+    // Several blocks per measurement: the fader glides (tau 8 ms), so one 128-sample block is nowhere near enough
+    // for a −40 dB move to have happened.
+    const auto push = [&](float busFader)
+    {
+        mixer.setFader(2, busFader);
+        double peakOut = 0.0;
+        for (int b = 0; b < 24; ++b)
+        {
+            std::fill(bl.begin(), bl.end(), 0.0f);
+            std::fill(br.begin(), br.end(), 0.0f);
+            mixer.clearInputs(n);
+            double* const* in = mixer.inputs();
+            for (int i = 0; i < n; ++i)
+                in[2][i] = in[3][i] = 0.5;
+            mixer.process(outs, 2, n);
+            peakOut = 0.0; // only the LAST block counts — the earlier ones are the glide
+            for (int i = 0; i < n; ++i)
+                peakOut = std::max(peakOut, std::abs(static_cast<double>(bl[static_cast<std::size_t>(i)])));
+        }
+        return peakOut;
+    };
+    const double atUnity = push(0.0f);
+    const double turnedDown = push(-40.0f);
+    CHECK(atUnity > 0.4);
+    // THE proof that the routing is real: pulling the BUS's fader down takes the channel with it.
+    CHECK(turnedDown < atUnity * 0.1);
 }

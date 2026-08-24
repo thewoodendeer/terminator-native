@@ -5,6 +5,7 @@ const STRIP_W_LS = 'terminator.mixer.stripWidths.v1';
 import {
   MixerEngine, ChannelName, REGULAR_CHANNELS, SEND_CHANNELS,
   FADER_MIN_DB, FADER_MAX_DB, SEND_MIN_DB, CONSOLE_FLAVOURS, CONSOLE_FLAVOUR_HELP, FX_ROUTES, FX_ROUTE_HELP, type FxRoute,
+  BUS_CHANNELS,
 } from './MixerEngine';
 import { FX_REGISTRY, FX_ORDER, FxId, ParamSpec, WET_PARAM_KEYS } from './fx';
 import { MidiMapTarget } from '../renderer/chopper/MidiMap';
@@ -967,7 +968,7 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
     const narrow = effW < 66;
     return (
       <div
-        className={`mx-strip${isSend ? ' mx-strip-send' : ''}${selected.has(name) ? ' mx-strip-sel' : ''}${narrow ? ' mx-strip--narrow' : ''}`}
+        className={`mx-strip${isSend ? ' mx-strip-send' : ''}${BUS_CHANNELS.includes(name) ? ' mx-strip-bus' : ''}${selected.has(name) ? ' mx-strip-sel' : ''}${narrow ? ' mx-strip--narrow' : ''}`}
         key={name}
         ref={el => { stripEls.current.set(name, el); }}
         style={w ? { flex: `0 0 ${w}px`, minWidth: w, maxWidth: w } : undefined}
@@ -1331,6 +1332,16 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
         {selected.size > 0 && (
           <span className="mx-sel-count" title="Move any selected fader and they all move together, keeping their relative balance">
             {selected.size} selected
+            {/* GROUPS + BUSES (4.7d): the one gesture — several strips become a group with one fader and one
+                insert chain. The engine owns the routing graph and refuses a cycle, so this cannot make one. */}
+            {selected.size > 1 && (
+              <button className="mx-gainmatch mx-group-btn"
+                title="GROUP — send these strips to a new bus instead of straight to the master, so they share one fader, one insert chain and one place for the glue compressor"
+                onClick={() => {
+                  const bus = engine.groupChannels([...selected]);
+                  if (bus) { setSelected(new Set([bus])); force(); }
+                }}>GROUP</button>
+            )}
             <button className="mx-gainmatch" onClick={() => setSelected(new Set())} title="Clear selection">✕</button>
           </span>
         )}
@@ -1370,6 +1381,8 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
         }}
       >
         {REGULAR_CHANNELS.map(renderStrip)}
+        {BUS_CHANNELS.length > 0 && <div className="mx-divider" />}
+        {BUS_CHANNELS.map(renderStrip)}
         <div className="mx-divider" />
         {SEND_CHANNELS.map(renderStrip)}
         <div className="mx-divider" />

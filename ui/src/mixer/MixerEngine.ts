@@ -62,7 +62,10 @@ export type ChannelName = string;
  *  graph below keeps running for the UI (faders, meters until 4.3) while the engine is what is heard. Null in
  *  Electron / the browser (no-op). */
 export interface MixerNativeSink {
-  channel(name: ChannelName, kind: 'channel' | 'send', present: boolean): void;
+  channel(name: ChannelName, kind: 'channel' | 'send' | 'bus', present: boolean): void;
+  /** GROUPS + BUSES (4.7d): where this strip's output goes — 'master' or another strip's name. The engine holds
+   *  the free routing graph and refuses a cycle, so the page never has to police one. */
+  output?(name: ChannelName, target: ChannelName | 'master'): void;
   fader(name: ChannelName | 'master', db: number): void;
   pan(name: ChannelName, pan: number): void;
   send(name: ChannelName, index: number, db: number): void;
@@ -109,6 +112,10 @@ export const DEFAULT_REGULAR_CHANNELS: ChannelName[] = ['sample', 'kick', 'snare
  *  mixer (render, metering, presets, exports) picks new strips up for free. */
 export const REGULAR_CHANNELS: ChannelName[] = [...DEFAULT_REGULAR_CHANNELS];
 export const SEND_CHANNELS: ChannelName[] = ['send1', 'send2', 'send3', 'send4'];
+/** GROUPS + BUSES (4.7d): group buses, created on demand by `groupChannels()`. They are named 'bus1', 'bus2', …
+ *  and the NAME is the contract — the native strip allocator, the console seed and the exporter all key off it
+ *  (a strip whose name starts 'bus' is put in the BUS tier of the PDC plan, with the sends). */
+export const BUS_CHANNELS: ChannelName[] = [];
 
 /** M/S everywhere (4.7a): what part of the image a SLOT's device works on. The ENGINE does the split, so this is
  *  a property of the slot rather than of the device — all 25 of them get it at once. STEREO is bit-exact. */
@@ -126,6 +133,9 @@ export interface FxPreset { id: FxId; bypassed: boolean; params: Record<string, 
 export interface ChannelPreset {
   fader: number; pan: number; mute: boolean; solo: boolean;
   sends: number[]; fx: FxPreset[];
+  /** GROUPS + BUSES (4.7d): 'master' or the strip this one feeds. Optional — a project saved before groups
+   *  existed has no key and lands on the master, which is where it was. */
+  out?: ChannelName | 'master';
 }
 export interface MixerPreset {
   channels: Partial<Record<ChannelName, ChannelPreset>>;
@@ -255,6 +265,8 @@ class ChannelStrip {
   /** M/S everywhere (4.7a): the per-slot route. The ENGINE does the split — the page tracks it for the UI and
    *  for the project. */
   fxRoutes: FxRoute[] = [];
+  /** GROUPS + BUSES (4.7d): 'master', or the name of the strip this one feeds. */
+  outputTo: ChannelName | 'master' = 'master';
 
   /** CONSOLE stage between `input` and the insert chain — present only while
    *  the mixer's CONSOLE is on (off = the node is not in the graph at all, so
@@ -550,6 +562,9 @@ class ChannelStrip {
     return {
       fader: this.faderDb, pan: this.pan, mute: this.muted, solo: this.soloed,
       sends: this.sendDbs.slice(),
+      // GROUPS + BUSES (4.7d): where this strip goes. The native exporter reads this key ("out") and resolves the
+      // name to a strip index, so a bounce has the same routing as playback.
+      out: this.outputTo,
       fx: this.fx.map((f, i) => ({ id: this.fxIds[i], bypassed: this.fxBypassed[i], params: { ...f.params } })),
     };
   }
@@ -1079,9 +1094,10 @@ export class MixerEngine {
   /** Create a strip for a user-added drum lane and wire it to the master, so a
    *  new sound arrives with its own fader/pan/FX/sends like any other channel.
    *  Idempotent — re-adding an existing name returns the strip already there. */
-  addChannel(name: ChannelName, opts?: { after?: ChannelName }): ChannelStrip {
+  addChannel(name: ChannelName, opts?: { after?: ChannelName; kind?: 'channel' | 'bus' }): ChannelStrip {
     const existing = this.channels.get(name);
     if (existing) return existing;
+    const kind = opts?.kind ?? 'channel';
     const strip = new ChannelStrip(this.ctx, name, false);
     strip.toMaster.connect(this.master.input);
     strip.onChainChanged = this.onAnyChainChanged;
@@ -1094,7 +1110,12 @@ export class MixerEngine {
     strip.setGainMatch(this.gainMatchOn);   // inherit the current match setting
     strip.setConsole(this.console);          // …and the desk stage, if it's on
     this.channels.set(name, strip);
-    nativeSink?.channel(name, 'channel', true);
+    nativeSink?.channel(name, kind, true);
+    if (kind === 'bus') {
+      if (!BUS_CHANNELS.includes(name)) BUS_CHANNELS.push(name);
+      this.recomputeRouting();
+      return strip;
+    }
     if (!REGULAR_CHANNELS.includes(name)) {
       // Optional placement (a SAMPLE n strip sits right after the last SAMPLE
       // strip, not at the far end); default = append.
@@ -1103,6 +1124,34 @@ export class MixerEngine {
     }
     this.recomputeRouting();
     return strip;
+  }
+
+  /** GROUPS + BUSES (4.7d): send a strip's output to another strip instead of straight to the master. The ENGINE
+   *  owns the routing graph and refuses a cycle (Mixer::setOutput → `reaches`), so this does not have to. */
+  setOutputTo(name: ChannelName, target: ChannelName | 'master'): void {
+    const strip = this.channels.get(name);
+    if (!strip || name === target) return;
+    strip.outputTo = target;
+    // The page's own Web Audio graph follows so the browser build and the meters agree with the engine.
+    try { strip.toMaster.disconnect(); } catch { /* was not connected */ }
+    const dest = target === 'master' ? this.master.input : this.channels.get(target)?.input;
+    if (dest) strip.toMaster.connect(dest);
+    nativeSink?.output?.(name, target);
+    this.recomputeRouting();
+  }
+
+  /** The one gesture Victor asked for: take several strips and GROUP them. A new bus appears, every selected
+   *  strip feeds it instead of the master, and the bus itself goes to the master — so the group has one fader,
+   *  one insert chain and one place to put the glue compressor. Returns the bus's name. */
+  groupChannels(names: ChannelName[]): ChannelName | null {
+    const targets = names.filter(n => this.channels.has(n) && !SEND_CHANNELS.includes(n) && !BUS_CHANNELS.includes(n));
+    if (targets.length < 2) return null; // grouping one strip is just routing it
+    let n = 1;
+    while (this.channels.has(`bus${n}`)) n++;
+    const busName = `bus${n}`;
+    this.addChannel(busName, { kind: 'bus' });
+    for (const t of targets) this.setOutputTo(t, busName);
+    return busName;
   }
 
   /** True when the strip is untouched — unity fader, centre pan, no mute/solo,
@@ -1407,9 +1456,16 @@ export class MixerEngine {
     for (const name of Object.keys(p.channels ?? {})) {
       if (this.channels.has(name) || SEND_CHANNELS.includes(name)) continue;
       if (/^sample\d+$/.test(name)) { const last = REGULAR_CHANNELS.filter(n => /^sample\d*$/.test(n)).pop() ?? 'sample'; this.addChannel(name, { after: last }); }
+      // GROUPS + BUSES (4.7d): a project's group buses come back as buses, not as ordinary channels — the kind is
+      // what puts them in the BUS tier of the PDC plan.
+      else if (/^bus\d+$/.test(name)) this.addChannel(name, { kind: 'bus' });
     }
     for (const [name, c] of this.channels) { if (p.channels?.[name]) c.restore(p.channels[name]!); }
     if (p.master) this.master.restore(p.master);
+    // The routing is applied AFTER every strip exists, or a strip could be pointed at a bus that has not been
+    // created yet and would silently stay on the master.
+    for (const [name, c] of Object.entries(p.channels ?? {}))
+      if (c?.out && c.out !== 'master') this.setOutputTo(name, c.out);
     if (p.console) this.setConsole(normalizeConsole(p.console));
     this.applySolo();
   }

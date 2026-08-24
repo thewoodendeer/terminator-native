@@ -253,7 +253,12 @@ RenderMixerSpec buildMixerSpec(const juce::ValueTree& project, StripNamer& namer
         st.index = namer(name);
         if (st.index < 0)
             continue;
-        st.kind = StripNamer::isSend(name) ? StripKind::send : StripKind::channel;
+        // GROUPS + BUSES (4.7d): a strip whose name starts "bus" is a group bus, so PDC puts it in the BUS tier
+        // with the sends rather than with the channels — a group that returned on the channel tier would arrive
+        // early against the channels feeding it.
+        st.kind = StripNamer::isSend(name) ? StripKind::send
+                  : name.startsWith("bus") ? StripKind::bus
+                                           : StripKind::channel;
         st.seed = ConsoleStage::fnv1a(name.toRawUTF8()); // the page seeds the desk stage by the strip NAME
         const auto c = channels.getProperty(juce::Identifier(name), juce::var());
         if (c.isObject())
@@ -265,6 +270,19 @@ RenderMixerSpec buildMixerSpec(const juce::ValueTree& project, StripNamer& namer
             if (auto* sends = c.getProperty("sends", juce::var()).getArray())
                 for (int k = 0; k < kMaxSends && k < sends->size(); ++k)
                     st.sendDb[k] = static_cast<float>(static_cast<double>((*sends)[k]));
+            // GROUPS + BUSES (4.7d): where this strip's output goes. The page writes the TARGET STRIP'S NAME
+            // ("master", or a bus); anything it cannot resolve stays on the master, which is the safe answer —
+            // a strip that silently went nowhere would just be missing from the bounce.
+            const auto outName = c.getProperty("out", juce::var()).toString();
+            if (outName.isNotEmpty() && outName != "master")
+            {
+                const int target = namer(outName);
+                if (target > 0 && target != st.index)
+                {
+                    st.outKind = StripOutput::strip;
+                    st.outIndex = target;
+                }
+            }
             if (auto* fxs = c.getProperty("fx", juce::var()).getArray())
                 for (const auto& f : *fxs)
                 {

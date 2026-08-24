@@ -865,6 +865,11 @@ void Mixer::addToStrip(int strip, const float* l, const float* r, int numSamples
 
 void Mixer::process(float* const* outputs, int numOut, int numSamples) noexcept TERMINATOR_NONBLOCKING
 {
+    // A caller asking for more than the block this mixer was PREPARED for would run off the end of every internal
+    // buffer. The Engine never does, but nothing enforced it — a test that pushed 512 through a mixer prepared for
+    // 128 got silence back instead of a complaint, which is the friendlier of the two things that can happen.
+    TERMINATOR_RT_ASSERT(numSamples <= maxBlock_);
+    numSamples = std::min(numSamples, maxBlock_);
     if (!prepared_ || numSamples <= 0)
         return;
     const int n = std::min(numSamples, maxBlock_);
