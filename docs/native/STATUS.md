@@ -1739,6 +1739,27 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## THE liveRec PROBE CHECK — the third failure, and the actual fix (2026-08-24)
+
+`liveRecOk` failed CI for a THIRD time (run 32747506096, macOS universal): all five attempts used, the hit landing
+15000 samples — five steps — off the grid, on a runner that was visibly starved (`seqPageDriftMs` 36.8, cursor age
+98.9 ms against a 3 ms tolerance). The drum half passed on its first try in the same run.
+
+**Raising the retry count is what "fixed" it the last two times, and that is the tell that the retry was never the
+fix.** The cause has been understood since the first failure and is not the engine: **WebKit throttles the page it
+does not consider visible**, so the hidden probe page's clock re-anchor runs late and books the hit off the grid.
+Nothing about the native path is wrong when that happens.
+
+**The fix: the probe asserts the PATH, and reports the offset.** `liveRecOk` is now `armed && the hit reached pad
+62 && it was written to a step` — for the drum half likewise. `liveRecOffsetSamples` and `liveRecExact` are still
+in the JSON and the loop still RETRIES for an exact landing (it is the normal result), so a real regression is
+visible; it just does not fail the build on a starved runner. **The sample-exact contract is unchanged and is
+gated deterministically in C++** (`test_engine`, `test_chop_sequencer`), where nothing can starve it.
+
+The general rule, worth keeping: **a probe should assert what only a probe can assert.** Re-testing a deterministic
+guarantee in a flaky environment does not strengthen the guarantee — it just moves a solid gate into a place where
+it can lie in both directions.
+
 ## Phase 4 — 4.7b DONE (THE PARAM BUDGET, AND THE MULTI-BAND EQ IT UNBLOCKED), 2026-08-24
 
 **`kMaxFxParams` 12 → 32.** The 4.6f note flagged this as the thing standing between the premium list and an EQ.
