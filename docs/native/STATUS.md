@@ -1498,6 +1498,45 @@ trackouts and alignment gated. **The renderer is complete enough to move the exp
 - The legacy chopper chain for the single-chop bake.
 - The metronome/CLICK is not rendered offline (deliberate — a bounce should not click).
 
+## Phase 4 — 4.5e DONE (THE EXPORTER IS ON THE BRIDGE: A PROJECT RENDERS TO WAV NATIVELY), 2026-08-23 twelfth session
+
+4.5a–d built a renderer that carries the whole mix; 4.5e makes it reachable. `terminatorExport` renders the page's
+project through the SAME engine, mixer, sequencers and devices that are playing, and writes the WAVs.
+
+**The shape, and why:** the page owns the project, so it hands the JSON over; the audio is ALREADY in the sample
+store (the page uploaded it), so it hands over **key maps, not bytes** —
+`{project, main?, sources{videoId: key}, drumLanes{lane: key}, path, bitDepth?, sampleRate?, loops?, tail?, mixer?,
+drums?, bass?, limiter?, stems[]}` → `{ok, files[], seconds, sampleRate, bitDepth, peak}`. Trackouts land beside the
+master as `"<name> - <channel>.wav"`.
+
+**Threading:** the render runs on its own `std::thread` and completes the promise back on the message thread.
+`renderOffline` builds an Engine of its OWN, so the live engine and the audio callback are never touched — the only
+shared state is the sample buffers, and `SampleRegistry::shared(key)` (new) hands the render a `shared_ptr` so they
+cannot be freed underneath it. `WebShell` carries an `alive_` flag its destructor clears, so an export still running
+when the window goes away completes into nothing instead of a dangling `this`.
+
+**Page:** `native.exportProject` on the bridge (juceBridge.ts) and `src/renderer/native/exportNative.ts` with the
+typed request/result. **The app's export BUTTONS are deliberately not moved yet** — that is a UI change with its own
+decisions (format menu, progress, cancel, where files land), and it wants Victor's call.
+
+**Probe:** the self-test uploads a 0.25 s burst straight into the sample store, builds a one-pad one-hit project,
+renders it through the real engine and asserts a real WAV landed. `tools/ci/probe-app.sh` now fails the build unless
+`export.ok`, `export.bytes > 0` AND **`export.peak > 0`** — a render that writes a file full of silence is a FAILED
+export, not a pass, and without the peak check the other two would happily pass one. Measured on both builds:
+`{"ok": true, "files": 1, "seconds": 2.2, "bitDepth": 16, "peak": 0.32, "bytes": 422504}`.
+
+**Gates (4.5e):** mac-debug 0 warnings + ctest 271/271 · RTSan 272/272 · universal (0 warnings) lipo
+`x86_64 arm64` + ctest 271/271 · ui gate (tsc baseline 5) · probe OK on debug AND universal incl. the new export
+checks · clang-format clean.
+
+**Still owed by 4.5:**
+- **The app's export buttons still use the page's Web Audio path.** The native verb is there and proven; moving the
+  UI onto it is the next decision (and needs Victor: formats offered, progress + cancel, output folder).
+- No dither (TPDF, fixed seeds, WAV == FLAC bit-identity); `writeWav` truncates.
+- No progress or cancel on a long render (the thread runs to completion).
+- The legacy chopper chain for the single-chop bake.
+- FLAC / MP3 encoders (the TS FLAC encoder is gated bit-identical and is the one to port).
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
