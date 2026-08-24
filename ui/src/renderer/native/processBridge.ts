@@ -25,9 +25,9 @@ function installListeners(): void {
 }
 
 /** The bundled tools' paths ('' when not bundled in this build). */
-export async function bundledTools(): Promise<{ ytdlp: string; qjs: string; ytdlpDir: string; qjsDir: string; binDir: string }> {
+export async function bundledTools(): Promise<{ ytdlp: string; qjs: string; lame: string; ytdlpDir: string; qjsDir: string; binDir: string }> {
   const r = await native.process({ verb: 'tools' });
-  return { ytdlp: String(r?.ytdlp ?? ''), qjs: String(r?.qjs ?? ''), ytdlpDir: String(r?.ytdlpDir ?? ''), qjsDir: String(r?.qjsDir ?? ''), binDir: String(r?.binDir ?? '') };
+  return { ytdlp: String(r?.ytdlp ?? ''), qjs: String(r?.qjs ?? ''), lame: String(r?.lame ?? ''), ytdlpDir: String(r?.ytdlpDir ?? ''), qjsDir: String(r?.qjsDir ?? ''), binDir: String(r?.binDir ?? '') };
 }
 
 /** Spawn a bundled tool. Throws if the shell refuses (tool missing, bad args). */

@@ -50,6 +50,12 @@ export function EulaModal({ onAccepted }: Props) {
             liability for any ToS violations, copyright claims, or other consequences
             arising from your use of the download feature.
           </p>
+          <p>
+            MP3 export uses <strong>LAME</strong>, shipped with Terminator as a
+            separate, unmodified program under the GNU LGPL v2.1. Terminator
+            links no part of it. Encoder and full source:{' '}
+            <code>lame.sourceforge.io</code>.
+          </p>
 
           <h3 className="eula-subtitle">SAMPLE USAGE DISCLAIMER</h3>
           <p>

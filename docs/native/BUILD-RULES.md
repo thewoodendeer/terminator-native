@@ -66,8 +66,21 @@ Sparkle (Mac) + WinSparkle (Win) feeds under R2 prefix `terminator-native/`. Bin
 never reuse a live version. Mac: hardened runtime + notarisation via the Keychain profile. Windows: OV/EV
 cert bought at Phase 9. Not before.
 
-## Bundled tools (yt-dlp + qjs) — 2.5c
+## Bundled tools (yt-dlp + qjs + lame) — 2.5c / 4.5g
 `cmake/ProvisionTools.cmake` (target `TerminatorBundleTools`, runs with every app build) downloads the pinned
 yt-dlp nightly + quickjs-ng `qjs`, SHA-256 verified, into `third_party/.tools-cache` (gitignored) and lays them into
 the bundle. Offline / engine-only: `-DTERMINATOR_BUNDLE_TOOLS=OFF`. Bumping yt-dlp or qjs = the tag/version AND the
 hashes together, in that one file; then re-run the probe with `TERMINATOR_PROBE_NET=1` (a real pull).
+
+**`lame` (MP3 export) rides the same script**, landing at `bin/lame` (mac) / `bin/lame.exe` (Windows) — where
+`ProcessHub::lameBinary()` looks and `render::findLameBinary` prefers it over anything on the machine. It is a
+PACKAGING concern, never a linking one: the app drives the executable through JUCE and links nothing, so the
+unmodified upstream binary keeps us clear of LAME's LGPL. Mac has no trustworthy prebuilt (and none universal), so
+the script COMPILES the pinned 3.100 tarball once per machine into one universal, dependency-free executable
+(~20 s, cached as `lame-3.100-macos-universal`) and ad-hoc signs it; Windows takes RareWares' prebuilt x64
+`lame.exe` (static — `lame_enc.dll` is deliberately not shipped). Bumping = URL + SHA together, same rule.
+**At release, sign `Contents/Resources/bin/**` (lame, qjs, yt-dlp and its `_internal/`) with the Developer ID
+`--options runtime --timestamp` BEFORE signing the app** — a nested executable that is only ad-hoc signed fails
+notarisation. The probe gate is `mp3Ok` in the export self-test: when a build ships `lame`, an MP3 export has to
+succeed with no `lame` anywhere else on the machine.
+LAME is credited beside yt-dlp in the app (`ui/src/renderer/chopper/EulaModal.tsx`).

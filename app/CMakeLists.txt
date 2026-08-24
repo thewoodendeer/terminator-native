@@ -74,11 +74,12 @@ add_custom_target(TerminatorBundleUi ALL
     VERBATIM)
 add_dependencies(TerminatorBundleUi Terminator)
 
-# yt-dlp (pinned onedir nightly) + quickjs-ng qjs for YouTube import — cmake/ProvisionTools.cmake downloads the
-# pinned, SHA-256-verified assets once into third_party/.tools-cache and lays them into the bundle: macOS
-# Resources/bin/{ytdlp,qjs}, Windows <exe dir>/bin/{ytdlp,qjs}. -DTERMINATOR_BUNDLE_TOOLS=OFF for an offline /
-# engine-only build (the app then reports "yt-dlp is missing from this build" for YouTube links).
-option(TERMINATOR_BUNDLE_TOOLS "Download + bundle yt-dlp and qjs into the app (YouTube import)" ON)
+# yt-dlp (pinned onedir nightly) + quickjs-ng qjs for YouTube import, and `lame` for MP3 export —
+# cmake/ProvisionTools.cmake downloads the pinned, SHA-256-verified assets once into third_party/.tools-cache and
+# lays them into the bundle: macOS Resources/bin/{ytdlp,qjs,lame}, Windows <exe dir>/bin/{ytdlp,qjs,lame.exe}.
+# -DTERMINATOR_BUNDLE_TOOLS=OFF for an offline / engine-only build (the app then reports "yt-dlp is missing from
+# this build" for YouTube links, and MP3 export needs a lame on the machine).
+option(TERMINATOR_BUNDLE_TOOLS "Download + bundle yt-dlp, qjs and lame into the app (YouTube import, MP3 export)" ON)
 if(TERMINATOR_BUNDLE_TOOLS)
     if(APPLE)
         set(_terminator_tools_dest "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Resources/bin")
@@ -91,7 +92,7 @@ if(TERMINATOR_BUNDLE_TOOLS)
         COMMAND "${CMAKE_COMMAND}" -DPLATFORM=${_terminator_tools_platform} -DDEST=${_terminator_tools_dest}
                 -DCACHE=${PROJECT_SOURCE_DIR}/third_party/.tools-cache
                 -P "${PROJECT_SOURCE_DIR}/cmake/ProvisionTools.cmake"
-        COMMENT "Bundling yt-dlp + qjs (pinned, SHA-256 verified; cached in third_party/.tools-cache)"
+        COMMENT "Bundling yt-dlp + qjs + lame (pinned, SHA-256 verified; cached in third_party/.tools-cache)"
         VERBATIM)
     add_dependencies(TerminatorBundleTools Terminator)
 endif()

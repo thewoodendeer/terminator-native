@@ -49,6 +49,14 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"export": ?\{[^}]*"bytes": ?[1-9]' "$OUT" || { echo "::error::export self-test: the WAV it reported writing has no bytes"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"peak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::export self-test: the render is SILENT (peak 0) — a file full of nothing is a failed export"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"flacSmaller": ?true' "$OUT" || { echo "::error::export self-test: the FLAC is missing, empty, or not smaller than the WAV"; exit 1; }
+  # MP3 rides the BUNDLED `lame` — when the build ships one it MUST encode with nothing else on the machine
+  if grep -Eq '"export": ?\{[^}]*"lameBundled": ?true' "$OUT"; then
+    grep -Eq '"export": ?\{[^}]*"mp3Ok": ?true' "$OUT" || { echo "::error::export self-test: the bundled lame did not produce an MP3 (see mp3Error)"; exit 1; }
+    grep -Eq '"export": ?\{[^}]*"mp3Bytes": ?[1-9]' "$OUT" || { echo "::error::export self-test: the MP3 it reported writing has no bytes"; exit 1; }
+    echo "MP3 export through the bundled lame OK: $(grep -Eo '"mp3Bytes": ?[0-9]+' "$OUT")"
+  else
+    echo "::warning::lame not bundled in this build (TERMINATOR_BUNDLE_TOOLS=OFF?) — MP3 export needs one on the machine"
+  fi
   grep -Eq '"export": ?\{[^}]*"progressReports": ?[1-9]' "$OUT" || { echo "::error::export self-test: the render reported no progress (the bar would never move)"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"cancelled": ?true' "$OUT" || { echo "::error::export self-test: cancelling a render did not stop it"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"cancelWroteNothing": ?true' "$OUT" || { echo "::error::export self-test: a CANCELLED export still reported files"; exit 1; }

@@ -5,7 +5,7 @@
 //   spawn {id, tool:"ytdlp", args:[…]} → {ok}        the ONLY executables are the bundled ones (`tool` is a name,
 //                                                     never a path); the shell prepends yt-dlp's fixed flags
 //                                                     (--no-update, --js-runtimes quickjs:<bundled qjs dir>)
-//   kill {id} → {ok} · list → {ok, running:[ids]} · tools → {ok, ytdlp, qjs, ytdlpDir, qjsDir}
+//   kill {id} → {ok} · list → {ok, running:[ids]} · tools → {ok, ytdlp, qjs, lame, ytdlpDir, qjsDir}
 //   events: terminator.processOutput {id, data}   merged stdout+stderr, ≤ 8 KB per event (JUCE's emitEvent escape
 //           is quadratic in the payload — keep events small);  terminator.processExit {id, code}
 // A reader thread per child blocks on readProcessOutput and posts to the message thread; kill() from the message
@@ -33,6 +33,8 @@ class ProcessHub
     static juce::File bundledBinDir();
     static juce::File ytdlpLauncher();
     static juce::File qjsBinary();
+    /// The bundled `lame` MP3 encoder — driven by the engine's file writer, never spawned through this hub.
+    static juce::File lameBinary();
 
   private:
     struct Job;

@@ -116,6 +116,16 @@ juce::File ProcessHub::qjsBinary()
     return f.existsAsFile() ? f : juce::File();
 }
 
+juce::File ProcessHub::lameBinary()
+{
+#if JUCE_WINDOWS
+    const auto f = bundledBinDir().getChildFile("lame.exe");
+#else
+    const auto f = bundledBinDir().getChildFile("lame");
+#endif
+    return f.existsAsFile() ? f : juce::File();
+}
+
 juce::var ProcessHub::handle(const juce::var& req)
 {
     const auto verb = req.isObject() ? req.getProperty("verb", "list").toString() : juce::String("list");
@@ -140,6 +150,7 @@ juce::var ProcessHub::tools() const
     d->setProperty("qjs", q.getFullPathName());
     d->setProperty("ytdlpDir", y != juce::File() ? y.getParentDirectory().getFullPathName() : juce::String());
     d->setProperty("qjsDir", q != juce::File() ? q.getParentDirectory().getFullPathName() : juce::String());
+    d->setProperty("lame", lameBinary().getFullPathName()); // MP3 export drives it; it is not spawnable here
     d->setProperty("binDir", bundledBinDir().getFullPathName());
     return o;
 }
