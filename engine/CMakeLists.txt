@@ -82,6 +82,7 @@ add_library(terminator_engine STATIC
     src/io/Settings.cpp
     src/render/OfflineRenderer.cpp
     src/render/BassSpec.cpp
+    src/render/AudioFileWriter.cpp
     src/render/ProjectRenderer.cpp
     src/model/ProjectModel.cpp
     src/model/EditHistory.cpp
@@ -101,6 +102,9 @@ target_compile_definitions(terminator_engine PUBLIC
     TERMINATOR_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     TERMINATOR_VERSION_PATCH=${PROJECT_VERSION_PATCH}
     JUCE_USE_CURL=0
+    # MP3 export: JUCE's LAME encoder drives a `lame` EXECUTABLE (it does not link liblame), so the app stays clear
+    # of LAME's LGPL and the binary is a packaging concern, not a linking one.
+    JUCE_USE_LAME_AUDIO_FORMAT=1
     JUCE_STANDALONE_APPLICATION=1
     $<$<BOOL:${TERMINATOR_HAS_ASIO}>:JUCE_ASIO=1>)
 if(TERMINATOR_HAS_ASIO)

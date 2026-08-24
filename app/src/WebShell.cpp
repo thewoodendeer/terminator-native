@@ -8,6 +8,7 @@
 #include "WebResources.h"
 #include "terminator/Version.h"
 #include "terminator/model/ProjectModel.h"
+#include "terminator/render/AudioFileWriter.h"
 #include "terminator/render/BassSpec.h"
 #include "terminator/render/ProjectRenderer.h"
 
@@ -1431,11 +1432,21 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
         const int b = static_cast<int>(req.getProperty("bitDepth", 24));
         return (b == 16 || b == 24 || b == 32) ? b : 24;
     }();
+    const auto format = render::audioFileFormatFromName(req.getProperty("format", "wav").toString());
+    const int mp3Kbps = std::clamp(static_cast<int>(req.getProperty("mp3Kbps", 320)), 32, 320);
+    // MP3 rides a `lame` EXECUTABLE (nothing links liblame): bundled first, then whatever the machine has
+    const auto lame = render::findLameBinary(ProcessHub::bundledBinDir().getChildFile("lame"));
+    if (format == render::AudioFileFormat::mp3 && !lame.existsAsFile())
+    {
+        complete(ok(false, "MP3 export needs the `lame` encoder and this build has none — export WAV or FLAC"));
+        return;
+    }
 
     auto alive = alive_;
     auto shared = std::make_shared<juce::WebBrowserComponent::NativeFunctionCompletion>(std::move(complete));
     std::thread(
-        [project, bank = std::move(bank), opts = std::move(opts), out, bitDepth, alive, shared]() mutable
+        [project, bank = std::move(bank), opts = std::move(opts), out, bitDepth, format, mp3Kbps, lame, alive,
+         shared]() mutable
         {
             juce::var result;
             {
@@ -1450,19 +1461,20 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                 {
                     for (int ch = 0; ch < 2; ++ch)
                         pair.copyFrom(ch, 0, rendered.buffer, firstChannel + ch, 0, rendered.buffer.getNumSamples());
-                    if (!writeWav(f, pair, rendered.sampleRate, bitDepth, err))
+                    if (!render::writeAudioFile(f, pair, rendered.sampleRate, format, bitDepth, err, mp3Kbps, lame))
                         return false;
                     files.add(f.getFullPathName());
                     return true;
                 };
-                wrote = writePair(0, out);
+                wrote = writePair(0, out.withFileExtension(render::audioFileExtension(format)));
                 for (std::size_t i = 0; wrote && i < opts.stemChannels.size(); ++i)
                 {
                     const int first = 2 + 2 * static_cast<int>(i);
                     if (first + 1 >= rendered.buffer.getNumChannels())
                         break;
-                    wrote = writePair(first, out.getSiblingFile(out.getFileNameWithoutExtension() + " - " +
-                                                                opts.stemChannels[i] + out.getFileExtension()));
+                    wrote =
+                        writePair(first, out.getSiblingFile(out.getFileNameWithoutExtension() + " - " +
+                                                            opts.stemChannels[i] + render::audioFileExtension(format)));
                 }
                 o->setProperty("ok", wrote);
                 if (!wrote)
@@ -1476,6 +1488,7 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                 o->setProperty("peak", static_cast<double>(peak));
                 o->setProperty("sampleRate", rendered.sampleRate);
                 o->setProperty("bitDepth", bitDepth);
+                o->setProperty("format", render::audioFileExtension(format).substring(1));
                 result = juce::var(o);
             }
             juce::MessageManager::callAsync(

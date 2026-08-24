@@ -48,6 +48,7 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"export": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::export self-test: rendering a project to WAV failed (see the export block above)"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"bytes": ?[1-9]' "$OUT" || { echo "::error::export self-test: the WAV it reported writing has no bytes"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"peak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::export self-test: the render is SILENT (peak 0) — a file full of nothing is a failed export"; exit 1; }
+  grep -Eq '"export": ?\{[^}]*"flacSmaller": ?true' "$OUT" || { echo "::error::export self-test: the FLAC is missing, empty, or not smaller than the WAV"; exit 1; }
   grep -Eq '"systemOk": ?true' "$OUT" || { echo "::error::library self-test: the library tree did not load (system folders missing)"; exit 1; }
   grep -Eq '"outsideRootBlocked": ?true' "$OUT" || { echo "::error::library self-test: /lib/b64/ served a path OUTSIDE the registered roots"; exit 1; }
   if grep -Eq '"ytdlpBundled": ?true' "$OUT"; then

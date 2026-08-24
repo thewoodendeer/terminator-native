@@ -21,6 +21,12 @@ export interface NativeExportRequest {
   drumLanes?: Record<string, string>;
   /** Absolute output path for the master WAV; trackouts land beside it as "<name> - <channel>.wav". */
   path: string;
+  /** 'wav' (default) · 'flac' · 'mp3'. The extension on `path` is replaced to match. */
+  format?: 'wav' | 'flac' | 'mp3';
+  /** MP3 only — the CBR bitrate (32..320, default 320). */
+  mp3Kbps?: number;
+  /** WAV 16/24/32 (32 = float) and FLAC 16/24. 16-bit is TPDF-dithered with the app's own quantiser, so a 16-bit
+   *  WAV and FLAC of one render hold identical samples and match the Electron app's export sample for sample. */
   bitDepth?: 16 | 24 | 32;
   sampleRate?: number;
   loops?: number;
@@ -41,6 +47,7 @@ export interface NativeExportResult {
   seconds?: number;
   sampleRate?: number;
   bitDepth?: number;
+  format?: string;
   /** Peak of the rendered master (0 = the export is silent — a failure, not a pass). */
   peak?: number;
 }
@@ -86,21 +93,32 @@ export function installExportProbe(deps: { tempDir: () => string; sep: () => str
           metronomeBpm: 120,
           chopVolume: 1,
         };
-        const res = await exportProjectNative({
-          project, sources: { probe: key }, path, bitDepth: 16, sampleRate: sr, tail: 0.2,
-        });
-        r.ok = res?.ok === true;
-        r.files = res?.files?.length ?? 0;
-        r.seconds = res?.seconds ?? 0;
-        r.bitDepth = res?.bitDepth ?? 0;
-        r.peak = res?.peak ?? 0;
-        if (res?.error) r.error = res.error;
-        // it must be a REAL file with real bytes, not just a promise that resolved
-        if (res?.files?.length) {
-          const stat = await native.fs({ verb: 'stat', path: res.files[0] });
-          r.bytes = Number(stat?.size ?? 0);
-          await native.fs({ verb: 'trash', path: res.files[0] });
-        }
+        const run = async (format: 'wav' | 'flac') => {
+          const res = await exportProjectNative({
+            project, sources: { probe: key }, path, format, bitDepth: 16, sampleRate: sr, tail: 0.2,
+          });
+          let bytes = 0;
+          // it must be a REAL file with real bytes, not just a promise that resolved
+          if (res?.files?.length) {
+            const stat = await native.fs({ verb: 'stat', path: res.files[0] });
+            bytes = Number(stat?.size ?? 0);
+            await native.fs({ verb: 'trash', path: res.files[0] });
+          }
+          return { ok: res?.ok === true, files: res?.files?.length ?? 0, bytes, peak: res?.peak ?? 0,
+                   seconds: res?.seconds ?? 0, bitDepth: res?.bitDepth ?? 0, error: res?.error ?? null };
+        };
+        const wav = await run('wav');
+        const flac = await run('flac');
+        r.ok = wav.ok && flac.ok;
+        r.files = wav.files;
+        r.seconds = wav.seconds;
+        r.bitDepth = wav.bitDepth;
+        r.peak = wav.peak;
+        r.bytes = wav.bytes;
+        r.flacBytes = flac.bytes;
+        // FLAC is lossless COMPRESSION: it must be smaller than the WAV and still have real content
+        r.flacSmaller = flac.bytes > 0 && flac.bytes < wav.bytes;
+        if (wav.error || flac.error) r.error = wav.error ?? flac.error;
       } catch (e) { r.error = String((e as Error)?.message ?? e); }
       finally { try { await native.samples({ verb: 'release', key }); } catch { /* nothing to release */ } }
       return r;
