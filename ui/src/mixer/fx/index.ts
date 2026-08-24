@@ -28,6 +28,7 @@ import { SaturatorFX } from './SaturatorFX';
 import { LimiterFX } from './LimiterFX';
 import { RetroFX } from './RetroFX';
 import { Eq6FX } from './Eq6FX';
+import { ChannelStripFX } from './ChannelStripFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -35,7 +36,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro' | 'eq6';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro' | 'eq6' | 'channelstrip';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -165,6 +166,37 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
       { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
     ],
     create: (c) => new LadderFX(c),
+  },
+  channelstrip: {
+    name: 'CHANNEL',
+    desc: 'The SSL 4000 G channel strip: filters, a four-band EQ and a dynamics section, in the order the desk has them. CURVE is the important switch — E is the 1981 black-knob EQ (constant Q, so it cuts surgically) and G is the 1987 brown-knob one, where the Q WIDENS as the gain comes back to zero and tightens as you push it, which is why the G is the one people call musical. DYN can sit PRE EQ instead of after it, like the desk\'s routing button. Rendered by the app\'s engine',
+    params: [
+      { key: 'HPF', label: 'HPF', kind: 'knob', min: 16, max: 350, step: 1, log: true, unit: 'Hz' },
+      { key: 'LPF', label: 'LPF', kind: 'knob', min: 3000, max: 22000, step: 100, log: true, unit: 'Hz' },
+      { key: 'LF', label: 'LF', kind: 'knob', min: -15, max: 15, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'LF HZ', label: 'LF HZ', kind: 'knob', min: 30, max: 450, step: 1, log: true, unit: 'Hz' },
+      sel('LF BELL', 'LF', ['SHELF', 'BELL']),
+      { key: 'LMF', label: 'LMF', kind: 'knob', min: -15, max: 15, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'LMF HZ', label: 'LMF HZ', kind: 'knob', min: 200, max: 2500, step: 1, log: true, unit: 'Hz' },
+      { key: 'LMF Q', label: 'LMF Q', kind: 'knob', min: 0.5, max: 3, step: 0.05 },
+      { key: 'HMF', label: 'HMF', kind: 'knob', min: -15, max: 15, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'HMF HZ', label: 'HMF HZ', kind: 'knob', min: 600, max: 7000, step: 1, log: true, unit: 'Hz' },
+      { key: 'HMF Q', label: 'HMF Q', kind: 'knob', min: 0.5, max: 3, step: 0.05 },
+      { key: 'HF', label: 'HF', kind: 'knob', min: -15, max: 15, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'HF HZ', label: 'HF HZ', kind: 'knob', min: 1500, max: 16000, step: 10, log: true, unit: 'Hz' },
+      sel('HF BELL', 'HF', ['SHELF', 'BELL']),
+      sel('CURVE', 'CURVE', ['E', 'G']),
+      { key: 'C THRESH', label: 'COMP', kind: 'knob', min: -40, max: 0, step: 0.5, unit: 'dB' },
+      { key: 'C RATIO', label: 'RATIO', kind: 'knob', min: 1, max: 20, step: 0.1 },
+      { key: 'C REL', label: 'C REL', kind: 'knob', min: 50, max: 2000, step: 5, log: true, unit: 'ms' },
+      sel('C ATK', 'C ATK', ['SLOW', 'FAST']),
+      { key: 'G THRESH', label: 'GATE', kind: 'knob', min: -80, max: 0, step: 0.5, unit: 'dB' },
+      { key: 'G RANGE', label: 'RANGE', kind: 'knob', min: 0, max: 60, step: 1, unit: 'dB' },
+      { key: 'G REL', label: 'G REL', kind: 'knob', min: 50, max: 2000, step: 5, log: true, unit: 'ms' },
+      sel('DYN', 'DYN', ['POST EQ', 'PRE EQ']),
+      { key: 'OUT', label: 'OUT', kind: 'knob', min: -24, max: 24, step: 0.5, center: 0, unit: 'dB' },
+    ],
+    create: (c) => new ChannelStripFX(c),
   },
   eq6: {
     name: 'EQ 6',
@@ -381,7 +413,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'saturator', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'retro', 'filter', 'ladder', 'eq', 'eq6', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
+  'vinyl', 'retro', 'filter', 'ladder', 'eq', 'eq6', 'channelstrip', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

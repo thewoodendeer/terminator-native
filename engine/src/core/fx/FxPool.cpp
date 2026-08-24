@@ -34,6 +34,10 @@ const char* const kRetroNoise[] = {"VINYL", "TAPE", "STATIC", "RADIO"};
 const char* const kRetroDist[] = {"TUBE", "TAPE", "FUZZ", "DIODE", "FOLD", "BITS", "TRANSISTOR", "CRUSH"};
 const char* const kEqTypes[] = {"OFF", "BELL", "LOW SHELF", "HIGH SHELF", "LOW CUT", "HIGH CUT", "NOTCH", "TILT"};
 const char* const kEqSlopeNames[] = {"12", "24", "36", "48", "72", "96"};
+const char* const kShelfBell[] = {"SHELF", "BELL"};
+const char* const kEqCurve[] = {"E", "G"};
+const char* const kSlowFast[] = {"SLOW", "FAST"};
+const char* const kPostPre[] = {"POST EQ", "PRE EQ"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -214,6 +218,32 @@ const FxParamDef kEq6Params[] = {
     {"SLOPE6", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
     {"OUT", -24.0f, 24.0f, 0.0f},
 };
+const FxParamDef kChannelStripParams[] = {
+    {"HPF", 16.0f, 350.0f, 16.0f},        // at 16 it is OFF, as on the desk
+    {"LPF", 3000.0f, 22000.0f, 22000.0f}, // at 22k it is OFF
+    {"LF", -15.0f, 15.0f, 0.0f},
+    {"LF HZ", 30.0f, 450.0f, 80.0f},
+    {"LF BELL", 0.0f, 1.0f, 0.0f, kShelfBell, 2},
+    {"LMF", -15.0f, 15.0f, 0.0f},
+    {"LMF HZ", 200.0f, 2500.0f, 400.0f},
+    {"LMF Q", 0.5f, 3.0f, 1.0f},
+    {"HMF", -15.0f, 15.0f, 0.0f},
+    {"HMF HZ", 600.0f, 7000.0f, 3000.0f},
+    {"HMF Q", 0.5f, 3.0f, 1.0f},
+    {"HF", -15.0f, 15.0f, 0.0f},
+    {"HF HZ", 1500.0f, 16000.0f, 8000.0f},
+    {"HF BELL", 0.0f, 1.0f, 0.0f, kShelfBell, 2},
+    {"CURVE", 0.0f, 1.0f, 1.0f, kEqCurve, 2}, // E = constant Q, G = the Q follows the gain
+    {"C THRESH", -40.0f, 0.0f, 0.0f},
+    {"C RATIO", 1.0f, 20.0f, 2.0f},
+    {"C REL", 50.0f, 2000.0f, 300.0f},
+    {"C ATK", 0.0f, 1.0f, 0.0f, kSlowFast, 2},
+    {"G THRESH", -80.0f, 0.0f, -80.0f},
+    {"G RANGE", 0.0f, 60.0f, 0.0f},
+    {"G REL", 50.0f, 2000.0f, 300.0f},
+    {"DYN", 0.0f, 1.0f, 0.0f, kPostPre, 2},
+    {"OUT", -24.0f, 24.0f, 0.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -250,6 +280,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::limiter, "limiter", kLimiterParams, 7, -1}, // fully wet: a limiter is not a parallel device
     {FxType::retro, "retro", kRetroParams, 9, 8},
     {FxType::eq6, "eq6", kEq6Params, 31, -1}, // an EQ is not a parallel device: no WET
+    {FxType::channelstrip, "channelstrip", kChannelStripParams, 24, -1},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -295,6 +326,8 @@ int capacityOf(FxType t) noexcept
     case FxType::retro:
         return 16;
     case FxType::eq6:
+        return 32;
+    case FxType::channelstrip:
         return 32;
     case FxType::wide:
     case FxType::mseq:
@@ -344,6 +377,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<RetroFx>();
     case FxType::eq6:
         return std::make_unique<EqFx6>();
+    case FxType::channelstrip:
+        return std::make_unique<ChannelStripFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

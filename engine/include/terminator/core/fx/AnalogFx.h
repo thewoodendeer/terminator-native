@@ -7,6 +7,8 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · ChannelStripFx — CHANNEL: the SSL 4000 G strip — filters, the four-band EQ with its E and G bell curves, and
+//     the dynamics section (compressor + gate/expander) that can sit before or after the EQ.
 //   · EqFx6 — EQ 6: the multi-band parametric. Six bands, each any of bell / shelf / cut / notch / tilt, with real
 //     Butterworth slopes up to 96 dB/oct on the cuts. The device the param budget had to be raised for (4.7b).
 //   · RetroFx — RETRO: the RC-20-shaped multi-effect — NOISE, WOBBLE, DISTORT (eight curves), DIGITAL, SPACE and
@@ -115,6 +117,42 @@ class FetCompFx final : public Effect
 
 /// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
 double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// CHANNEL — the SSL 4000 G channel strip (Phase 4.7c). One box, in the order the desk has it:
+///   FILTERS   HPF 16..350 Hz · LPF 3k..22k (at their ends they are OFF, as on the desk)
+///   EQ        LF shelf/bell · LMF bell · HMF bell · HF shelf/bell, and a **CURVE** switch: **E** is the 1981
+///             black-knob curve (constant Q — it stays narrow as you boost, so it cuts surgically) and **G** is
+///             the 1987 brown-knob one (Q WIDENS as the gain comes down and tightens as it goes up, which is why
+///             the G is the one people call musical). That difference is the whole reason both exist.
+///   DYNAMICS  a compressor (THRESH / RATIO / RELEASE / FAST attack) and a gate-expander (THRESH / RANGE / RELEASE)
+///   ORDER     DYN PRE — the dynamics before the EQ (the desk's routing button) instead of after
+///   OUT       −24..+24 dB
+class ChannelStripFx final : public Effect
+{
+  public:
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::channelstrip; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING override { return grDb_; }
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    void recompute() noexcept TERMINATOR_NONBLOCKING;
+    void runEq(double& l, double& r) noexcept TERMINATOR_NONBLOCKING;
+    void runDyn(double& l, double& r) noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    Glide hpf_, lpf_;
+    Glide lfGain_, lfFreq_, lmfGain_, lmfFreq_, lmfQ_, hmfGain_, hmfFreq_, hmfQ_, hfGain_, hfFreq_;
+    float lfBell_ = 0.0f, hfBell_ = 0.0f, curve_ = 1.0f; // curve: 0 = E, 1 = G
+    Glide cThresh_, cRatio_, cRelease_, gThresh_, gRange_, gRelease_, out_;
+    float fastAtk_ = 0.0f, dynPre_ = 0.0f;
+    Biquad hp_[2], lp_[2], lf_[2], lmf_[2], hmf_[2], hf_[2];
+    double compEnv_ = 0.0, gateEnv_ = 0.0, detEnv_ = 0.0; // dB of reduction, so 0 = doing nothing
+    float grDb_ = 0.0f;
+};
 
 /// EQ 6 — the multi-band parametric (Phase 4.7b). Six independent bands, each:
 ///   TYPE   OFF | BELL | LOW SHELF | HIGH SHELF | LOW CUT | HIGH CUT | NOTCH | TILT

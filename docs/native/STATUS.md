@@ -1739,6 +1739,37 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.7c DONE (CHANNEL: THE SSL 4000 G STRIP — THE LAST DEVICE ON THE BRIEF), 2026-08-24
+
+`ChannelStripFx`, `FxType::channelstrip`, 24 params. Filters (HPF 16–350, LPF 3k–22k, off at their ends as on the
+desk) → the four-band EQ (LF shelf/bell · LMF · HMF · HF shelf/bell) → the dynamics section (compressor + gate-
+expander sharing ONE detector, which is why they never fight), with **DYN PRE EQ** flipping the order the way the
+desk's routing button does.
+
+**The switch the whole device is about: E vs G.** On the **E** (1981, black knob) the Q is constant, so a boost is
+the same shape at 3 dB and at 15 — a surgical tool. On the **G** (1987, brown knob) the **Q follows the gain**: it
+widens as the gain returns to zero and tightens as it is pushed, which is why small moves are broad and flattering
+and big ones are precise, and why the G is the one people call musical. Gated exactly that way — the width of the
+same boost an octave out must be UNCHANGED between a 3 dB and a 15 dB move on E, and measurably narrower at 15 dB
+on G. If those two measured the same the switch would be decoration.
+
+**The bug the "defaults are bit-exact" gate caught:** `compEnv_` and `gateEnv_` hold **decibels of gain reduction**
+(they are summed and converted once), so doing nothing is **0** — they were initialised to **1.0**, the linear
+value for unity, which made the strip **2 dB louder at rest**. Inserting a channel strip and touching nothing
+raised the level. That gate exists for precisely this and it earned its place on the first run.
+
+**Gates (4.7c):** 5 cases — defaults bit-exact (1e-9) · E vs G · the filters and all four bands (including shelf vs
+bell) · the dynamics (GR reported, FAST catches more transient than SLOW, the gate shuts quiet and passes loud,
+PRE EQ measurably differs from POST) · finite at 3 rates with everything maxed, reset, block-invariance to 1e-9.
+**mac-debug ctest 364/364 · RTSan 365/365 · ui typecheck 5 = baseline · vite clean · format clean.**
+Page: `channelstrip` in `FX_REGISTRY` as **CHANNEL**, the GR readout and the native GR mirror extended to it, Help.
+
+### B4's premium brief — the device list is COMPLETE
+ANALOG FILTER · FET COMP · TAPE ECHO · HALL 224 · SATURATOR · LIMITER · RETRO · EQ 6 · CHANNEL, plus the CONSOLE
+re-models and M/S on every slot. **The one item left from the brief is the ROUTING half**: "any channel can route
+to any channel to create groups and busses" (the engine already has the free routing graph from 4.1 — this is
+mostly a PAGE feature) and "multi-select several mixer tracks → group them into a bus in one gesture".
+
 ## THE liveRec PROBE CHECK — the third failure, and the actual fix (2026-08-24)
 
 `liveRecOk` failed CI for a THIRD time (run 32747506096, macOS universal): all five attempts used, the hit landing

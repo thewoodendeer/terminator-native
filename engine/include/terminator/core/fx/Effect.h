@@ -37,14 +37,15 @@ enum class FxType : std::uint8_t
     delay,
     reverb,
     utility,
-    ladder,    // 4.6 premium: ANALOG FILTER (native-only — appended so every existing type keeps its index)
-    fetcomp,   // 4.6 premium: FET COMP
-    tapeecho,  // 4.6 premium: TAPE ECHO (RE-201)
-    plateverb, // 4.6 premium: HALL 224
-    saturator, // 4.6 premium: SATURATOR
-    limiter,   // 4.6 premium: LIMITER
-    retro,     // 4.6 premium: RETRO (RC-20 shaped)
-    eq6,       // 4.7b premium: EQ 6 (the multi-band parametric)
+    ladder,       // 4.6 premium: ANALOG FILTER (native-only — appended so every existing type keeps its index)
+    fetcomp,      // 4.6 premium: FET COMP
+    tapeecho,     // 4.6 premium: TAPE ECHO (RE-201)
+    plateverb,    // 4.6 premium: HALL 224
+    saturator,    // 4.6 premium: SATURATOR
+    limiter,      // 4.6 premium: LIMITER
+    retro,        // 4.6 premium: RETRO (RC-20 shaped)
+    eq6,          // 4.7b premium: EQ 6 (the multi-band parametric)
+    channelstrip, // 4.7c premium: CHANNEL (the SSL 4000 G strip)
     count
 };
 

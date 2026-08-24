@@ -1908,4 +1908,312 @@ void EqFx6::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
         }
 }
 
+// ---- CHANNEL (the SSL 4000 G strip) --------------------------------------------------------------------------
+
+void ChannelStripFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    reset();
+}
+
+void ChannelStripFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    hpf_.set(16.0f, true); // at its bottom the HPF is OFF, as on the desk
+    lpf_.set(22000.0f, true);
+    lfGain_.set(0.0f, true);
+    lfFreq_.set(80.0f, true);
+    lmfGain_.set(0.0f, true);
+    lmfFreq_.set(400.0f, true);
+    lmfQ_.set(1.0f, true);
+    hmfGain_.set(0.0f, true);
+    hmfFreq_.set(3000.0f, true);
+    hmfQ_.set(1.0f, true);
+    hfGain_.set(0.0f, true);
+    hfFreq_.set(8000.0f, true);
+    lfBell_ = hfBell_ = 0.0f;
+    curve_ = 1.0f;            // G
+    cThresh_.set(0.0f, true); // 0 dB = the compressor is doing nothing
+    cRatio_.set(2.0f, true);
+    cRelease_.set(300.0f, true);
+    gThresh_.set(-80.0f, true); // fully down = the gate is open
+    gRange_.set(0.0f, true);
+    gRelease_.set(300.0f, true);
+    out_.set(0.0f, true);
+    fastAtk_ = dynPre_ = 0.0f;
+    for (int c = 0; c < 2; ++c)
+    {
+        hp_[c].reset();
+        lp_[c].reset();
+        lf_[c].reset();
+        lmf_[c].reset();
+        hmf_[c].reset();
+        hf_[c].reset();
+    }
+    // These two are in DECIBELS (they are gain REDUCTION, added together and converted once), so "doing nothing"
+    // is 0, not 1. Initialised to 1.0 they made the strip 2 dB LOUDER at rest — the "defaults are bit-exact" gate
+    // is what caught it, which is exactly what that gate is for.
+    compEnv_ = gateEnv_ = 0.0;
+    detEnv_ = 0.0;
+    grDb_ = 0.0f;
+    recompute();
+}
+
+void ChannelStripFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        hpf_.set(clampf(value, 16.0f, 350.0f), immediate);
+        break;
+    case 1:
+        lpf_.set(clampf(value, 3000.0f, 22000.0f), immediate);
+        break;
+    case 2:
+        lfGain_.set(clampf(value, -15.0f, 15.0f), immediate);
+        break;
+    case 3:
+        lfFreq_.set(clampf(value, 30.0f, 450.0f), immediate);
+        break;
+    case 4:
+        lfBell_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 5:
+        lmfGain_.set(clampf(value, -15.0f, 15.0f), immediate);
+        break;
+    case 6:
+        lmfFreq_.set(clampf(value, 200.0f, 2500.0f), immediate);
+        break;
+    case 7:
+        lmfQ_.set(clampf(value, 0.5f, 3.0f), immediate);
+        break;
+    case 8:
+        hmfGain_.set(clampf(value, -15.0f, 15.0f), immediate);
+        break;
+    case 9:
+        hmfFreq_.set(clampf(value, 600.0f, 7000.0f), immediate);
+        break;
+    case 10:
+        hmfQ_.set(clampf(value, 0.5f, 3.0f), immediate);
+        break;
+    case 11:
+        hfGain_.set(clampf(value, -15.0f, 15.0f), immediate);
+        break;
+    case 12:
+        hfFreq_.set(clampf(value, 1500.0f, 16000.0f), immediate);
+        break;
+    case 13:
+        hfBell_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 14:
+        curve_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 15:
+        cThresh_.set(clampf(value, -40.0f, 0.0f), immediate);
+        break;
+    case 16:
+        cRatio_.set(clampf(value, 1.0f, 20.0f), immediate);
+        break;
+    case 17:
+        cRelease_.set(clampf(value, 50.0f, 2000.0f), immediate);
+        break;
+    case 18:
+        fastAtk_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 19:
+        gThresh_.set(clampf(value, -80.0f, 0.0f), immediate);
+        break;
+    case 20:
+        gRange_.set(clampf(value, 0.0f, 60.0f), immediate);
+        break;
+    case 21:
+        gRelease_.set(clampf(value, 50.0f, 2000.0f), immediate);
+        break;
+    case 22:
+        dynPre_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 23:
+        out_.set(clampf(value, -24.0f, 24.0f), immediate);
+        break;
+    default:
+        break;
+    }
+    if (immediate)
+        recompute();
+}
+
+float ChannelStripFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return hpf_.target;
+    case 1:
+        return lpf_.target;
+    case 2:
+        return lfGain_.target;
+    case 3:
+        return lfFreq_.target;
+    case 4:
+        return lfBell_;
+    case 5:
+        return lmfGain_.target;
+    case 6:
+        return lmfFreq_.target;
+    case 7:
+        return lmfQ_.target;
+    case 8:
+        return hmfGain_.target;
+    case 9:
+        return hmfFreq_.target;
+    case 10:
+        return hmfQ_.target;
+    case 11:
+        return hfGain_.target;
+    case 12:
+        return hfFreq_.target;
+    case 13:
+        return hfBell_;
+    case 14:
+        return curve_;
+    case 15:
+        return cThresh_.target;
+    case 16:
+        return cRatio_.target;
+    case 17:
+        return cRelease_.target;
+    case 18:
+        return fastAtk_;
+    case 19:
+        return gThresh_.target;
+    case 20:
+        return gRange_.target;
+    case 21:
+        return gRelease_.target;
+    case 22:
+        return dynPre_;
+    case 23:
+        return out_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+void ChannelStripFx::recompute() noexcept TERMINATOR_NONBLOCKING
+{
+    const double hpF = static_cast<double>(hpf_.cur), lpF = static_cast<double>(lpf_.cur);
+    const bool hpOn = hpF > 16.5, lpOn = lpF < 21500.0;
+    const double lfG = static_cast<double>(lfGain_.cur), lmfG = static_cast<double>(lmfGain_.cur);
+    const double hmfG = static_cast<double>(hmfGain_.cur), hfG = static_cast<double>(hfGain_.cur);
+    // THE E / G DIFFERENCE. On the G the mid bands' Q widens as the gain falls back towards zero and tightens as
+    // it is pushed — so a small move is broad and musical and a big move is surgical. On the E the Q is constant
+    // whatever the gain. Everything else about the two curves follows from that.
+    const double lmfQ = static_cast<double>(lmfQ_.cur);
+    const double hmfQ = static_cast<double>(hmfQ_.cur);
+    const double gShape = curve_ > 0.5f ? 1.0 : 0.0;
+    const double lmfQEff = lmfQ * (1.0 + gShape * (std::abs(lmfG) / 15.0) * 1.2);
+    const double hmfQEff = hmfQ * (1.0 + gShape * (std::abs(hmfG) / 15.0) * 1.2);
+    for (int c = 0; c < 2; ++c)
+    {
+        if (hpOn)
+            hp_[c].set(Biquad::Type::highpass, hpF, 0.0, 0.0, sr_);
+        else
+            hp_[c].setIdentity();
+        if (lpOn)
+            lp_[c].set(Biquad::Type::lowpass, lpF, 0.0, 0.0, sr_);
+        else
+            lp_[c].setIdentity();
+        lf_[c].set(lfBell_ > 0.5f ? Biquad::Type::peaking : Biquad::Type::lowshelf, static_cast<double>(lfFreq_.cur),
+                   lfBell_ > 0.5f ? 1.0 : 0.7071, lfG, sr_);
+        lmf_[c].set(Biquad::Type::peaking, static_cast<double>(lmfFreq_.cur), lmfQEff, lmfG, sr_);
+        hmf_[c].set(Biquad::Type::peaking, static_cast<double>(hmfFreq_.cur), hmfQEff, hmfG, sr_);
+        hf_[c].set(hfBell_ > 0.5f ? Biquad::Type::peaking : Biquad::Type::highshelf, static_cast<double>(hfFreq_.cur),
+                   hfBell_ > 0.5f ? 1.0 : 0.7071, hfG, sr_);
+    }
+}
+
+void ChannelStripFx::runEq(double& l, double& r) noexcept TERMINATOR_NONBLOCKING
+{
+    l = hf_[0].process(hmf_[0].process(lmf_[0].process(lf_[0].process(lp_[0].process(hp_[0].process(l))))));
+    r = hf_[1].process(hmf_[1].process(lmf_[1].process(lf_[1].process(lp_[1].process(hp_[1].process(r))))));
+}
+
+/// The dynamics section: a compressor and a gate-expander sharing one detector, as the desk's does.
+void ChannelStripFx::runDyn(double& l, double& r) noexcept TERMINATOR_NONBLOCKING
+{
+    const double key = std::max(std::abs(l), std::abs(r));
+    // one rectifier, both processors — a shared detector is why the desk's gate and compressor never fight
+    const double det = std::exp(-1.0 / (0.010 * sr_));
+    detEnv_ = key > detEnv_ ? key : detEnv_ * det;
+    const double keyDb = 20.0 * std::log10(std::max(detEnv_, 1e-9));
+
+    const double ratio = static_cast<double>(cRatio_.cur);
+    const double over = keyDb - static_cast<double>(cThresh_.cur);
+    const double targetC = over > 0.0 && ratio > 1.0 ? -(1.0 - 1.0 / ratio) * over : 0.0;
+    const double atkMs = fastAtk_ > 0.5f ? 1.0 : 30.0; // the desk's two attacks, not a knob
+    const double cAtk = std::exp(-1.0 / (0.001 * atkMs * sr_));
+    const double cRel = std::exp(-1.0 / (0.001 * std::max(1.0, static_cast<double>(cRelease_.cur)) * sr_));
+    const double cCoef = targetC < compEnv_ ? cAtk : cRel;
+    compEnv_ = targetC + (compEnv_ - targetC) * cCoef;
+
+    const double range = static_cast<double>(gRange_.cur);
+    const double targetG = keyDb < static_cast<double>(gThresh_.cur) ? -range : 0.0;
+    const double gAtk = std::exp(-1.0 / (0.0015 * sr_));
+    const double gRel = std::exp(-1.0 / (0.001 * std::max(1.0, static_cast<double>(gRelease_.cur)) * sr_));
+    const double gCoef = targetG < gateEnv_ ? gAtk : gRel;
+    gateEnv_ = targetG + (gateEnv_ - targetG) * gCoef;
+
+    const double g = std::pow(10.0, (compEnv_ + gateEnv_) / 20.0);
+    grDb_ = static_cast<float>(compEnv_ + gateEnv_);
+    l *= g;
+    r *= g;
+}
+
+void ChannelStripFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (hpf_.moving() || lpf_.moving() || lfGain_.moving() || lfFreq_.moving() || lmfGain_.moving() ||
+        lmfFreq_.moving() || lmfQ_.moving() || hmfGain_.moving() || hmfFreq_.moving() || hmfQ_.moving() ||
+        hfGain_.moving() || hfFreq_.moving())
+    {
+        hpf_.advance(n, sr_, kFxTau, 1e-3f);
+        lpf_.advance(n, sr_, kFxTau, 1e-3f);
+        lfGain_.advance(n, sr_, kFxTau);
+        lfFreq_.advance(n, sr_, kFxTau, 1e-3f);
+        lmfGain_.advance(n, sr_, kFxTau);
+        lmfFreq_.advance(n, sr_, kFxTau, 1e-3f);
+        lmfQ_.advance(n, sr_, kFxTau);
+        hmfGain_.advance(n, sr_, kFxTau);
+        hmfFreq_.advance(n, sr_, kFxTau, 1e-3f);
+        hmfQ_.advance(n, sr_, kFxTau);
+        hfGain_.advance(n, sr_, kFxTau);
+        hfFreq_.advance(n, sr_, kFxTau, 1e-3f);
+        recompute();
+    }
+    cThresh_.advance(n, sr_, kFxTau);
+    cRatio_.advance(n, sr_, kFxTau);
+    cRelease_.advance(n, sr_, kFxTau);
+    gThresh_.advance(n, sr_, kFxTau);
+    gRange_.advance(n, sr_, kFxTau);
+    gRelease_.advance(n, sr_, kFxTau);
+    out_.advance(n, sr_, kFxTau);
+    const double outGain = std::pow(10.0, static_cast<double>(out_.cur) / 20.0);
+    const bool pre = dynPre_ > 0.5f;
+
+    for (int i = 0; i < n; ++i)
+    {
+        double a = l[i], b = r[i];
+        if (pre)
+        {
+            runDyn(a, b);
+            runEq(a, b);
+        }
+        else
+        {
+            runEq(a, b);
+            runDyn(a, b);
+        }
+        l[i] = a * outGain;
+        r[i] = b * outGain;
+    }
+}
+
 } // namespace terminator

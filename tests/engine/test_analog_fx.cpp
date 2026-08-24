@@ -1927,3 +1927,228 @@ TEST_CASE("eq6: finite with every band on at every rate", "[fx][analog][eq6]")
             }
         }
 }
+
+// ---- CHANNEL, the SSL 4000 G strip (4.7c) ----------------------------------------------------------------------
+// The last device on Victor's brief. The gate that carries the most weight is the E/G one: if the two curves
+// measure the same, the switch is decoration and the strip is just "an EQ" — the whole reason both consoles are
+// famous is that the G's Q FOLLOWS THE GAIN and the E's does not.
+
+namespace
+{
+enum
+{
+    kHpf = 0,
+    kLpf,
+    kLf,
+    kLfHz,
+    kLfBell,
+    kLmf,
+    kLmfHz,
+    kLmfQ,
+    kHmf,
+    kHmfHz,
+    kHmfQ,
+    kHf,
+    kHfHz,
+    kHfBell,
+    kCurve,
+    kCThresh,
+    kCRatio,
+    kCRel,
+    kCAtk,
+    kGThresh,
+    kGRange,
+    kGRel,
+    kDynPre,
+    kCsOut
+};
+
+std::unique_ptr<ChannelStripFx> makeStrip(double sr = kSr)
+{
+    auto fx = std::make_unique<ChannelStripFx>();
+    fx->prepare(sr, kBlock);
+    return fx;
+}
+} // namespace
+
+TEST_CASE("channel: at its defaults the strip is bit-exact", "[fx][analog][strip]")
+{
+    REQUIRE(fxTypeFromId("channelstrip") == FxType::channelstrip);
+    REQUIRE(fxTypeInfo(FxType::channelstrip).numParams == 24);
+    REQUIRE(fxOptionIndex(FxType::channelstrip, kCurve, "G") == 1);
+    REQUIRE(fxOptionIndex(FxType::channelstrip, kDynPre, "PRE EQ") == 1);
+
+    // Filters at their ends = off, EQ flat, compressor at 0 dB threshold with the gate fully down: inserting the
+    // strip and touching nothing must do nothing.
+    auto fx = makeStrip();
+    const int n = 4096;
+    std::vector<double> l(n), r(n), in(n);
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<std::size_t>(i)] = 0.3 * std::sin(kTwoPi * 500.0 * static_cast<double>(i) / kSr);
+        l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = in[static_cast<std::size_t>(i)];
+    }
+    fx->process(l.data(), r.data(), n);
+    for (int i = 0; i < n; ++i)
+        REQUIRE(l[static_cast<std::size_t>(i)] == Approx(in[static_cast<std::size_t>(i)]).margin(1e-9));
+}
+
+TEST_CASE("channel: E and G are genuinely different curves", "[fx][analog][strip]")
+{
+    // The claim: on the G the Q FOLLOWS the gain — a big boost is narrower than a small one. On the E it does not
+    // move. Measured as the width of the same boost: how much of it is still there an octave away.
+    const auto skirt = [](float curve, float gain)
+    {
+        auto fx = makeStrip();
+        fx->setParam(kCurve, curve, true);
+        fx->setParam(kLmfHz, 1000.0f, true);
+        fx->setParam(kLmfQ, 1.0f, true);
+        fx->setParam(kLmf, gain, true);
+        const double atCentre = gainDb(*fx, 1000.0, 0.05);
+        auto fx2 = makeStrip();
+        fx2->setParam(kCurve, curve, true);
+        fx2->setParam(kLmfHz, 1000.0f, true);
+        fx2->setParam(kLmfQ, 1.0f, true);
+        fx2->setParam(kLmf, gain, true);
+        const double atOctave = gainDb(*fx2, 2000.0, 0.05);
+        return atOctave / std::max(0.001, atCentre); // 1 = as wide as it gets, 0 = surgical
+    };
+    // E: the same shape whatever the gain.
+    CHECK(skirt(0.0f, 3.0f) == Approx(skirt(0.0f, 15.0f)).margin(0.06));
+    // G: the big boost is measurably NARROWER than the small one.
+    CHECK(skirt(1.0f, 15.0f) < skirt(1.0f, 3.0f) - 0.05);
+
+    // …and both still hit the gain they were asked for at the centre.
+    for (const float c : {0.0f, 1.0f})
+    {
+        auto fx = makeStrip();
+        fx->setParam(kCurve, c, true);
+        fx->setParam(kHmfHz, 3000.0f, true);
+        fx->setParam(kHmf, 9.0f, true);
+        INFO("curve " << c);
+        CHECK(gainDb(*fx, 3000.0, 0.05) == Approx(9.0).margin(0.6));
+    }
+}
+
+TEST_CASE("channel: the filters and the four bands do what they say", "[fx][analog][strip]")
+{
+    auto hp = makeStrip();
+    hp->setParam(kHpf, 300.0f, true);
+    CHECK(gainDb(*hp, 50.0, 0.05) < -20.0);
+    auto hp2 = makeStrip();
+    hp2->setParam(kHpf, 300.0f, true);
+    CHECK(gainDb(*hp2, 4000.0, 0.05) == Approx(0.0).margin(0.5));
+
+    auto lp = makeStrip();
+    lp->setParam(kLpf, 4000.0f, true);
+    CHECK(gainDb(*lp, 16000.0, 0.05) < -20.0);
+
+    // LF as a SHELF lifts everything below it; as a BELL it lifts only around its frequency.
+    auto shelf = makeStrip();
+    shelf->setParam(kLfHz, 100.0f, true);
+    shelf->setParam(kLf, 10.0f, true);
+    const double shelfDeep = gainDb(*shelf, 35.0, 0.05);
+    auto bell = makeStrip();
+    bell->setParam(kLfHz, 100.0f, true);
+    bell->setParam(kLf, 10.0f, true);
+    bell->setParam(kLfBell, 1.0f, true);
+    const double bellDeep = gainDb(*bell, 35.0, 0.05);
+    CHECK(shelfDeep > bellDeep + 3.0);
+
+    auto hf = makeStrip();
+    hf->setParam(kHfHz, 8000.0f, true);
+    hf->setParam(kHf, -10.0f, true);
+    CHECK(gainDb(*hf, 15000.0, 0.05) < -6.0);
+}
+
+TEST_CASE("channel: the dynamics section, and PRE EQ really is a different order", "[fx][analog][strip]")
+{
+    // The compressor works and reports its gain reduction.
+    auto comp = makeStrip();
+    comp->setParam(kCThresh, -24.0f, true);
+    comp->setParam(kCRatio, 8.0f, true);
+    run(*comp, static_cast<int>(kSr * 0.6), tone(400.0, 0.5));
+    CHECK(comp->gainReductionDb() < -8.0f);
+
+    // FAST vs SLOW attack: the fast one catches more of a transient.
+    const auto firstPeak = [](float fast)
+    {
+        auto fx = makeStrip();
+        fx->setParam(kCThresh, -30.0f, true);
+        fx->setParam(kCRatio, 10.0f, true);
+        fx->setParam(kCAtk, fast, true);
+        const auto out = run(*fx, 4800, [](int i) { return i < 480 ? 0.9 : 0.0; });
+        return peak(out, 0, 480);
+    };
+    CHECK(firstPeak(1.0f) < firstPeak(0.0f));
+
+    // The gate shuts quiet material and leaves loud material alone.
+    auto gate = makeStrip();
+    gate->setParam(kGThresh, -30.0f, true);
+    gate->setParam(kGRange, 40.0f, true);
+    const auto quiet = run(*gate, static_cast<int>(kSr * 0.8), tone(400.0, 0.005));
+    CHECK(rms(quiet, static_cast<int>(kSr * 0.5), static_cast<int>(kSr * 0.8)) < 0.0025);
+    auto gate2 = makeStrip();
+    gate2->setParam(kGThresh, -30.0f, true);
+    gate2->setParam(kGRange, 40.0f, true);
+    const auto loud = run(*gate2, static_cast<int>(kSr * 0.8), tone(400.0, 0.4));
+    CHECK(rms(loud, static_cast<int>(kSr * 0.5), static_cast<int>(kSr * 0.8)) > 0.2);
+
+    // DYN PRE EQ: with a big EQ boost and a compressor working, the order changes the result — compressing before
+    // the boost lets the boost through, compressing after it catches the boost.
+    const auto levelWith = [](float pre)
+    {
+        auto fx = makeStrip();
+        fx->setParam(kDynPre, pre, true);
+        fx->setParam(kHmfHz, 1000.0f, true);
+        fx->setParam(kHmf, 15.0f, true);
+        fx->setParam(kCThresh, -24.0f, true);
+        fx->setParam(kCRatio, 10.0f, true);
+        return gainDb(*fx, 1000.0, 0.2);
+    };
+    CHECK(std::abs(levelWith(1.0f) - levelWith(0.0f)) > 1.0);
+}
+
+TEST_CASE("channel: finite, reset, block-invariant", "[fx][analog][strip]")
+{
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+    {
+        auto fx = makeStrip(sr);
+        fx->setParam(kHpf, 350.0f, true);
+        fx->setParam(kLpf, 3000.0f, true);
+        for (const int p : {kLf, kLmf, kHmf, kHf})
+            fx->setParam(p, 15.0f, true);
+        fx->setParam(kCThresh, -40.0f, true);
+        fx->setParam(kCRatio, 20.0f, true);
+        fx->setParam(kGThresh, 0.0f, true);
+        fx->setParam(kGRange, 60.0f, true);
+        fx->setParam(kCsOut, 24.0f, true);
+        const auto out = run(*fx, static_cast<int>(sr * 0.2), [](int i) { return (i / 16) % 2 == 0 ? 1.0 : -1.0; }, 64);
+        for (const double v : out)
+        {
+            REQUIRE(std::isfinite(v));
+            // four bands at +15 dB and OUT at +24 is 84 dB of deliberate gain on a full-scale square — the check
+            // here is that it stays FINITE and bounded, not that it stays quiet
+            REQUIRE(std::abs(v) < 300.0);
+        }
+    }
+
+    auto fx = makeStrip();
+    fx->setParam(kLmf, 12.0f, true);
+    fx->reset();
+    CHECK(fx->param(kLmf) == Approx(0.0f));
+    CHECK(fx->param(kCurve) == Approx(1.0f)); // G is the default
+
+    const auto build = [](int block)
+    {
+        auto e = makeStrip();
+        e->setParam(kHpf, 120.0f, true);
+        e->setParam(kHmf, 6.0f, true);
+        e->setParam(kCThresh, -20.0f, true);
+        e->setParam(kCRatio, 4.0f, true);
+        return run(*e, 8192, tone(300.0, 0.4), block);
+    };
+    const auto a = build(8192), b = build(53);
+    for (std::size_t i = 0; i < a.size(); ++i)
+        REQUIRE(a[i] == Approx(b[i]).margin(1e-9));
+}
