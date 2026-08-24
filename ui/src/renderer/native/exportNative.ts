@@ -7,6 +7,7 @@
  * so "export == what you hear" is true by construction rather than by two implementations agreeing.
  */
 import { isNative, native, onNativeEvent } from './juceBridge';
+import { bundledTools } from './processBridge';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -31,6 +32,8 @@ export interface NativeExportRequest {
   sampleRate?: number;
   loops?: number;
   tail?: number;
+  /** SONG: every sequence back to back (what Master Mixdown means). Off = the current pattern, `loops` times. */
+  song?: boolean;
   /** Defaults: the mix, the drums, the bass and the master's safety limiter are all IN. */
   mixer?: boolean;
   drums?: boolean;
@@ -114,7 +117,7 @@ export function installExportProbe(deps: { tempDir: () => string; sep: () => str
           metronomeBpm: 120,
           chopVolume: 1,
         };
-        const run = async (format: 'wav' | 'flac') => {
+        const run = async (format: 'wav' | 'flac' | 'mp3') => {
           const seen: number[] = [];
           const job = exportProjectNative(
             { project, sources: { probe: key }, path, format, bitDepth: 16, sampleRate: sr, tail: 0.2 },
@@ -134,6 +137,15 @@ export function installExportProbe(deps: { tempDir: () => string; sep: () => str
         };
         const wav = await run('wav');
         const flac = await run('flac');
+        // MP3 drives the BUNDLED `lame` (bin/lame[.exe]). If the build has one, an MP3 export must work with no
+        // lame anywhere else on the machine — that is the whole point of shipping it.
+        const lame = (await bundledTools().catch(() => null))?.lame ?? '';
+        r.lameBundled = !!lame;
+        r.lamePath = lame;
+        const mp3 = await run('mp3');
+        r.mp3Ok = mp3.ok;
+        r.mp3Bytes = mp3.bytes;
+        if (!mp3.ok && mp3.error) r.mp3Error = mp3.error;
 
         // CANCEL: a long render (many loops) stopped as soon as it reports progress must write NOTHING
         {

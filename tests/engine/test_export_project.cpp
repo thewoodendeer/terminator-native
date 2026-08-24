@@ -387,3 +387,87 @@ TEST_CASE("project export: the master's safety limiter is in the bounce by defau
     REQUIRE(peakOf(a.buffer, 0) != Approx(peakOf(b.buffer, 0)).margin(1.0e-6));
     REQUIRE(peakOf(a.buffer, 0) < 1.2); // it is a safety limiter: nothing runs away
 }
+
+namespace
+{
+/// Add a second sequence to a project: 1 bar, a hit on step 0 by `pad`.
+void addSequence(juce::ValueTree& p, int pad)
+{
+    auto seqs = p.getChildWithName(ids::Sequences);
+    juce::ValueTree seq(ids::Sequence);
+    seq.setProperty(ids::bars, 1, nullptr);
+    seq.setProperty(ids::resolution, 16, nullptr);
+    seq.setProperty(ids::viewResolution, 16, nullptr);
+    seq.setProperty(ids::loop, true, nullptr);
+    juce::Array<juce::var> grid, vel;
+    for (int s = 0; s < 16; ++s)
+    {
+        juce::Array<juce::var> row, vrow;
+        if (s == 0)
+        {
+            row.add(pad);
+            vrow.add(1.0);
+        }
+        grid.add(juce::var(row));
+        vel.add(juce::var(vrow));
+    }
+    seq.setProperty(ids::grid, juce::var(grid), nullptr);
+    seq.setProperty(ids::velGrid, juce::var(vel), nullptr);
+    seq.setProperty(ids::revGrid, juce::var(juce::Array<juce::var>()), nullptr);
+    seqs.appendChild(seq, nullptr);
+}
+} // namespace
+
+TEST_CASE("project export: SONG MODE renders every sequence back to back, like the app's Master Mixdown", "[export]")
+{
+    // the app's exportMaster walks `sequences` with a running cursor rather than looping the current one — a native
+    // master bounce has to do the same or it exports one pattern where the app exports the song
+    const double sr = 48000.0;
+    SampleBank bank;
+    bank.bySourceVideoId["kick"] = click(sr, 0.2, 0.9f);
+    bank.bySourceVideoId["snare"] = click(sr, 0.2, 0.9f);
+    auto p = twoPadProject(); // sequence 0: both pads on the 1 of a 1-bar pattern
+    p.getChildWithName(ids::Sequences).removeAllChildren(nullptr);
+    addSequence(p, 0); // bar 1: pad 0
+    addSequence(p, 1); // bar 2: pad 1
+    p.setProperty(ids::currentSeqIdx, 0, nullptr);
+
+    auto one = mixOpts(sr);
+    auto song = mixOpts(sr);
+    song.allSequences = true;
+    const auto a = renderProject(p, bank, one);
+    const auto b = renderProject(p, bank, song);
+
+    // one bar at 120 BPM is 2 s: the song is twice as long as the single pattern
+    REQUIRE(b.buffer.getNumSamples() > a.buffer.getNumSamples());
+    REQUIRE(static_cast<double>(b.buffer.getNumSamples()) / sr == Approx(4.0 + song.tailSeconds).margin(0.05));
+    // and the SECOND bar really has audio in it — the second sequence played, it was not silence
+    auto peakBetween = [&](const juce::AudioBuffer<float>& buf, double t0, double t1)
+    {
+        const int i0 = static_cast<int>(t0 * sr), i1 = std::min(buf.getNumSamples(), static_cast<int>(t1 * sr));
+        double pk = 0.0;
+        for (int i = i0; i < i1; ++i)
+            pk = std::max(pk, std::abs(static_cast<double>(buf.getSample(0, i))));
+        return pk;
+    };
+    REQUIRE(peakBetween(b.buffer, 0.0, 0.1) > 0.05);
+    REQUIRE(peakBetween(b.buffer, 2.0, 2.1) > 0.05); // the start of the second sequence
+    REQUIRE(peakBetween(a.buffer, 2.0, 2.1) == 0.0); // …which the single-pattern render does not have
+}
+
+TEST_CASE("project export: song mode with one sequence is the same as not asking for it", "[export]")
+{
+    const double sr = 48000.0;
+    SampleBank bank;
+    bank.bySourceVideoId["kick"] = click(sr, 0.2, 0.9f);
+    bank.bySourceVideoId["snare"] = click(sr, 0.2, 0.9f);
+    auto p = twoPadProject();
+    auto plain = mixOpts(sr);
+    auto song = mixOpts(sr);
+    song.allSequences = true;
+    const auto a = renderProject(p, bank, plain);
+    const auto b = renderProject(p, bank, song);
+    REQUIRE(a.buffer.getNumSamples() == b.buffer.getNumSamples());
+    for (int i = 0; i < a.buffer.getNumSamples(); ++i)
+        REQUIRE(a.buffer.getSample(0, i) == b.buffer.getSample(0, i));
+}

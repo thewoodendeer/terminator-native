@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 
+#include "terminator/core/ChopSequencer.h"
 #include "terminator/core/fx/ConsoleStage.h"
 #include "terminator/render/BassSpec.h"
 #include "terminator/core/fx/Effect.h"
@@ -601,16 +602,41 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         spec.pads.push_back(std::move(p));
     }
 
-    // events: the current sequence, repeated `loops` times
-    const auto seq = planner.currentSequence();
-    const int bars = static_cast<int>(seq.getProperty(ids::bars, 1));
-    const int resolution = static_cast<int>(seq.getProperty(ids::resolution, 16));
+    // events: the current sequence on repeat, or — in SONG MODE — every sequence back to back, which is what the
+    // app's Master Mixdown renders (ChopperEngine.exportMaster walks `sequences` with a running cursor). The
+    // duration of a pattern is its OWN bars × resolution, so they may differ from one another; a run is their sum.
     const double tempo = planner.tempoBpm();
-    const double patternDur = bars * (60.0 / tempo) * 4.0; // bars × seconds-per-bar
+    auto durationOf = [tempo](const juce::ValueTree& s)
+    {
+        const int bars = std::max(1, static_cast<int>(s.getProperty(ids::bars, 1)));
+        const int res = std::max(1, static_cast<int>(s.getProperty(ids::resolution, 16)));
+        const int steps = std::min(kSeqMaxSteps, bars * res);
+        return steps * (60.0 / tempo) * (4.0 / static_cast<double>(res));
+    };
+    std::vector<juce::ValueTree> run;
+    if (opts.allSequences)
+    {
+        for (const auto& sq : project.getChildWithName(ids::Sequences))
+            if (durationOf(sq) > 0.0)
+                run.push_back(sq);
+    }
+    if (run.empty())
+        run.push_back(planner.currentSequence());
+    double runDur = 0.0;
+    for (const auto& sq : run)
+        runDur += durationOf(sq);
+    const double patternDur = runDur;
     double lastEnd = 0.0;
     for (int loop = 0; loop < std::max(1, opts.loops); ++loop)
     {
-        const auto evs = planner.patternToEvents(seq, loop * patternDur);
+        std::vector<SeqEvent> evs;
+        double cursor = loop * runDur;
+        for (const auto& sq : run)
+        {
+            const auto part = planner.patternToEvents(sq, cursor);
+            evs.insert(evs.end(), part.begin(), part.end());
+            cursor += durationOf(sq);
+        }
         for (const auto& e : evs)
         {
             if (padSlot.find(e.pad) == padSlot.end())
@@ -630,7 +656,6 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
             lastEnd = std::max(lastEnd, e.time + e.maxDur);
         }
     }
-    (void)resolution;
     spec.lengthSeconds = std::max(patternDur * std::max(1, opts.loops), lastEnd) + opts.tailSeconds;
     // the mix LAST: the strips a pad routed to must exist, and the namer has been handing out their indices as the
     // pads asked for them, so the blob's channels and the routed ones land on the same numbering

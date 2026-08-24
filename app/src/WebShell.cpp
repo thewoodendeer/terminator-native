@@ -1437,6 +1437,8 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
     opts.renderDrums = static_cast<bool>(req.getProperty("drums", true));
     opts.renderBass = static_cast<bool>(req.getProperty("bass", true));
     opts.masterLimiter = static_cast<bool>(req.getProperty("limiter", true));
+    // `song` = every sequence back to back (the app's Master Mixdown); off = the current pattern on repeat
+    opts.allSequences = static_cast<bool>(req.getProperty("song", false));
     if (const auto* stems = req.getProperty("stems", juce::var()).getArray())
         for (const auto& s : *stems)
             opts.stemChannels.push_back(s.toString());
@@ -1449,7 +1451,7 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
     const auto format = render::audioFileFormatFromName(req.getProperty("format", "wav").toString());
     const int mp3Kbps = std::clamp(static_cast<int>(req.getProperty("mp3Kbps", 320)), 32, 320);
     // MP3 rides a `lame` EXECUTABLE (nothing links liblame): bundled first, then whatever the machine has
-    const auto lame = render::findLameBinary(ProcessHub::bundledBinDir().getChildFile("lame"));
+    const auto lame = render::findLameBinary(ProcessHub::lameBinary());
     if (format == render::AudioFileFormat::mp3 && !lame.existsAsFile())
     {
         complete(ok(false, "MP3 export needs the `lame` encoder and this build has none — export WAV or FLAC"));

@@ -54,6 +54,10 @@ struct ProjectRenderOptions
     bool renderDrums = false;
     /// Phase 4.5d: render the project's BASS too, through the engine's own BassSequencer + BassSynth.
     bool renderBass = false;
+    /// SONG MODE (Phase 4.5h): render EVERY sequence back to back instead of the current one on repeat — what the
+    /// app's own Master Mixdown does (ChopperEngine.exportMaster concatenates `sequences`). `loops` then repeats the
+    /// whole run. Off = the current sequence only, which is what a pattern bounce wants.
+    bool allSequences = false;
     /// The master's −1 dBFS safety limiter. The page always has it in, so exports carry it by default; off gives an
     /// UNLIMITED master bounce, which is also what makes the master exactly the sum of its trackouts.
     bool masterLimiter = true;

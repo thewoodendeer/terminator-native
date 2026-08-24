@@ -1610,6 +1610,32 @@ leaves `blocksProcessed` far short of the full length; a render with no callback
 inside it); bundling a `lame` binary per platform (QUEUED as its own task); the legacy chopper chain for the
 single-chop bake.
 
+## Phase 4 — 4.5h DONE (SONG MODE: EVERY SEQUENCE, NOT JUST THE CURRENT ONE), 2026-08-23
+
+**Found while sizing the export dialog, and it would have been a REGRESSION if the dialog had shipped first.** The
+app's own Master Mixdown (`ChopperEngine.exportMaster`) walks `sequences` with a running cursor and renders every
+pattern back to back. `buildProjectRenderSpec` rendered only `planner.currentSequence()` on repeat — so moving the
+Master Mixdown button onto the native renderer would have exported ONE PATTERN where the app exports the song.
+(The claim in "4.5d DONE" that the renderer was "complete enough to move the export button onto" was wrong on this
+point.)
+
+`ProjectRenderOptions::allSequences` (verb: `song`) now concatenates the run: each pattern's duration is its OWN
+bars × resolution clamped to `kSeqMaxSteps`, so patterns of different lengths follow one another correctly, and
+`loops` repeats the whole run. Off = the current sequence only, which is what a pattern bounce wants — and with a
+single sequence the two are bit-identical (gated).
+
+Worth noting for parity: the app's `exportMaster` renders CHOPS ONLY. The native song render also carries the drums
+and the bass through the mixer, so it is strictly more complete, not just equal.
+
+**Gates (4.5h):** mac-debug 0 warnings + ctest **284/284** (282 + 2) · RTSan 285/285 · universal (0 warnings) +
+ctest 284/284 · ui gate (tsc baseline 5) · probe OK on universal · clang-format clean.
+Tests: two 1-bar sequences render 4 s of audio with real content at the start of the SECOND bar (which the
+single-pattern render has as silence); song mode with one sequence is sample-identical to not asking for it.
+
+**Still owed on the export:** the Ableton-style dialog (NEXT). MP3 binary bundling landed OUTSIDE this session —
+`cmake/ProvisionTools.cmake` now provisions a universal `lame` 3.100 into `Resources/bin/lame`, which is exactly
+where `findLameBinary` looks; verified present and universal (x86_64 arm64) in the packaged app.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
