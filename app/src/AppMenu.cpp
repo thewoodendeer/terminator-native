@@ -112,6 +112,12 @@ void AppMenu::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& i
 
 bool AppMenu::perform(const InvocationInfo& info)
 {
+    // ONLY the key equivalents come through here. Choosing the item in the MENU already reaches
+    // `menuItemSelected` on its own — JUCE invokes the command AND then calls the model
+    // (juce_MainMenu_mac.mm: `commandManager->invoke(...)` followed by `invokeDirectly(...)`) — so acting here too
+    // would fire every menu item TWICE: two save dialogs, two exports, two new projects.
+    if (info.invocationMethod == InvocationInfo::fromMenu)
+        return true;
     menuItemSelected(static_cast<int>(info.commandID), 0);
     return true;
 }
