@@ -7,6 +7,8 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · SaturatorFx — SATURATOR: the Decapitator's five analogue flavours (tube / germanium / British console /
+//     transformer / punish), each a different curve on the same 4x-oversampled, DC-blocked, auto-gained stage.
 //   · PlateVerbFx — HALL 224: the Lexicon 224's programs on a Dattorro tank — a REAL algorithmic reverb (input
 //     diffusion into two cross-coupled modulated half-loops), where DECAY is in SECONDS because the loop gain is
 //     solved for the RT60 you asked for, not a feel knob.
@@ -125,6 +127,40 @@ class FetCompFx final : public Effect
 
 /// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
 double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// SATURATOR — five analogue flavours on one stage (Phase 4.6f).
+///   STYLE   A (tube — asymmetric, even harmonics first) | E (germanium, harder edge) | N (British console, gentle
+///           odd) | T (transformer, saturates the bottom first) | P (punish — fold-back fuzz)
+///   DRIVE   0..100 — **0 is bit-clean**: the stage is bypassed entirely, not "nearly transparent".
+///   TONE    −100..+100 — a tilt BEFORE the curve, so it changes what gets distorted, not just what comes out.
+///   LOWCUT / HIGHCUT — also before the curve: keep the bottom out of the distortion and the fizz off the top.
+///   PUNISH  0/1 — the extra 6x of drive, the way the hardware's abusive setting works.
+///   OUTPUT  −24..+24 dB · WET 0..100 (the CHAIN crossfades, so parallel saturation is one knob).
+class SaturatorFx final : public Effect
+{
+  public:
+    static constexpr int kOversample = 4;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::saturator; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    void recompute() noexcept TERMINATOR_NONBLOCKING;
+    double curve(double x) const noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    double srOs_ = 192000.0;
+    float styleIdx_ = 0.0f;
+    float punish_ = 0.0f;
+    Glide drive_, tone_, lowCut_, highCut_, output_;
+    Biquad hpL_, hpR_, lpL_, lpR_, tiltLoL_, tiltLoR_, tiltHiL_, tiltHiR_;
+    ButterLp4 decSatL_, decSatR_;
+    double dcInL_ = 0.0, dcOutL_ = 0.0, dcInR_ = 0.0, dcOutR_ = 0.0, dcR_ = 0.999;
+};
 
 /// HALL 224 — the Lexicon 224's programs on a Dattorro tank (Phase 4.6e).
 ///   PROGRAM   HALL | CHAMBER | PLATE | ROOM | AMBIENCE — each sets the tank's size, diffusion, damping and how

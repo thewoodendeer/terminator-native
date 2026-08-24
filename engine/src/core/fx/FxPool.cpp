@@ -27,6 +27,8 @@ const char* const kFetDetect[] = {"FLAT", "HP1", "HP2", "BAND"};
 const char* const kFetModes[] = {"CLEAN", "DIST 2", "DIST 3", "BRITISH"};
 const char* const kTapeHeads[] = {"H1", "H2", "H3", "H1+2", "H2+3", "H1+3", "H1+2+3"};
 const char* const kVerbPrograms[] = {"HALL", "CHAMBER", "PLATE", "ROOM", "AMBIENCE"};
+const char* const kSatStyles[] = {"A TUBE", "E GERM", "N BRIT", "T XFMR", "P PUNISH"};
+const char* const kOffOn[] = {"OFF", "ON"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -144,6 +146,16 @@ const FxParamDef kPlateVerbParams[] = {
     {"MOD", 0.0f, 100.0f, 50.0f},
     {"WET", 0.0f, 100.0f, 30.0f},
 };
+const FxParamDef kSaturatorParams[] = {
+    {"STYLE", 0.0f, 4.0f, 0.0f, kSatStyles, 5},
+    {"DRIVE", 0.0f, 100.0f, 0.0f}, // 0 = bit-clean
+    {"TONE", -100.0f, 100.0f, 0.0f},
+    {"LOWCUT", 20.0f, 1000.0f, 20.0f},
+    {"HIGHCUT", 1000.0f, 20000.0f, 20000.0f},
+    {"PUNISH", 0.0f, 1.0f, 0.0f, kOffOn, 2},
+    {"OUTPUT", -24.0f, 24.0f, 0.0f},
+    {"WET", 0.0f, 100.0f, 100.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -176,6 +188,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::fetcomp, "fetcomp", kFetCompParams, 8, 7},
     {FxType::tapeecho, "tapeecho", kTapeEchoParams, 9, 8},
     {FxType::plateverb, "plateverb", kPlateVerbParams, 9, 8},
+    {FxType::saturator, "saturator", kSaturatorParams, 8, 7},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -214,6 +227,8 @@ int capacityOf(FxType t) noexcept
         return 12; // a 1.5 s tape at ×2.2 is a few MB of line per instance
     case FxType::plateverb:
         return 8; // the tank is a dozen delay lines, sized for SIZE 100
+    case FxType::saturator:
+        return 32;
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -254,6 +269,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<TapeEchoFx>();
     case FxType::plateverb:
         return std::make_unique<PlateVerbFx>();
+    case FxType::saturator:
+        return std::make_unique<SaturatorFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

@@ -41,6 +41,7 @@ enum class FxType : std::uint8_t
     fetcomp,   // 4.6 premium: FET COMP
     tapeecho,  // 4.6 premium: TAPE ECHO (RE-201)
     plateverb, // 4.6 premium: HALL 224
+    saturator, // 4.6 premium: SATURATOR
     count
 };
 

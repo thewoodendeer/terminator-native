@@ -24,6 +24,7 @@ import { LadderFX } from './LadderFX';
 import { FetCompFX } from './FetCompFX';
 import { TapeEchoFX } from './TapeEchoFX';
 import { PlateVerbFX } from './PlateVerbFX';
+import { SaturatorFX } from './SaturatorFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -31,7 +32,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -161,6 +162,21 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
       { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
     ],
     create: (c) => new LadderFX(c),
+  },
+  saturator: {
+    name: 'SATURATOR',
+    desc: 'Five analogue flavours on one stage: A is a tube (asymmetric, thickens), E germanium (harder edge), N a British console (the one you leave on everything), T a transformer (the bottom saturates first), P punish (fold-back fuzz). LOWCUT, HIGHCUT and TONE sit BEFORE the curve, so they choose WHAT gets distorted rather than tidying up afterwards. DRIVE 0 is bit-clean and DRIVE is colour, not level — the auto-gain asks the curve what it did. Rendered by the app\'s engine',
+    params: [
+      sel('STYLE', 'STYLE', ['A TUBE', 'E GERM', 'N BRIT', 'T XFMR', 'P PUNISH']),
+      { key: 'DRIVE', label: 'DRIVE', kind: 'slider', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'TONE', label: 'TONE', kind: 'knob', min: -100, max: 100, step: 1, center: 0 },
+      { key: 'LOWCUT', label: 'LO CUT', kind: 'knob', min: 20, max: 1000, step: 1, log: true, unit: 'Hz' },
+      { key: 'HIGHCUT', label: 'HI CUT', kind: 'knob', min: 1000, max: 20000, step: 10, log: true, unit: 'Hz' },
+      { key: 'PUNISH', label: 'PUNISH', kind: 'toggle', onValue: 'ON', offValue: 'OFF' },
+      { key: 'OUTPUT', label: 'OUT', kind: 'knob', min: -24, max: 24, step: 0.5, center: 0, unit: 'dB' },
+      { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new SaturatorFX(c),
   },
   plateverb: {
     name: 'HALL 224',
@@ -293,7 +309,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
-  'clip', 'wave', 'sat', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
+  'clip', 'wave', 'sat', 'saturator', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
   'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'utility',
 ];
 

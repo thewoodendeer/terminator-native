@@ -1739,6 +1739,48 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6f DONE (THE FIFTH PREMIUM DEVICE: SATURATOR — FIVE FLAVOURS), 2026-08-24
+
+`SaturatorFx` in `AnalogFx.{h,cpp}`, `FxType::saturator` appended. The Decapitator shape from B4: **A** tube
+(asymmetric, even harmonics first) · **E** germanium (harder knee) · **N** British console (gentle odd) · **T**
+transformer (the bottom saturates first) · **P** punish (fold-back fuzz). Every curve is bounded by construction
+and the whole stage is 4× oversampled through the same zero-latency ZOH/Butterworth pair as the rest, with the DC
+blocker in from the start (the 4.6c lesson, applied rather than re-learned).
+
+**The design point: LOWCUT / HIGHCUT / TONE sit BEFORE the curve** — they choose what gets distorted instead of
+tidying up after it. Gated: the 3rd harmonic of a 60 Hz tone drops 20 dB when LOWCUT moves to 500 Hz, and with two
+tones in (100 Hz + 3 kHz) TONE decides which one breaks up.
+
+**Three issues, all found by the gates:**
+1. **The auto-gain was a guess and it was 12 dB out.** `driveGain^−0.7` cannot compensate five different curves —
+   each one compresses differently. It now **asks the curve itself**: run a reference level through it and undo
+   exactly that (`comp = ref / |curve(ref · drive)|`), recomputed per block. Spread across the whole DRIVE range is
+   now under 8 dB and the gate says so.
+2. **"PUNISH is dirtier" measured FALSE at DRIVE 100** — and correctly: at full drive the curve is already a square
+   and six times more of a square is still a square. The gate moved to a moderate drive, where the control actually
+   does something. (A gate that only passes at one extreme is testing the extreme, not the feature.)
+3. **The TONE gate measured BACKWARDS at high drive** (+100 read 4 dB *quieter* than −100): pushing more into a
+   saturating stage compresses more, and the two effects cancel in the meter. TONE is now measured CLEAN at DRIVE 0
+   for the tilt itself, plus the two-tone test above for what it does to the distortion — which is the real claim.
+   Also: the "LOWCUT means it never reaches the curve" assertion was too strong — a 12 dB/oct filter takes ~37 dB
+   off at three octaves and DRIVE 100 then multiplies what is left by 24. The gate compares against wide-open now.
+
+**Gates (4.6f):** 6 more cases — DRIVE 0 bit-clean on all five styles (1e-12) · the styles really are different
+flavours (even/odd balance: A and T lean even, N and E odd) and all five distort · no style leaves DC · auto-gain +
+PUNISH · the pre-curve filters · bounded at 3 rates × 5 styles with PUNISH on, reset, block-invariance to 1e-9.
+**mac-debug ctest 333/333 · RTSan 334/334 · ui typecheck 5 = baseline · vite build clean · format clean · ASCII
+grep silent.**
+
+Page side in the same commit: `saturator` in `FX_REGISTRY` as **SATURATOR** (pass-through stub) + Help.
+
+### Noted for the EQ and the channel strip: the param budget is 12
+`kMaxFxParams = 12` (Effect.h) and the snapshot mirrors `float params[kMaxFxParams]` per slot per strip
+(Mixer.h ~288). A Pro-Q-4-style EQ (bands × 4 params) and an SSL-4000-G channel strip (filters + 4-band EQ +
+dynamics ≈ 20) do not fit, and raising the constant multiplies the snapshot array — which runs into the standing
+`sizeof(Engine) ≤ 384 KB` rule. **Those two devices need a param-model step first** (either a raised cap with the
+snapshot mirror sized separately, or a dedicated command carrying the band table). Do not start either without
+deciding that.
+
 ## Phase 4 — 4.6e DONE (THE FOURTH PREMIUM DEVICE: HALL 224 — A REAL ALGORITHMIC REVERB), 2026-08-24
 
 `PlateVerbFx` in `AnalogFx.{h,cpp}`, `FxType::plateverb` appended. The parity REVERB (a seeded IR through the

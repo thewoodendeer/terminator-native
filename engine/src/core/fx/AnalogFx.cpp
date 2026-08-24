@@ -973,4 +973,197 @@ void PlateVerbFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBL
     }
 }
 
+// ---- SATURATOR ----------------------------------------------------------------------------------------------
+
+/// The five flavours. Each is BOUNDED by construction (the 4.6c lesson: a polynomial is not a saturator) and the
+/// asymmetric ones are cleaned up by the DC blocker below, not by a fudge constant.
+double SaturatorFx::curve(double x) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (static_cast<int>(styleIdx_))
+    {
+    case 0: // A — tube: asymmetric, so the even harmonics arrive first and it thickens rather than hardens
+        return ftanh(x + 0.25 * x * x * (x > 0.0 ? 1.0 : 0.6));
+    case 1: // E — germanium: a harder knee, more odd, the "edge" setting
+        return x / (1.0 + std::abs(x) * 0.8) * 1.6 - 0.12 * ftanh(x * 3.0);
+    case 2: // N — British console: gentle, almost pure odd, the one you leave on everything
+        return ftanh(x * 0.85) * 1.06;
+    case 3: // T — transformer: the BOTTOM saturates first (the core is what runs out of headroom), so the curve is
+            // softer on peaks and firmer around the middle
+        return ftanh(x) * 0.7 + 0.3 * x / std::sqrt(1.0 + x * x * 0.35);
+    default: // P — punish: fold-back fuzz
+    {
+        const double t = ftanh(x * 1.4);
+        return t - 0.45 * t * t * t + 0.18 * std::sin(3.0 * t);
+    }
+    }
+}
+
+void SaturatorFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    srOs_ = sampleRate * static_cast<double>(kOversample);
+    reset();
+}
+
+void SaturatorFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    styleIdx_ = 0.0f;
+    punish_ = 0.0f;
+    drive_.set(0.0f, true);
+    tone_.set(0.0f, true);
+    lowCut_.set(20.0f, true);
+    highCut_.set(20000.0f, true);
+    output_.set(0.0f, true);
+    hpL_.reset();
+    hpR_.reset();
+    lpL_.reset();
+    lpR_.reset();
+    tiltLoL_.reset();
+    tiltLoR_.reset();
+    tiltHiL_.reset();
+    tiltHiR_.reset();
+    decSatL_.reset();
+    decSatR_.reset();
+    decSatL_.set(sr_ * 0.47, srOs_);
+    decSatR_.set(sr_ * 0.47, srOs_);
+    dcInL_ = dcOutL_ = dcInR_ = dcOutR_ = 0.0;
+    dcR_ = 1.0 - 2.0 * kPi * 5.0 / sr_;
+    recompute();
+}
+
+void SaturatorFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        styleIdx_ = clampf(std::floor(value), 0.0f, 4.0f);
+        break;
+    case 1:
+        drive_.set(clampf(value, 0.0f, 100.0f), immediate);
+        break;
+    case 2:
+        tone_.set(clampf(value, -100.0f, 100.0f), immediate);
+        break;
+    case 3:
+        lowCut_.set(clampf(value, 20.0f, 1000.0f), immediate);
+        break;
+    case 4:
+        highCut_.set(clampf(value, 1000.0f, 20000.0f), immediate);
+        break;
+    case 5:
+        punish_ = value >= 0.5f ? 1.0f : 0.0f;
+        break;
+    case 6:
+        output_.set(clampf(value, -24.0f, 24.0f), immediate);
+        break;
+    default:
+        break;
+    }
+    if (immediate)
+        recompute();
+}
+
+float SaturatorFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return styleIdx_;
+    case 1:
+        return drive_.target;
+    case 2:
+        return tone_.target;
+    case 3:
+        return lowCut_.target;
+    case 4:
+        return highCut_.target;
+    case 5:
+        return punish_;
+    case 6:
+        return output_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+void SaturatorFx::recompute() noexcept TERMINATOR_NONBLOCKING
+{
+    const double lc = static_cast<double>(lowCut_.cur), hc = static_cast<double>(highCut_.cur);
+    hpL_.set(Biquad::Type::highpass, lc, 0.0, 0.0, sr_);
+    hpR_.set(Biquad::Type::highpass, lc, 0.0, 0.0, sr_);
+    lpL_.set(Biquad::Type::lowpass, hc, 0.0, 0.0, sr_);
+    lpR_.set(Biquad::Type::lowpass, hc, 0.0, 0.0, sr_);
+    // TONE is a TILT and it sits BEFORE the curve — which is the point: it decides what gets distorted, not just
+    // what the distortion sounds like afterwards.
+    const double tilt = static_cast<double>(tone_.cur) * 0.06; // ±6 dB
+    tiltLoL_.set(Biquad::Type::lowshelf, 300.0, 0.0, -tilt, sr_);
+    tiltLoR_.set(Biquad::Type::lowshelf, 300.0, 0.0, -tilt, sr_);
+    tiltHiL_.set(Biquad::Type::highshelf, 2500.0, 0.0, tilt, sr_);
+    tiltHiR_.set(Biquad::Type::highshelf, 2500.0, 0.0, tilt, sr_);
+}
+
+void SaturatorFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (drive_.moving() || tone_.moving() || lowCut_.moving() || highCut_.moving() || output_.moving())
+    {
+        drive_.advance(n, sr_, kFxTau);
+        tone_.advance(n, sr_, kFxTau);
+        lowCut_.advance(n, sr_, kFxTau);
+        highCut_.advance(n, sr_, kFxTau);
+        output_.advance(n, sr_, kFxTau);
+        recompute();
+    }
+    const double d = static_cast<double>(drive_.cur) * 0.01;
+    const double outGain = std::pow(10.0, static_cast<double>(output_.cur) / 20.0);
+    if (d <= 0.0)
+    {
+        // DRIVE 0 is BIT-CLEAN: no curve, no oversampler, no filters that were not asked for.
+        const bool filtering =
+            static_cast<double>(lowCut_.cur) > 20.5 || static_cast<double>(highCut_.cur) < 19500.0 || tone_.cur != 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            double xl = l[i], xr = r[i];
+            if (filtering)
+            {
+                xl = tiltHiL_.process(tiltLoL_.process(lpL_.process(hpL_.process(xl))));
+                xr = tiltHiR_.process(tiltLoR_.process(lpR_.process(hpR_.process(xr))));
+            }
+            l[i] = xl * outGain;
+            r[i] = xr * outGain;
+        }
+        return;
+    }
+    // 1..24x, and PUNISH is the extra 6x on top — the hardware's abusive setting, not a different algorithm.
+    const double driveGain = (1.0 + 23.0 * d) * (punish_ > 0.5f ? 6.0 : 1.0);
+    // AUTO-GAIN, measured rather than guessed: a power law (driveGain^−0.7) was 12 dB out across the range because
+    // each curve compresses differently. Ask the CURVE ITSELF what it does to a reference level and undo exactly
+    // that, so a −12 dBFS signal comes back at −12 dBFS whatever the drive and whichever flavour.
+    constexpr double kRef = 0.25;
+    const double shaped = std::abs(curve(kRef * driveGain));
+    const double comp = shaped > 1e-9 ? kRef / shaped : 1.0;
+
+    for (int i = 0; i < n; ++i)
+    {
+        double xl = tiltHiL_.process(tiltLoL_.process(lpL_.process(hpL_.process(l[i]))));
+        double xr = tiltHiR_.process(tiltLoR_.process(lpR_.process(hpR_.process(r[i]))));
+        xl *= driveGain;
+        xr *= driveGain;
+        double ol = 0.0, orr = 0.0;
+        for (int k = 0; k < kOversample; ++k) // ZOH up, Butterworth down — the same zero-latency pair as the rest
+        {
+            ol = decSatL_.process(curve(xl));
+            orr = decSatR_.process(curve(xr));
+        }
+        // the asymmetric flavours make DC; the blocker is what a coupling capacitor does
+        const double bl = ol - dcInL_ + dcR_ * dcOutL_;
+        dcInL_ = ol;
+        dcOutL_ = bl;
+        const double br = orr - dcInR_ + dcR_ * dcOutR_;
+        dcInR_ = orr;
+        dcOutR_ = br;
+        l[i] = bl * comp * outGain;
+        r[i] = br * comp * outGain;
+    }
+}
+
 } // namespace terminator

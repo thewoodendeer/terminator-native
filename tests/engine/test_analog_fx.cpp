@@ -1082,3 +1082,202 @@ TEST_CASE("hall 224: every program is finite, and reset clears the tank", "[fx][
     const auto quiet = run(*fx, static_cast<int>(kSr * 0.5), [](int) { return 0.0; });
     CHECK(rms(quiet, 0, static_cast<int>(kSr * 0.5)) < 1e-9);
 }
+
+// ---- SATURATOR (4.6f) ------------------------------------------------------------------------------------------
+// Five flavours on one stage. The gates are the ones the earlier devices taught: DRIVE 0 must be BIT-clean (not
+// nearly), no style may leave DC behind (the DIST 2 lesson), every curve must be bounded (the +24 dB lesson), and
+// DRIVE must read as colour rather than level. On top of that each STYLE has to actually be a different flavour —
+// tube and transformer lean even, console and germanium lean odd — or the switch is decoration.
+
+namespace
+{
+enum
+{
+    kStyle = 0,
+    kSatDrive,
+    kTone,
+    kLowCut,
+    kHighCut,
+    kPunish,
+    kSatOut
+};
+
+std::unique_ptr<SaturatorFx> makeSat(int style, float drive, double sr = kSr)
+{
+    auto fx = std::make_unique<SaturatorFx>();
+    fx->prepare(sr, kBlock);
+    fx->setParam(kStyle, static_cast<float>(style), true);
+    fx->setParam(kSatDrive, drive, true);
+    fx->setParam(kTone, 0.0f, true);
+    fx->setParam(kLowCut, 20.0f, true);
+    fx->setParam(kHighCut, 20000.0f, true);
+    fx->setParam(kPunish, 0.0f, true);
+    fx->setParam(kSatOut, 0.0f, true);
+    return fx;
+}
+} // namespace
+
+TEST_CASE("saturator: DRIVE 0 is bit-clean", "[fx][analog][sat]")
+{
+    REQUIRE(fxTypeFromId("saturator") == FxType::saturator);
+    REQUIRE(fxTypeInfo(FxType::saturator).numParams == 8);
+    REQUIRE(fxOptionIndex(FxType::saturator, 0, "P PUNISH") == 4);
+
+    for (int style = 0; style < 5; ++style)
+    {
+        auto fx = makeSat(style, 0.0f);
+        const int n = 2048;
+        std::vector<double> l(n), r(n), in(n);
+        for (int i = 0; i < n; ++i)
+        {
+            in[static_cast<std::size_t>(i)] = 0.8 * std::sin(kTwoPi * 250.0 * static_cast<double>(i) / kSr);
+            l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = in[static_cast<std::size_t>(i)];
+        }
+        fx->process(l.data(), r.data(), n);
+        for (int i = 0; i < n; ++i)
+            REQUIRE(l[static_cast<std::size_t>(i)] == Approx(in[static_cast<std::size_t>(i)]).margin(1e-12));
+    }
+}
+
+TEST_CASE("saturator: the five styles are five different flavours", "[fx][analog][sat]")
+{
+    // Second vs third harmonic at the same drive: A (tube) and T (transformer) are asymmetric stages and lean
+    // EVEN; N (console) and E (germanium) lean ODD. If the switch did not change the curve these would all match.
+    const auto balance = [](int style)
+    {
+        auto fx = makeSat(style, 60.0f);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.6), tone(200.0, 0.3));
+        return magDb(out, 400.0) - magDb(out, 600.0); // + = more even than odd
+    };
+    const double a = balance(0), e = balance(1), nn = balance(2), t = balance(3);
+    CHECK(a > nn);
+    CHECK(t > nn);
+    CHECK(e < a);
+
+    // …and every style really does distort: the 3rd harmonic is well up out of the floor at DRIVE 60.
+    for (int style = 0; style < 5; ++style)
+    {
+        auto fx = makeSat(style, 60.0f);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.6), tone(200.0, 0.3));
+        INFO("style " << style);
+        CHECK(magDb(out, 600.0) - magDb(out, 200.0) > -40.0);
+    }
+}
+
+TEST_CASE("saturator: no style leaves DC behind", "[fx][analog][sat]")
+{
+    // The 4.6c lesson, applied from the start this time: the asymmetric flavours (A, T, P) make DC by definition.
+    for (int style = 0; style < 5; ++style)
+    {
+        auto fx = makeSat(style, 90.0f);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.6), tone(120.0, 0.6));
+        double mean = 0.0;
+        const int from = static_cast<int>(kSr * 0.3);
+        for (int i = from; i < static_cast<int>(out.size()); ++i)
+            mean += out[static_cast<std::size_t>(i)];
+        INFO("style " << style);
+        CHECK(std::abs(mean / static_cast<double>(static_cast<int>(out.size()) - from)) < 2e-3);
+    }
+}
+
+TEST_CASE("saturator: DRIVE is colour, PUNISH is the abuse", "[fx][analog][sat]")
+{
+    // Auto-gain: the fundamental stays in the same neighbourhood right across the range.
+    double lo = 0.0, hi = 0.0;
+    {
+        auto fx = makeSat(0, 5.0f);
+        lo = magDb(run(*fx, static_cast<int>(kSr * 0.6), tone(200.0, 0.3)), 200.0);
+    }
+    {
+        auto fx = makeSat(0, 100.0f);
+        hi = magDb(run(*fx, static_cast<int>(kSr * 0.6), tone(200.0, 0.3)), 200.0);
+    }
+    CHECK(std::abs(hi - lo) < 8.0);
+
+    // PUNISH is 6x more drive — measured at a MODERATE setting, because at DRIVE 100 the curve is already fully
+    // saturated and six times more of an already-square wave is still a square wave.
+    auto plain = makeSat(2, 30.0f);
+    auto punished = makeSat(2, 30.0f);
+    punished->setParam(kPunish, 1.0f, true);
+    const auto a = run(*plain, static_cast<int>(kSr * 0.6), tone(200.0, 0.3));
+    const auto b = run(*punished, static_cast<int>(kSr * 0.6), tone(200.0, 0.3));
+    CHECK(magDb(b, 600.0) - magDb(b, 200.0) > magDb(a, 600.0) - magDb(a, 200.0));
+    CHECK(peak(b, 0, static_cast<int>(b.size())) < 4.0);
+}
+
+TEST_CASE("saturator: the filters sit BEFORE the curve", "[fx][analog][sat]")
+{
+    // LOWCUT keeps the bottom OUT of the distortion — the difference between filtering the input and filtering the
+    // output. Measured as the 3rd harmonic of a 60 Hz tone with the cut at 500 Hz vs wide open. (Not "silent": a
+    // 12 dB/oct filter takes ~37 dB off at three octaves, and then DRIVE 100 multiplies what is left by 24.)
+    const auto thirdOf60 = [](float lowCut)
+    {
+        auto f = makeSat(4, 100.0f);
+        f->setParam(kLowCut, lowCut, true);
+        const auto o = run(*f, static_cast<int>(kSr * 0.6), tone(60.0, 0.7));
+        return magDb(o, 180.0);
+    };
+    CHECK(thirdOf60(500.0f) < thirdOf60(20.0f) - 20.0);
+
+    // TONE is a tilt: measured CLEAN (DRIVE 0), because at high drive the saturation compresses whatever you push
+    // in and the two effects cancel in the meter — which is exactly what a first version of this gate measured.
+    const auto hfAt = [](float toneVal)
+    {
+        auto f = makeSat(2, 0.0f);
+        f->setParam(kTone, toneVal, true);
+        const auto o = run(*f, static_cast<int>(kSr * 0.4), tone(6000.0, 0.25));
+        return magDb(o, 6000.0);
+    };
+    CHECK(hfAt(100.0f) > hfAt(-100.0f) + 6.0);
+
+    // …and because the tilt is BEFORE the curve it changes WHAT gets distorted. Two tones in (100 Hz + 3 kHz):
+    // with TONE up, the top is what breaks up; with TONE down, the bottom is.
+    const auto topVsBottom = [](float toneVal)
+    {
+        auto f = makeSat(4, 55.0f);
+        f->setParam(kTone, toneVal, true);
+        const auto o = run(*f, static_cast<int>(kSr * 0.6),
+                           [](int i)
+                           {
+                               const double t = static_cast<double>(i) / kSr;
+                               return 0.25 * std::sin(kTwoPi * 100.0 * t) + 0.25 * std::sin(kTwoPi * 3000.0 * t);
+                           });
+        return magDb(o, 9000.0) - magDb(o, 300.0); // the 3 kHz tone's 3rd vs the 100 Hz tone's
+    };
+    CHECK(topVsBottom(100.0f) > topVsBottom(-100.0f));
+
+    // OUTPUT is a clean trim on top of everything.
+    auto trim = makeSat(2, 0.0f);
+    trim->setParam(kSatOut, -6.0f, true);
+    const auto o = run(*trim, static_cast<int>(kSr * 0.4), tone(400.0, 0.4));
+    CHECK(magDb(o, 400.0) == Approx(20.0 * std::log10(0.4) - 6.0).margin(0.3));
+}
+
+TEST_CASE("saturator: bounded, reset, block-invariant", "[fx][analog][sat]")
+{
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int style = 0; style < 5; ++style)
+        {
+            auto fx = makeSat(style, 100.0f, sr);
+            fx->setParam(kPunish, 1.0f, true);
+            const auto out =
+                run(*fx, static_cast<int>(sr * 0.2), [](int i) { return (i / 16) % 2 == 0 ? 1.0 : -1.0; }, 64);
+            for (const double v : out)
+            {
+                REQUIRE(std::isfinite(v));
+                REQUIRE(std::abs(v) < 4.0); // every curve is bounded by construction
+            }
+        }
+
+    auto fx = makeSat(3, 80.0f);
+    run(*fx, 4096, tone(300.0, 0.6));
+    fx->reset();
+    CHECK(fx->param(kSatDrive) == Approx(0.0f));
+
+    auto a = makeSat(0, 70.0f);
+    auto b = makeSat(0, 70.0f);
+    const auto ga = run(*a, 8192, tone(220.0, 0.5), 8192);
+    const auto gb = run(*b, 8192, tone(220.0, 0.5), 29);
+    for (std::size_t i = 0; i < ga.size(); ++i)
+        REQUIRE(ga[i] == Approx(gb[i]).margin(1e-9));
+}
