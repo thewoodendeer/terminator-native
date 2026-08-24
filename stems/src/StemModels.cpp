@@ -128,37 +128,44 @@ ModelError StemModels::downloadOne(const ModelFile& f, std::string& error,
         return ModelError::network;
     }
 
+    // The stream is closed BEFORE anything deletes the part file: Windows refuses to delete a file that is
+    // still open, so a cancel used to leave a .part behind there (macOS unlinks an open file happily, which is
+    // why only the Windows job saw it).
+    ModelError failure = ModelError::none;
     {
         juce::FileOutputStream out(part);
         if (!out.openedOk())
         {
             error = "cannot write to " + part.getFullPathName().toStdString();
-            return ModelError::disk;
+            failure = ModelError::disk;
         }
         juce::HeapBlock<char> buffer(1 << 20);
-        for (;;)
+        while (failure == ModelError::none)
         {
             if (cancel != nullptr && cancel->load(std::memory_order_relaxed))
             {
-                out.flush();
-                part.deleteFile();
                 error = "cancelled";
-                return ModelError::cancelled;
+                failure = ModelError::cancelled;
+                break;
             }
             const auto got = in->read(buffer.getData(), 1 << 20);
             if (got <= 0)
                 break;
             if (!out.write(buffer.getData(), static_cast<std::size_t>(got)))
             {
-                out.flush();
-                part.deleteFile();
                 error = "the disk refused the write (out of space?)";
-                return ModelError::disk;
+                failure = ModelError::disk;
+                break;
             }
             if (onBytes)
                 onBytes(got);
         }
         out.flush();
+    }
+    if (failure != ModelError::none)
+    {
+        part.deleteFile();
+        return failure;
     }
 
     // A truncated download and a corrupted one look the same from here: both are refused and deleted.
