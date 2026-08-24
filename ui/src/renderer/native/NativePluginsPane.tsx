@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'r
 import { native, onNativeEvent } from './juceBridge';
 
 type Plugin = { id: string; name: string; manufacturer: string; format: string; category: string; version: string; isInstrument: boolean; file: string; numInputs: number; numOutputs: number };
-type PluginsReply = { ok: boolean; plugins: Plugin[]; blocklist: string[]; folders: string[]; formats: string[]; scanning: boolean };
+type PluginsReply = { ok: boolean; plugins: Plugin[]; blocklist: string[]; folders: string[]; formats: string[]; scanning: boolean; crashedLastLaunch?: string };
 type ScanEvent = { done: number; total: number; current: string; found: number; finished: boolean };
 
 const card: CSSProperties = { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 6, padding: '12px 14px', marginBottom: 12 };
@@ -55,6 +55,13 @@ export default function NativePluginsPane() {
 
   return (
     <>
+      {!!reply?.crashedLastLaunch && (
+        <div style={{ ...card, borderColor: '#ff5230', color: '#ff5230' }}>
+          A plugin did not survive being loaded last time, so Terminator started without it and put it under DID NOT
+          LOAD. Update it (or the app) and press TRY THESE AGAIN.
+          <div style={{ ...hint, color: '#ff5230' }}>{reply.crashedLastLaunch}</div>
+        </div>
+      )}
       <div style={card}>
         <label style={label}>Plugins</label>
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>

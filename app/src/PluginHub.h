@@ -40,6 +40,11 @@ class PluginHub final : private juce::Timer
     /// window exists.
     static bool runChildScan(const juce::String& formatName, const juce::String& fileOrIdentifier);
 
+    /// The plugin that took the app down on the LAST run, if any (6.6): loading a plugin leaves a breadcrumb, and
+    /// a breadcrumb still there at the next launch means we never came back. It is blocklisted and named, so the
+    /// second launch works instead of crashing into the same project again.
+    juce::String crashedLastLaunch() const noexcept { return crashedLast_; }
+
   private:
     class ScanJob;
     void timerCallback() override; // drains the scan thread's progress onto the message thread
@@ -49,6 +54,8 @@ class PluginHub final : private juce::Timer
     juce::StringArray searchPaths() const;
 
     juce::File stateFile_;
+    juce::File loadingFile_;   // the breadcrumb: which plugin is being INSTANTIATED right now (6.6)
+    juce::String crashedLast_; // …and which one was mid-load when the app died
     juce::AudioPluginFormatManager formats_;
     juce::KnownPluginList known_;
     juce::StringArray blocklist_; // files that crashed / timed out in the child

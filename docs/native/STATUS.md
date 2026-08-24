@@ -1751,6 +1751,19 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.6a DONE (A PLUGIN THAT CRASHES CANNOT TRAP YOU), 2026-08-24
+
+Real isolation means hosting plugins out of process, which is a phase of its own. This is the cheap half that
+matters most: **a plugin that takes the app down cannot take it down twice.**
+
+Instantiating a plugin runs somebody else's code in our process, and a plugin that crashes on load crashes again
+the moment the same project reloads it — a loop the user cannot get out of. So `PluginHub::create` writes the
+plugin's id to `plugin-loading.txt` before the plugin is made and erases it when control comes back. Finding that
+file at the next launch means we never came back from it: the plugin is **blocklisted, removed from the list, and
+NAMED** — Preferences → PLUGINS says which one, and TRY THESE AGAIN (or RESCAN EVERYTHING) gives it another go
+after an update. **Verified by simulation:** a breadcrumb left behind by hand, next launch → that plugin gone from
+the list and on the blocklist, the breadcrumb consumed.
+
 ## Phase 6 — 6.2/6.3 follow-up: A SAVE CARRIES WHAT IS LOADED, 2026-08-24
 
 Two holes in how a hosted plugin's own settings reach the project, both found by reading the save path rather than

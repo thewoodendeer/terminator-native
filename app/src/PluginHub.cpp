@@ -160,10 +160,31 @@ class PluginHub::ScanJob final : public juce::Thread
 };
 
 // ---- the hub ------------------------------------------------------------------------------------------------
-PluginHub::PluginHub(const juce::File& stateFile) : stateFile_(stateFile)
+PluginHub::PluginHub(const juce::File& stateFile)
+    : stateFile_(stateFile), loadingFile_(stateFile.getSiblingFile("plugin-loading.txt"))
 {
     juce::addDefaultFormatsToManager(formats_); // VST3 everywhere, AudioUnit on macOS (JUCE 9: the UI-capable list)
     load();
+    // CRASH GUARD (6.6). Instantiating a plugin runs somebody else's code in our process, and a plugin that takes
+    // the app down takes it down again the moment the same project reloads it — a loop the user cannot get out of.
+    // So the id is written down before the plugin is made and erased after: finding it here means we never came
+    // back from it. Blocklisted, and NAMED, so the next launch works and the user knows which one to blame.
+    if (loadingFile_.existsAsFile())
+    {
+        crashedLast_ = loadingFile_.loadFileAsString().trim();
+        loadingFile_.deleteFile();
+        if (crashedLast_.isNotEmpty())
+        {
+            for (const auto& d : known_.getTypes())
+                if (d.createIdentifierString() == crashedLast_)
+                {
+                    blocklist_.addIfNotAlreadyThere(d.fileOrIdentifier);
+                    known_.removeType(d);
+                    break;
+                }
+            save();
+        }
+    }
 }
 
 PluginHub::~PluginHub()
@@ -241,6 +262,7 @@ juce::var PluginHub::listVar() const
         formats.add(formats_.getFormat(i)->getName());
     o->setProperty("formats", formats);
     o->setProperty("scanning", scan_ != nullptr);
+    o->setProperty("crashedLastLaunch", crashedLast_); // 6.6: the plugin that did not come back, now blocklisted
     o->setProperty("ok", true);
     return juce::var(o);
 }
@@ -392,7 +414,11 @@ std::unique_ptr<juce::AudioPluginInstance> PluginHub::create(const juce::String&
         error = "unknown plugin '" + id + "'";
         return nullptr;
     }
-    return formats_.createPluginInstance(d, sampleRate, blockSize, error);
+    // the breadcrumb (see the constructor): written before somebody else's code runs, erased when it comes back
+    loadingFile_.replaceWithText(id);
+    auto instance = formats_.createPluginInstance(d, sampleRate, blockSize, error);
+    loadingFile_.deleteFile();
+    return instance;
 }
 
 bool PluginHub::runChildScan(const juce::String& formatName, const juce::String& fileOrIdentifier)
