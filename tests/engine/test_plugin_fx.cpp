@@ -16,6 +16,7 @@
 #include "TestSamples.h"
 #include "terminator/core/Engine.h"
 #include "terminator/core/fx/PluginFx.h"
+#include "terminator/render/OfflineRenderer.h"
 
 using namespace terminator;
 using Catch::Approx;
@@ -166,4 +167,62 @@ TEST_CASE("plugin insert: attaching and running a plugin slot allocates nothing 
             r.run(8);
         });
     CHECK(allocs == 0);
+}
+
+// ── THE EXPORT (Phase 6.4) ──────────────────────────────────────────────────────────────────────────────────────
+// A plugin you can hear live but not in the file is the "heard live, missing from the export" trap this project
+// already walked into once (4.6, before the export went native). So the offline renderer takes the processors the
+// host loaded for it — and a plugin insert with NOBODY attached renders as the pass-through it is, rather than
+// silence.
+TEST_CASE("export: a plugin insert is in the rendered file", "[plugin][export]")
+{
+
+    auto impulse = std::make_shared<SampleBuffer>();
+    impulse->allocate(1, 4096, kSr);
+    for (std::int64_t i = 0; i < impulse->numFrames; ++i)
+        impulse->channel(0)[i] = 0.0f;
+    impulse->channel(0)[0] = 0.5f;
+
+    auto build = [&](ExternalProcessor* proc)
+    {
+        RenderSpec spec;
+        spec.sampleRate = kSr;
+        spec.blockSize = 64;
+        spec.numChannels = 2;
+        spec.lengthSeconds = 0.05;
+        spec.mixer.enabled = true;
+        RenderStripSpec strip;
+        strip.index = 1;
+        strip.kind = StripKind::channel;
+        RenderFxSpec fx;
+        fx.type = FxType::plugin;
+        fx.pluginId = "VST3-Something-0-0"; // what the project saved; the HOST is what turns it into a processor
+        fx.processor = proc;
+        strip.fx.push_back(fx);
+        spec.mixer.strips.push_back(strip);
+        RenderPadSpec p;
+        p.params.pad = 0;
+        p.params.attackSec = 0.0f;
+        p.params.interpolation = Interpolation::linear;
+        p.params.chokeGroup = -2;
+        p.params.strip = 1;
+        p.sample = impulse;
+        spec.pads.push_back(p);
+        RenderEvent e;
+        e.pad = 0;
+        e.timeSec = 0.0;
+        e.velocity = 1.0f;
+        spec.events.push_back(e);
+        return spec;
+    };
+
+    FakePlugin plugin;
+    plugin.gain = 0.25f;
+    const auto withPlugin = renderOffline(build(&plugin));
+    const auto without = renderOffline(build(nullptr));
+    REQUIRE(plugin.blocks > 0);
+    const auto peak = [](const RenderResult& r) { return r.buffer.getMagnitude(0, 0, r.buffer.getNumSamples()); };
+    // nothing attached = the slot passes the impulse through at full level; attached = a quarter of it
+    CHECK(peak(without) == Approx(0.5f).margin(0.01));
+    CHECK(peak(withPlugin) == Approx(0.125f).margin(0.005));
 }

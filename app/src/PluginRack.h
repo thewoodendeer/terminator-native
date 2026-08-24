@@ -12,6 +12,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "terminator/core/Engine.h"
+#include "terminator/render/OfflineRenderer.h"
 
 #include "PluginHub.h"
 
@@ -32,8 +33,31 @@ class PluginRack final : private juce::Timer
     /// The audio device changed: re-prepare every instance for the new rate / block.
     void prepareAll(double sampleRate, int blockSize);
 
+    class Adapter; // a juce::AudioPluginInstance behind the engine's ExternalProcessor (PluginRack.cpp)
+
+    /// OFFLINE (Phase 6.4): the instances an EXPORT needs. A render must not borrow the live plugins — they are
+    /// being played through — so it gets its own, loaded with the state the project saved. The set owns them and
+    /// must outlive the render; destroying it (on the message thread) unloads them.
+    class OfflineSet
+    {
+      public:
+        ~OfflineSet();
+        int loaded() const noexcept { return loaded_; }
+        /// Plugins the project asked for that could not be made — an export that quietly dropped one would be a
+        /// mix that does not match what you heard, so the caller reports them.
+        const juce::StringArray& missing() const noexcept { return missing_; }
+
+      private:
+        friend class PluginRack;
+        std::vector<std::unique_ptr<juce::AudioPluginInstance>> instances_;
+        std::vector<std::unique_ptr<Adapter>> adapters_;
+        juce::StringArray missing_;
+        int loaded_ = 0;
+    };
+    /// Walk a render's mixer spec, load every `plugin` insert it names and fill in its `processor`. MESSAGE THREAD.
+    std::unique_ptr<OfflineSet> loadForRender(RenderMixerSpec& mix, double sampleRate, int blockSize);
+
   private:
-    class Adapter;
     class EditorWindow;
     struct Entry
     {

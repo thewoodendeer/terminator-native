@@ -1751,6 +1751,28 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.4 DONE (AND THE EXPORT HAS THEM TOO), 2026-08-24
+
+A plugin you can hear live but not in the file is exactly the trap this project already walked into once (4.6, the
+premium device that was live-only until the export went native). So an export now loads the plugins its chains
+name, before a sample is rendered.
+
+- `RenderFxSpec` carries `pluginId` / `pluginState` (read straight off the project's chain — the PLUGIN and STATE
+  params) and a `processor` the HOST fills in. `ProjectRenderOptions::prepareMixer` is the hook: called once the
+  mixer spec is built and before anything renders.
+- The export gets **its own instances**, not the live ones (those are being played through), created on the
+  MESSAGE thread — `MessageManager::callSync` from the render thread — with the state the project saved, and
+  destroyed back on the message thread when the render ends (both paths, including a cancel).
+- **A plugin that will not load is reported**, not skipped in silence: the export reply carries `plugins` (how many
+  loaded) and `pluginsMissing`.
+- Gate: `export: a plugin insert is in the rendered file` — the same render with and without a processor attached,
+  0.125 vs 0.5 peak. An insert with nobody attached renders as the pass-through it is, not silence. **ctest
+  391 + 1.**
+
+**Still open in 6:** 6.3 instruments · 6.5 MIDI learn on plugin params · 6.6 crash drills. And the MPC Project /
+Drum Rack exporters are still the page's, so a plugin (like any native-only device) is missing from THOSE files —
+that is the Phase-8 `.mpcsample` / `.adg` writer item, now with one more reason to do it.
+
 ## Phase 6 — 6.2 DONE (YOUR PLUGINS ARE IN THE CHAIN), 2026-08-24
 
 A VST3 / Audio Unit is an INSERT now: pick it in a mixer slot, hear it in the engine's own chain, open its window,

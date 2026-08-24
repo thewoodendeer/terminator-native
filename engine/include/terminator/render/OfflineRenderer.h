@@ -28,6 +28,7 @@
 #include "terminator/core/BassSynth.h"
 #include "terminator/core/DrumSequencer.h"
 #include "terminator/core/Mixer.h"
+#include "terminator/core/fx/PluginFx.h"
 #include "terminator/core/SampleBuffer.h"
 
 namespace terminator
@@ -133,6 +134,12 @@ struct RenderFxSpec
     FxType type = FxType::none;
     bool bypass = false;
     std::vector<std::pair<int, float>> params;
+    /// PLUGINS (Phase 6.4). The project says WHICH plugin an insert is and what its settings were; only the app can
+    /// make one, so it fills `processor` in before the render (ProjectRenderOptions::prepareMixer). Without it the
+    /// slot renders as the pass-through it always was — an export that quietly dropped a plugin would be the
+    /// "heard live, missing from the file" bug all over again, so the app also SAYS when it could not load one.
+    juce::String pluginId, pluginState;
+    ExternalProcessor* processor = nullptr;
 };
 
 /// One strip of the exported mix — the same settings the live mixer is running.

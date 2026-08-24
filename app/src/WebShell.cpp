@@ -1773,11 +1773,24 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                 });
         return true;
     };
+    // PLUGINS IN THE EXPORT (6.4). The render gets its OWN instances — the live ones are being played through —
+    // loaded on the MESSAGE thread (the only place a plugin may be created) with the state the project saved. The
+    // set is held by the render thread's lambda, so the instances outlive the render and go when it is done.
+    auto pluginSet = std::make_shared<std::unique_ptr<PluginRack::OfflineSet>>();
+    opts.prepareMixer = [this, alive, pluginSet, sr = opts.sampleRate, block = opts.blockSize](RenderMixerSpec& mix)
+    {
+        juce::MessageManager::callSync(
+            [&]
+            {
+                if (alive->load())
+                    *pluginSet = rack_.loadForRender(mix, sr, block);
+            });
+    };
     std::thread(
         // `this` is only ever dereferenced inside the message-thread callbacks below, and only after alive_ says we
         // are still here — the destructor clears that flag on the same thread, so there is no window between them.
         [this, project, bank = std::move(bank), opts = std::move(opts), out, bitDepth, format, mp3Kbps, lame, alive,
-         shared, callbacks = std::move(callbacks), jobId]() mutable
+         shared, callbacks = std::move(callbacks), jobId, pluginSet]() mutable
         {
             juce::var result;
             {
@@ -1791,8 +1804,9 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                     o->setProperty("files", juce::var(juce::Array<juce::var>()));
                     result = juce::var(o);
                     juce::MessageManager::callAsync(
-                        [this, alive, shared, result, jobId]
+                        [this, alive, shared, result, jobId, pluginSet]
                         {
+                            pluginSet->reset(); // the export's plugins go on the MESSAGE thread, where they were made
                             if (!alive->load())
                                 return;
                             exportCancels_.erase(jobId);
@@ -1828,6 +1842,14 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                 o->setProperty("ok", wrote);
                 if (!wrote)
                     o->setProperty("error", err);
+                // A plugin the project asked for that would not load is SAID — an export quietly missing one is a
+                // file that does not match what you heard.
+                if (*pluginSet != nullptr)
+                {
+                    o->setProperty("plugins", (*pluginSet)->loaded());
+                    if (!(*pluginSet)->missing().isEmpty())
+                        o->setProperty("pluginsMissing", (*pluginSet)->missing().joinIntoString(", "));
+                }
                 o->setProperty("files", juce::var(files));
                 o->setProperty("seconds", rendered.buffer.getNumSamples() / std::max(1.0, rendered.sampleRate));
                 // the master's peak: a render that wrote a file full of silence is a FAILED export, not a pass
@@ -1841,8 +1863,9 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                 result = juce::var(o);
             }
             juce::MessageManager::callAsync(
-                [this, alive, shared, result, jobId]
+                [this, alive, shared, result, jobId, pluginSet]
                 {
+                    pluginSet->reset(); // …and the export's plugins are destroyed where they were made
                     if (!alive->load())
                         return;
                     exportCancels_.erase(jobId); // the job is done: cancelling it from here on is a no-op

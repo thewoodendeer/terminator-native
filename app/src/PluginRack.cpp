@@ -163,6 +163,48 @@ void PluginRack::prepareAll(double sampleRate, int blockSize)
     }
 }
 
+PluginRack::OfflineSet::~OfflineSet() = default;
+
+std::unique_ptr<PluginRack::OfflineSet> PluginRack::loadForRender(RenderMixerSpec& mix, double sampleRate,
+                                                                  int blockSize)
+{
+    auto set = std::make_unique<OfflineSet>();
+    for (auto& strip : mix.strips)
+        for (auto& fx : strip.fx)
+        {
+            if (fx.type != FxType::plugin || fx.pluginId.isEmpty())
+                continue;
+            juce::String error;
+            auto instance = hub_.create(fx.pluginId, sampleRate, blockSize, error);
+            if (instance == nullptr)
+            {
+                set->missing_.addIfNotAlreadyThere(fx.pluginId);
+                continue;
+            }
+            instance->enableAllBuses();
+            auto layout = instance->getBusesLayout();
+            for (auto& b : layout.inputBuses)
+                b = juce::AudioChannelSet::stereo();
+            for (auto& b : layout.outputBuses)
+                b = juce::AudioChannelSet::stereo();
+            instance->setBusesLayout(layout);
+            instance->setRateAndBufferSizeDetails(sampleRate, blockSize);
+            instance->prepareToPlay(sampleRate, blockSize);
+            if (fx.pluginState.isNotEmpty())
+            {
+                juce::MemoryOutputStream bytes;
+                if (juce::Base64::convertFromBase64(bytes, fx.pluginState))
+                    instance->setStateInformation(bytes.getData(), static_cast<int>(bytes.getDataSize()));
+            }
+            auto adapter = std::make_unique<Adapter>(*instance, blockSize);
+            fx.processor = adapter.get();
+            set->adapters_.push_back(std::move(adapter));
+            set->instances_.push_back(std::move(instance));
+            ++set->loaded_;
+        }
+    return set;
+}
+
 juce::var PluginRack::handle(const juce::var& req)
 {
     const auto verb = req.getProperty("verb", "").toString();

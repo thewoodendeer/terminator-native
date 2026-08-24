@@ -7,6 +7,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <functional>
 #include <vector>
 
 #include <juce_data_structures/juce_data_structures.h>
@@ -46,6 +47,10 @@ struct ProjectRenderOptions
     /// Phase 4.5b: build the mix from the project's `mixer` blob (strips, sends, inserts, console) and route every
     /// pad into its strip, so the export carries what the mixer is doing. False = the Phase-3 direct path.
     bool useMixer = false;
+    /// PLUGINS (Phase 6.4): called once the mixer spec is built and BEFORE anything renders, on the render thread.
+    /// The host walks the `plugin` inserts (`pluginId` / `pluginState`), makes the instances it owns and fills in
+    /// each `processor`. Empty = an export with no plugins in it, which is what every render did before.
+    std::function<void(RenderMixerSpec&)> prepareMixer;
     /// TRACKOUTS: channel names to tap, in order, onto hardware pairs 1, 2, 3 … (pair 0 is the master). Every
     /// tapped channel needs its own pair, so `numChannels` must be 2 × (1 + stemChannels.size()).
     std::vector<juce::String> stemChannels;

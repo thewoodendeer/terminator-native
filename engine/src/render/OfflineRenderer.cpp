@@ -317,6 +317,8 @@ RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callba
                 engine.commands().push(Command::mixerAddFx(st.index, static_cast<std::uint8_t>(f.type)));
                 for (const auto& kv : f.params)
                     engine.commands().push(Command::mixerSetFxParam(st.index, slot, kv.first, kv.second, true));
+                if (f.processor != nullptr)
+                    engine.commands().push(Command::mixerSetFxProcessor(st.index, slot, f.processor));
                 if (f.bypass)
                     engine.commands().push(Command::mixerSetFxBypass(st.index, slot, true));
             }

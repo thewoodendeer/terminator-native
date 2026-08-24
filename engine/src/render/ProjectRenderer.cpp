@@ -184,7 +184,15 @@ bool readFx(const juce::var& v, StripNamer& namer, RenderFxSpec& out)
     if (auto* po = params.getDynamicObject())
         for (const auto& kv : po->getProperties())
         {
-            const int idx = fxParamIndex(t, kv.name.toString().toRawUTF8());
+            const auto key = kv.name.toString();
+            // PLUGINS (6.4): PLUGIN and STATE are not knobs — they are WHICH plugin and how it was set. The engine
+            // cannot make one; the app fills in the processor before the render (ProjectRenderOptions::prepareMixer).
+            if (t == FxType::plugin && (key == "PLUGIN" || key == "STATE"))
+            {
+                (key == "PLUGIN" ? out.pluginId : out.pluginState) = kv.value.toString();
+                continue;
+            }
+            const int idx = fxParamIndex(t, key.toRawUTF8());
             if (idx < 0)
                 continue;
             if (kv.value.isString())
@@ -748,7 +756,12 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         }
     }
     if (opts.useMixer)
+    {
         spec.mixer = buildMixerSpec(project, namer, routed, opts.stemChannels, opts.masterLimiter);
+        // PLUGINS (6.4): the host makes the instances the chains ask for, before a sample is rendered.
+        if (opts.prepareMixer)
+            opts.prepareMixer(spec.mixer);
+    }
     return spec;
 }
 
