@@ -22,6 +22,9 @@ const char* const kFilterTypes[] = {"lowpass", "highpass", "bandpass", "notch"};
 const char* const kPhaserStages[] = {"4", "6", "8", "12"};
 const char* const kCompStyles[] = {"OFF", "LIGHT", "PUNCHY", "NY-PARALLEL", "AGGRESSIVE"};
 const char* const kLadderModes[] = {"LP24", "LP18", "LP12", "LP6", "HP24", "HP12", "BP24", "BP12"};
+const char* const kFetRatios[] = {"1:1", "2:1", "3:1", "4:1", "6:1", "10:1", "20:1", "NUKE"};
+const char* const kFetDetect[] = {"FLAT", "HP1", "HP2", "BAND"};
+const char* const kFetModes[] = {"CLEAN", "DIST 2", "DIST 3", "BRITISH"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -107,6 +110,16 @@ const FxParamDef kLadderParams[] = {
     {"DRIVE", 0.0f, 100.0f, 0.0f},
     {"WET", 0.0f, 100.0f, 100.0f},
 };
+const FxParamDef kFetCompParams[] = {
+    {"RATIO", 0.0f, 7.0f, 3.0f, kFetRatios, 8}, // the switch IS the character; 4:1 is the default
+    {"INPUT", -12.0f, 24.0f, 0.0f},             // no THRESHOLD: you drive into a fixed one, like the hardware
+    {"ATTACK", 0.05f, 50.0f, 3.0f},
+    {"RELEASE", 20.0f, 2000.0f, 150.0f},
+    {"DETECT", 0.0f, 3.0f, 0.0f, kFetDetect, 4},
+    {"MODE", 0.0f, 3.0f, 0.0f, kFetModes, 4},
+    {"OUTPUT", -24.0f, 24.0f, 0.0f},
+    {"WET", 0.0f, 100.0f, 100.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -136,6 +149,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::reverb, "reverb", kReverbParams, 4, 3},
     {FxType::utility, "utility", kUtilityParams, 3, -1},
     {FxType::ladder, "ladder", kLadderParams, 5, 4},
+    {FxType::fetcomp, "fetcomp", kFetCompParams, 8, 7},
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -167,6 +181,8 @@ int capacityOf(FxType t) noexcept
     case FxType::filter:
         return 64;
     case FxType::ladder:
+        return 24;
+    case FxType::fetcomp:
         return 24;
     case FxType::wide:
     case FxType::mseq:
@@ -202,6 +218,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<FilterFx>();
     case FxType::ladder:
         return std::make_unique<LadderFx>();
+    case FxType::fetcomp:
+        return std::make_unique<FetCompFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

@@ -4,6 +4,9 @@
 // that only exist natively (the page's Web Audio twin is a documented pass-through — nothing on the page is heard
 // in the shell).
 //
+//   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
+//     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
+//     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
 //   · LadderFx — ANALOG FILTER: the Moog transistor ladder (D'Angelo–Välimäki nonlinear model, the same equations
 //     the BASS synth's LADDER uses, deliberately its own copy: this one runs 4× oversampled with an IIR decimator,
 //     mixes the stage taps for the 6/12/18/24 dB LP · 12/24 dB HP · 12/24 dB BP modes, has its own DRIVE stage with
@@ -55,6 +58,62 @@ class ButterLp4
         double process(double v0) noexcept TERMINATOR_NONBLOCKING;
     };
     Section s1_, s2_;
+};
+
+/// FET COMP — the premium dynamics device (Phase 4.6c).
+///   RATIO   1:1 | 2:1 | 3:1 | 4:1 | 6:1 | 10:1 | 20:1 | NUKE (the SWITCH is the character, not just the slope:
+///           the knee tightens as it climbs and NUKE drops the threshold, hardens the knee and slows the release)
+///   INPUT   −12..+24 dB — **there is no THRESHOLD knob, on purpose.** The threshold is fixed where the hardware's
+///           is and you drive INTO it: INPUT is how hard it works, OUTPUT brings the level back.
+///   ATTACK  0.05..50 ms · RELEASE 20..2000 ms, program-dependent (deep gain reduction releases slower, opto-style)
+///   DETECT  FLAT | HP1 | HP2 | BAND — what the SIDE CHAIN hears, so a kick stops ducking the whole mix
+///   MODE    CLEAN | DIST 2 (even harmonics, tube-ish) | DIST 3 (odd, transformer-ish) | BRITISH (faster, harder,
+///           dirtier — the aggressive input stage)
+///   OUTPUT  −24..+24 dB · WET 0..100 (the CHAIN crossfades it, so parallel compression is one knob)
+/// The harmonics run 4× oversampled through the same ZOH-up / Butterworth-down pair the ANALOG FILTER uses, so the
+/// device still reports ZERO latency: a FET compressor is feed-forward and has no look-ahead to declare.
+class FetCompFx final : public Effect
+{
+  public:
+    static constexpr int kOversample = 4;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::fetcomp; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    float gainReductionDb() const noexcept TERMINATOR_NONBLOCKING override { return grDb_; }
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    struct Curve
+    {
+        double ratio = 4.0; // ≥ 1 (NUKE = 20 with everything else pushed)
+        double thresholdDb = -18.0;
+        double kneeDb = 6.0;
+        double releaseScale = 1.0;
+    };
+    Curve curveFor(int ratioIndex) const noexcept TERMINATOR_NONBLOCKING;
+    double detect(double x, int ch) noexcept TERMINATOR_NONBLOCKING;
+    double shape(double x) const noexcept TERMINATOR_NONBLOCKING;
+
+    double sr_ = 48000.0;
+    double srOs_ = 192000.0;
+    float ratioIdx_ = 3.0f; // 4:1
+    float detectIdx_ = 0.0f;
+    float modeIdx_ = 0.0f;
+    Glide input_, attack_, release_, output_;
+    // the side-chain filters (one per channel) and the gain state
+    Biquad scHpL_, scHpR_, scBandL_, scBandR_;
+    double gainDb_ = 0.0;  // the gain reduction the smoother is at (≤ 0)
+    double peakEnv_ = 0.0; // the RECTIFIER: instant attack, short decay — a detector that followed |x| sample by
+                           // sample would let go at every zero crossing and modulate the gain at the signal's own
+                           // frequency (which is distortion, and it made ATTACK measure ~30 % fast)
+    float grDb_ = 0.0f;    // published for the page's meters
+    ButterLp4 decL_, decR_;
+    // The DC blocker every asymmetric stage needs: DIST 2 is an even-harmonic shaper, and an even shaper ALWAYS
+    // leaves DC behind (the hardware has a coupling capacitor doing this job).
+    double dcInL_ = 0.0, dcOutL_ = 0.0, dcInR_ = 0.0, dcOutR_ = 0.0, dcR_ = 0.999;
 };
 
 /// ANALOG FILTER — the Moog ladder as a mixer insert.

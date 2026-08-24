@@ -152,7 +152,10 @@ export class NativeMixerShadow {
           const row = idx === undefined ? undefined : gr[String(idx)];
           if (!row) continue;
           for (let i = 0; i < strip.fx.length && i < row.length; i++) {
-            if (strip.fxIds[i] === 'sccomp') (strip.fx[i] as { gainReductionDb?: number }).gainReductionDb = row[i];
+            // every device that SHOWS gain reduction reads it off the page object; the engine is the only one
+            // that knows the number (the page's copy of these devices does not compress at all)
+            if (strip.fxIds[i] === 'sccomp' || strip.fxIds[i] === 'fetcomp')
+              (strip.fx[i] as { gainReductionDb?: number }).gainReductionDb = row[i];
           }
         }
       }

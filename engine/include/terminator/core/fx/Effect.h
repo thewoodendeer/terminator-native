@@ -37,7 +37,8 @@ enum class FxType : std::uint8_t
     delay,
     reverb,
     utility,
-    ladder, // 4.6 premium: ANALOG FILTER (native-only — appended so every existing type keeps its index)
+    ladder,  // 4.6 premium: ANALOG FILTER (native-only — appended so every existing type keeps its index)
+    fetcomp, // 4.6 premium: FET COMP
     count
 };
 

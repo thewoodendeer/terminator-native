@@ -1739,6 +1739,51 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6c DONE (THE SECOND PREMIUM DEVICE: FET COMP), 2026-08-24
+
+The Distressor-shaped compressor from B4's brief, `FetCompFx` beside the ladder in `AnalogFx.{h,cpp}` (which is why
+it re-uses `ButterLp4` and the zero-latency ZOH-up / Butterworth-down pair rather than growing a second oversampler).
+`FxType::fetcomp` is appended; the parity COMP is untouched.
+
+**The design decision that defines it: there is NO THRESHOLD knob.** The threshold is fixed at −18 dBFS (−24 for
+NUKE) and you drive INTO it with INPUT, then bring the level back with OUTPUT — the hardware's workflow, and the
+thing that makes INPUT read as *how hard it works AND how much colour*. The **RATIO switch is the character, not a
+slope**: the knee tightens as it climbs (14 dB at 2:1 → 1.5 dB at 20:1) and **NUKE** drops the threshold, squares
+the knee off and drags the release out. **DETECT** (FLAT / HP1 / HP2 / BAND) filters the side chain so a kick stops
+ducking the whole track. **MODE**: CLEAN / DIST 2 (even) / DIST 3 (odd) / BRITISH (faster attack, harder, dirtier).
+Stereo-LINKED detection (the louder side sets the gain, so the image never wanders) and **program-dependent
+release** (the deeper it holds, the slower it lets go). `gainReductionDb()` publishes GR, so the panel shows it.
+
+**Four bugs the gates caught, every one of them the kind that ships silently:**
+1. **A bare polynomial is not a saturator.** `x + a(x² − x⁴/2)` reaches −6765 at x = 15.8, and the +24 dB INPUT
+   stress case measured **2985 out of the device**. Every shaper now runs on a `ftanh`-bounded input — which is also
+   the honest model: a FET box's output stage does not stay linear when you slam it.
+2. **DIST 2 left DC behind.** The first version subtracted a fixed constant to "centre" the even shaper, which meant
+   **silence came out at −0.125** and any other level was wrong by a different amount. Now a 5 Hz DC blocker (the
+   console stage's corner) does the job a coupling capacitor does. New gate: every mode, on silence AND on a sine,
+   `|mean| < 1e-5 / 2e-3`.
+3. **The detector must RECTIFY, not follow.** Reading `|x|` sample by sample let go at every zero crossing, so the
+   measured attack was ~30 % fast (0.455 of the final GR after one time constant instead of 0.63) and the gain
+   modulated at the signal's own frequency — which is distortion. There is a peak envelope with instant attack and
+   a 20 ms decay in front of the gain computer now.
+4. **CLEAN has to bypass the oversampler.** With a linear shaper the 4× path only added the decimator's group delay,
+   so "1:1 · CLEAN · INPUT 0 · OUTPUT 0" was NEARLY transparent. It is now **bit-exact to 1e-9** — a compressor has
+   to be able to do nothing.
+
+**Gates (4.6c):** 8 more cases in `test_analog_fx.cpp` — the ratio switch really is 4:1 / 10:1 / 20:1 (measured
+against the fixed threshold) and quiet passes at unity · 1:1 CLEAN bit-exact + zero latency · attack lands on 63 %
+after one time constant and a fast attack catches more of a transient than a slow one · DETECT: HP2 lets a 50 Hz
+note through ≥ 5 dB louder, BAND leans on 2.5 kHz · the MODE harmonics are the ones claimed (CLEAN < −80 dB, DIST 2
+more 2nd than 3rd, DIST 3 the other way, BRITISH the dirtiest) · no mode leaves DC · NUKE ≥ 20 dB of GR and finite
+at 3 rates × 8 ratios × 4 modes on a full-scale square · INPUT/OUTPUT are the two ends.
+**mac-debug 0 warnings + ctest 311/311 · RTSan 312/312 · ui typecheck 5 = baseline · vite build clean ·
+clang-format clean · app probe PROBE OK** (and `prefsWindow: true` again this run — more evidence the earlier red
+was the machine).
+
+Page side in the same commit: `fetcomp` in `FX_REGISTRY` as **FET COMP** (a documented pass-through, like the
+ladder), the GR readout in the device panel now serves it as well as SC COMP, the native mixer shadow mirrors its
+gain reduction from the snapshot, and Help gained the full entry (including *why* there is no threshold knob).
+
 ## Phase 4 — 4.6a DONE (THE FIRST PREMIUM DEVICE: THE ANALOG FILTER — A REAL MOOG LADDER), 2026-08-24 thirteenth session
 
 The parity floor is finished, so this is the first device from B4's **VICTOR'S PHASE-4 BRIEF** — the stock devices

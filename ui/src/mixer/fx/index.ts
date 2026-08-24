@@ -21,6 +21,7 @@ import { FlangerFX } from './FlangerFX';
 import { MbSatFX } from './MbSatFX';
 import { SidechainFX } from './SidechainFX';
 import { LadderFX } from './LadderFX';
+import { FetCompFX } from './FetCompFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -28,7 +29,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder';
+  | 'ladder' | 'fetcomp';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -159,6 +160,21 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
     ],
     create: (c) => new LadderFX(c),
   },
+  fetcomp: {
+    name: 'FET COMP',
+    desc: 'The aggressive FET compressor. There is no THRESHOLD on purpose — you drive INTO it with INPUT and bring the level back with OUTPUT, exactly like the hardware. RATIO is the character (NUKE pins it), DETECT decides what the side chain hears so a kick stops ducking everything, and MODE adds the colour: DIST 2 even harmonics, DIST 3 odd, BRITISH faster and dirtier. Rendered by the app\'s engine',
+    params: [
+      sel('RATIO', 'RATIO', ['1:1', '2:1', '3:1', '4:1', '6:1', '10:1', '20:1', 'NUKE']),
+      { key: 'INPUT', label: 'INPUT', kind: 'knob', min: -12, max: 24, step: 0.5, unit: 'dB' },
+      { key: 'ATTACK', label: 'ATK', kind: 'knob', min: 0.05, max: 50, step: 0.05, unit: 'ms' },
+      { key: 'RELEASE', label: 'REL', kind: 'knob', min: 20, max: 2000, step: 5, unit: 'ms' },
+      sel('DETECT', 'DETECT', ['FLAT', 'HP1', 'HP2', 'BAND']),
+      sel('MODE', 'MODE', ['CLEAN', 'DIST 2', 'DIST 3', 'BRITISH']),
+      { key: 'OUTPUT', label: 'OUT', kind: 'knob', min: -24, max: 24, step: 0.5, unit: 'dB' },
+      { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
+    ],
+    create: (c) => new FetCompFX(c),
+  },
   filter: {
     name: 'FILTER',
     desc: 'Filter — one resonant lowpass / highpass / bandpass / notch. RESO is how much it rings at the cutoff',
@@ -244,7 +260,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'sccomp', 'delay', 'reverb', 'utility',
+  'vinyl', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'reverb', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

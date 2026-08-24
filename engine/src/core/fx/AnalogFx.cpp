@@ -12,6 +12,10 @@ constexpr float kFxTau = 0.01f; // the page's setParam(…, 0.01) glide
 constexpr double kPi = 3.14159265358979323846;
 /// The ladder's thermal voltage (the model's tanh scaling) — the BASS synth's constant.
 constexpr double kVt = 0.312;
+/// The FET comp's RATIO switch: the slope, and the knee that goes with it (file scope, not a static local — a
+/// function marked nonblocking may not have one: its first call would run a guarded initialisation).
+constexpr double kFetRatioSlopes[7] = {1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 20.0};
+constexpr double kFetRatioKnees[7] = {0.0, 14.0, 11.0, 9.0, 6.0, 3.0, 1.5};
 
 float clampf(float v, float lo, float hi) noexcept
 {
@@ -234,6 +238,234 @@ void LadderFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCK
         l[i] = ol;
         r[i] = orr;
     }
+}
+
+// ---- FET COMP -----------------------------------------------------------------------------------------------
+
+void FetCompFx::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    srOs_ = sampleRate * static_cast<double>(kOversample);
+    reset();
+}
+
+void FetCompFx::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    ratioIdx_ = 3.0f;
+    detectIdx_ = 0.0f;
+    modeIdx_ = 0.0f;
+    input_.set(0.0f, true);
+    attack_.set(3.0f, true);
+    release_.set(150.0f, true);
+    output_.set(0.0f, true);
+    gainDb_ = 0.0;
+    peakEnv_ = 0.0;
+    grDb_ = 0.0f;
+    // The side chain's two high-pass options and the BAND emphasis (a wide bell up where a snare lives, so the
+    // detector leans on the part of the sound the ear calls "loud").
+    scHpL_.reset();
+    scHpR_.reset();
+    scBandL_.reset();
+    scBandR_.reset();
+    scHpL_.set(Biquad::Type::highpass, 120.0, 0.0, 0.0, sr_);
+    scHpR_.set(Biquad::Type::highpass, 120.0, 0.0, 0.0, sr_);
+    scBandL_.set(Biquad::Type::peaking, 2500.0, 0.8, 9.0, sr_);
+    scBandR_.set(Biquad::Type::peaking, 2500.0, 0.8, 9.0, sr_);
+    decL_.reset();
+    decR_.reset();
+    decL_.set(sr_ * 0.47, srOs_);
+    decR_.set(sr_ * 0.47, srOs_);
+    dcInL_ = dcOutL_ = dcInR_ = dcOutR_ = 0.0;
+    dcR_ = 1.0 - 2.0 * kPi * 5.0 / sr_; // a 5 Hz blocker, the same corner the console stage uses
+}
+
+void FetCompFx::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        ratioIdx_ = clampf(std::floor(value), 0.0f, 7.0f);
+        break;
+    case 1:
+        input_.set(clampf(value, -12.0f, 24.0f), immediate);
+        break;
+    case 2:
+        attack_.set(clampf(value, 0.05f, 50.0f), immediate);
+        break;
+    case 3:
+        release_.set(clampf(value, 20.0f, 2000.0f), immediate);
+        break;
+    case 4:
+        detectIdx_ = clampf(std::floor(value), 0.0f, 3.0f);
+        break;
+    case 5:
+        modeIdx_ = clampf(std::floor(value), 0.0f, 3.0f);
+        break;
+    case 6:
+        output_.set(clampf(value, -24.0f, 24.0f), immediate);
+        break;
+    default:
+        break;
+    }
+}
+
+float FetCompFx::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    switch (index)
+    {
+    case 0:
+        return ratioIdx_;
+    case 1:
+        return input_.target;
+    case 2:
+        return attack_.target;
+    case 3:
+        return release_.target;
+    case 4:
+        return detectIdx_;
+    case 5:
+        return modeIdx_;
+    case 6:
+        return output_.target;
+    default:
+        return 0.0f;
+    }
+}
+
+/// The RATIO switch is the device's character, not one number: the knee tightens as the ratio climbs (2:1 is a
+/// broad, forgiving bend; 20:1 is nearly a corner) and **NUKE** is the hardware's party trick — the same 20:1 slope
+/// with the threshold dropped, the knee squared off and the release dragged out, so it pins and breathes.
+FetCompFx::Curve FetCompFx::curveFor(int i) const noexcept TERMINATOR_NONBLOCKING
+{
+    Curve c;
+    if (i >= 7) // NUKE
+    {
+        c.ratio = 20.0;
+        c.thresholdDb = -24.0;
+        c.kneeDb = 0.0;
+        c.releaseScale = 3.0;
+        return c;
+    }
+    const int k = i < 0 ? 0 : i;
+    c.ratio = kFetRatioSlopes[k];
+    c.kneeDb = kFetRatioKnees[k];
+    c.thresholdDb = -18.0;
+    c.releaseScale = 1.0;
+    return c;
+}
+
+/// What the SIDE CHAIN hears: FLAT is the signal, HP1 / HP2 take the bottom out of the detector so a kick stops
+/// ducking everything, BAND leans on the presence region.
+double FetCompFx::detect(double x, int ch) noexcept TERMINATOR_NONBLOCKING
+{
+    const int d = static_cast<int>(detectIdx_);
+    if (d == 0)
+        return x;
+    if (d == 3)
+        return ch == 0 ? scBandL_.process(x) : scBandR_.process(x);
+    const double hp = ch == 0 ? scHpL_.process(x) : scHpR_.process(x);
+    return d == 1 ? 0.5 * (hp + x) : hp; // HP1 = half in, HP2 = the filtered signal alone
+}
+
+/// The output stage's harmonics. DIST 2 is asymmetric (even harmonics, tube-ish), DIST 3 symmetric (odd,
+/// transformer-ish), BRITISH is both plus real drive. CLEAN is bit-exact — the mode has to be able to do nothing.
+double FetCompFx::shape(double x) const noexcept TERMINATOR_NONBLOCKING
+{
+    const int m = static_cast<int>(modeIdx_);
+    if (m == 0)
+        return x;
+    // EVERY shaper runs on a BOUNDED input. A bare polynomial is not a saturator: `x + a(x² − x⁴/2)` reaches
+    // −6765 at x = 15.8, which is exactly what the +24 dB INPUT stress case found (2985 out of the device). The
+    // tanh both bounds it and IS the output stage — a FET box's output does not stay linear when you slam it.
+    const double t = ftanh(x);
+    switch (m)
+    {
+    case 1: // DIST 2 — even harmonics (tube-ish). The DC this leaves behind is taken out by the blocker, not by a
+            // constant: a fixed offset would be right at one level and wrong at every other (and −0.125 on SILENCE).
+        return t + 0.5 * (t * t - 0.5 * t * t * t * t);
+    case 2: // DIST 3 — odd harmonics (transformer-ish)
+        return t - 0.7 * t * t * t;
+    default: // BRITISH — both, plus real drive
+        return ftanh(1.6 * (t + 0.3 * t * t - 0.45 * t * t * t)) * 0.75;
+    }
+}
+
+void FetCompFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    if (input_.moving() || attack_.moving() || release_.moving() || output_.moving())
+    {
+        input_.advance(n, sr_, kFxTau);
+        attack_.advance(n, sr_, kFxTau);
+        release_.advance(n, sr_, kFxTau);
+        output_.advance(n, sr_, kFxTau);
+    }
+    const Curve c = curveFor(static_cast<int>(ratioIdx_));
+    const bool british = static_cast<int>(modeIdx_) == 3;
+    const double inGain = std::pow(10.0, static_cast<double>(input_.cur) / 20.0);
+    const double outGain = std::pow(10.0, static_cast<double>(output_.cur) / 20.0);
+    // BRITISH grabs faster and lets go sooner — the aggressive input stage is what people reach for it for.
+    const double atkMs = std::max(0.02, static_cast<double>(attack_.cur) * (british ? 0.4 : 1.0));
+    const double relMs = std::max(5.0, static_cast<double>(release_.cur) * (british ? 0.7 : 1.0));
+    const double atkCoef = std::exp(-1.0 / (0.001 * atkMs * sr_));
+    const double slope = 1.0 - 1.0 / c.ratio;
+    const bool unity = c.ratio <= 1.0;
+    // CLEAN is a LINEAR output stage, so the oversampler has nothing to do — and running the signal through the
+    // decimator anyway would cost it a group delay and a whisper of imaging for no reason. This is what makes
+    // "1:1 · CLEAN · INPUT 0 · OUTPUT 0" bit-exact rather than nearly.
+    const bool linear = static_cast<int>(modeIdx_) == 0;
+    // The rectifier's decay: fast enough to track a note's envelope, slow enough not to ripple at pitch.
+    const double envCoef = std::exp(-1.0 / (0.020 * sr_));
+
+    for (int i = 0; i < n; ++i)
+    {
+        const double xl = l[i] * inGain, xr = r[i] * inGain;
+        // STEREO LINKED, as a two-channel FET box is: the louder side sets the gain, so the image never wanders.
+        const double key = std::max(std::abs(detect(xl, 0)), std::abs(detect(xr, 1)));
+        peakEnv_ = key > peakEnv_ ? key : peakEnv_ * envCoef;
+        double targetDb = 0.0;
+        if (!unity)
+        {
+            const double keyDb = 20.0 * std::log10(std::max(peakEnv_, 1e-9));
+            const double over = keyDb - c.thresholdDb;
+            if (c.kneeDb > 0.0 && over > -0.5 * c.kneeDb && over < 0.5 * c.kneeDb)
+            {
+                const double t = over + 0.5 * c.kneeDb;         // 0 … knee
+                targetDb = -slope * (t * t) / (2.0 * c.kneeDb); // the quadratic bend through the knee
+            }
+            else if (over > 0.0)
+                targetDb = -slope * over;
+        }
+        // Program-dependent release: the deeper it is holding the sound down, the slower it lets go — the
+        // opto-ish behaviour that keeps a squashed mix from pumping.
+        const double relEff = relMs * c.releaseScale * (1.0 + 0.02 * (-gainDb_));
+        const double relCoef = std::exp(-1.0 / (0.001 * relEff * sr_));
+        const double coef = targetDb < gainDb_ ? atkCoef : relCoef;
+        gainDb_ = targetDb + (gainDb_ - targetDb) * coef;
+        const double g = std::pow(10.0, gainDb_ / 20.0);
+
+        if (linear)
+        {
+            l[i] = xl * g * outGain;
+            r[i] = xr * g * outGain;
+            continue;
+        }
+        double ol = 0.0, orr = 0.0;
+        for (int k = 0; k < kOversample; ++k) // the harmonics oversampled: ZOH up, Butterworth down
+        {
+            ol = decL_.process(shape(xl * g));
+            orr = decR_.process(shape(xr * g));
+        }
+        // DC out (only the shaped path can make any)
+        const double bl = ol - dcInL_ + dcR_ * dcOutL_;
+        dcInL_ = ol;
+        dcOutL_ = bl;
+        const double br = orr - dcInR_ + dcR_ * dcOutR_;
+        dcInR_ = orr;
+        dcOutR_ = br;
+        l[i] = bl * outGain;
+        r[i] = br * outGain;
+    }
+    grDb_ = static_cast<float>(gainDb_);
 }
 
 } // namespace terminator

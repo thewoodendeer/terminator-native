@@ -112,6 +112,15 @@ double magDb(const std::vector<double>& out, double hz, double sr = kSr)
     return 20.0 * std::log10(std::max(mag, 1e-12));
 }
 
+/// Peak of |x| over [from, to) of a plain vector.
+double peak(const std::vector<double>& v, int from, int to)
+{
+    double m = 0.0;
+    for (int i = std::max(0, from); i < std::min(to, static_cast<int>(v.size())); ++i)
+        m = std::max(m, std::abs(v[static_cast<std::size_t>(i)]));
+    return m;
+}
+
 double rms(const std::vector<double>& v, int from, int to)
 {
     double s = 0.0;
@@ -349,4 +358,233 @@ TEST_CASE("block size does not change the sound", "[fx][analog]")
     const auto outB = run(*b, 8192, gen, 37); // a deliberately awkward block
     for (std::size_t i = 0; i < outA.size(); ++i)
         REQUIRE(outA[i] == Approx(outB[i]).margin(1e-9));
+}
+
+// ---- FET COMP (4.6c) -------------------------------------------------------------------------------------------
+// The premium dynamics device. What has to be true for it to be worth reaching for over the parity COMP: the RATIO
+// switch really is that ratio, the attack and release land on the times they claim, the DETECT filter changes what
+// the side chain hears (a kick stops ducking everything), the MODE harmonics are the harmonics they say they are,
+// NUKE pins it without blowing up, and 1:1 CLEAN is bit-exact — a compressor has to be able to do nothing.
+
+namespace
+{
+enum
+{
+    kRatio = 0,
+    kInput,
+    kAtk,
+    kRel,
+    kDetect,
+    kCompMode,
+    kOut
+};
+
+std::unique_ptr<FetCompFx> makeComp(int ratio, float inputDb, float atkMs = 3.0f, float relMs = 150.0f, int detect = 0,
+                                    int mode = 0, double sr = kSr)
+{
+    auto fx = std::make_unique<FetCompFx>();
+    fx->prepare(sr, kBlock);
+    fx->setParam(kRatio, static_cast<float>(ratio), true);
+    fx->setParam(kInput, inputDb, true);
+    fx->setParam(kAtk, atkMs, true);
+    fx->setParam(kRel, relMs, true);
+    fx->setParam(kDetect, static_cast<float>(detect), true);
+    fx->setParam(kCompMode, static_cast<float>(mode), true);
+    fx->setParam(kOut, 0.0f, true);
+    return fx;
+}
+
+/// dBFS of a settled sine's fundamental after `sec` through `e`.
+double outDb(Effect& e, double hz, double ampDb, double sec = 1.0)
+{
+    const double amp = std::pow(10.0, ampDb / 20.0);
+    const auto out = run(e, static_cast<int>(kSr * sec), tone(hz, amp));
+    return magDb(out, hz);
+}
+} // namespace
+
+TEST_CASE("fet comp: the ratio switch is the ratio", "[fx][analog][comp]")
+{
+    REQUIRE(fxTypeFromId("fetcomp") == FxType::fetcomp);
+    const auto& info = fxTypeInfo(FxType::fetcomp);
+    REQUIRE(info.numParams == 8);
+    REQUIRE(info.wetParam == 7);
+    REQUIRE(fxOptionIndex(FxType::fetcomp, 0, "NUKE") == 7);
+    REQUIRE(fxOptionIndex(FxType::fetcomp, 4, "HP2") == 2);
+    REQUIRE(fxOptionIndex(FxType::fetcomp, 5, "BRITISH") == 3);
+
+    // The threshold is fixed at −18 dBFS and you drive into it. A −6 dBFS tone sits 12 dB over, so at ratio R the
+    // output should land 12/R dB above the threshold — measured past the knee, which the high ratios have almost
+    // none of.
+    struct Case
+    {
+        int idx;
+        double ratio;
+    };
+    for (const Case c : {Case{3, 4.0}, Case{5, 10.0}, Case{6, 20.0}})
+    {
+        auto fx = makeComp(c.idx, 0.0f);
+        const double got = outDb(*fx, 220.0, -6.0, 1.5);
+        const double want = -18.0 + 12.0 / c.ratio;
+        CHECK(got == Approx(want).margin(1.5));
+    }
+    // …and a quiet signal under the threshold passes at unity whatever the switch says.
+    auto quiet = makeComp(6, 0.0f);
+    CHECK(outDb(*quiet, 220.0, -30.0, 1.0) == Approx(-30.0).margin(0.5));
+}
+
+TEST_CASE("fet comp: 1:1 CLEAN is bit-exact", "[fx][analog][comp]")
+{
+    // A compressor must be able to do nothing: no gain, no colour, no gain reduction.
+    auto fx = makeComp(0, 0.0f);
+    const int n = 4096;
+    std::vector<double> l(n), r(n), inL(n);
+    for (int i = 0; i < n; ++i)
+    {
+        inL[static_cast<std::size_t>(i)] = 0.7 * std::sin(kTwoPi * 300.0 * static_cast<double>(i) / kSr);
+        l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = inL[static_cast<std::size_t>(i)];
+    }
+    fx->process(l.data(), r.data(), n);
+    for (int i = 0; i < n; ++i)
+        REQUIRE(l[static_cast<std::size_t>(i)] == Approx(inL[static_cast<std::size_t>(i)]).margin(1e-9));
+    CHECK(fx->gainReductionDb() == Approx(0.0f).margin(1e-6f));
+    CHECK(fx->latencySamples() == 0); // feed-forward FET: no look-ahead to declare
+}
+
+TEST_CASE("fet comp: attack and release land on their times", "[fx][analog][comp]")
+{
+    // A step from silence to −6 dBFS: the gain reduction should reach ~63 % of its final value in one ATTACK.
+    const auto stepAt = [](FetCompFx& fx, double atkSec, double holdSec)
+    {
+        const double amp = std::pow(10.0, -6.0 / 20.0);
+        const int hold = static_cast<int>(kSr * holdSec);
+        std::vector<double> l(static_cast<std::size_t>(hold)), r(static_cast<std::size_t>(hold));
+        for (int i = 0; i < hold; ++i)
+            l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] =
+                amp * std::sin(kTwoPi * 400.0 * static_cast<double>(i) / kSr);
+        const int oneAttack = static_cast<int>(kSr * atkSec);
+        fx.process(l.data(), r.data(), oneAttack);
+        const double atAttack = static_cast<double>(fx.gainReductionDb());
+        fx.process(l.data() + oneAttack, r.data() + oneAttack, hold - oneAttack);
+        return std::pair<double, double>{atAttack, static_cast<double>(fx.gainReductionDb())};
+    };
+    auto slow = makeComp(5, 0.0f, 20.0f, 400.0f);
+    const auto [atAtk, settled] = stepAt(*slow, 0.020, 0.9);
+    REQUIRE(settled < -3.0);                             // it IS compressing
+    CHECK(atAtk / settled == Approx(0.63).margin(0.15)); // one time constant in
+
+    // RELEASE: cut the input and the gain must come most of the way back within ~3 release constants.
+    const auto silence = run(*slow, static_cast<int>(kSr * 0.9), [](int) { return 0.0; });
+    (void)silence;
+    CHECK(static_cast<double>(slow->gainReductionDb()) > settled * 0.25);
+
+    // A fast attack catches more of a transient than a slow one — the knob does what its name says.
+    auto fast = makeComp(5, 0.0f, 0.1f, 400.0f);
+    auto lazy = makeComp(5, 0.0f, 30.0f, 400.0f);
+    const auto burst = [](int i) { return i < 480 ? 0.9 : 0.0; };
+    const auto f = run(*fast, 4800, burst);
+    const auto s2 = run(*lazy, 4800, burst);
+    CHECK(peak(f, 0, 480) < peak(s2, 0, 480));
+}
+
+TEST_CASE("fet comp: DETECT changes what the side chain hears", "[fx][analog][comp]")
+{
+    // 50 Hz at −6 dBFS. FLAT hears all of it and clamps down; HP2 barely hears it, so the same bass note ducks the
+    // track far less — which is the whole point of a detector filter.
+    auto flat = makeComp(5, 0.0f, 3.0f, 150.0f, 0);
+    auto hp2 = makeComp(5, 0.0f, 3.0f, 150.0f, 2);
+    const double gFlat = outDb(*flat, 50.0, -6.0, 1.2);
+    const double gHp2 = outDb(*hp2, 50.0, -6.0, 1.2);
+    CHECK(gHp2 > gFlat + 5.0);
+    // BAND leans on the presence region: a 2.5 kHz tone compresses MORE than at FLAT.
+    auto band = makeComp(5, 0.0f, 3.0f, 150.0f, 3);
+    auto flat2 = makeComp(5, 0.0f, 3.0f, 150.0f, 0);
+    CHECK(outDb(*band, 2500.0, -12.0, 1.2) < outDb(*flat2, 2500.0, -12.0, 1.2) - 1.5);
+}
+
+TEST_CASE("fet comp: the MODE harmonics are the harmonics they claim", "[fx][analog][comp]")
+{
+    const auto harmonics = [](int mode)
+    {
+        auto fx = makeComp(1, 0.0f, 3.0f, 150.0f, 0, mode);
+        const auto out = run(*fx, static_cast<int>(kSr * 0.6), tone(200.0, 0.35));
+        const double f0 = magDb(out, 200.0);
+        return std::pair<double, double>{magDb(out, 400.0) - f0, magDb(out, 600.0) - f0};
+    };
+    const auto [clean2, clean3] = harmonics(0);
+    CHECK(clean2 < -80.0); // CLEAN really is clean
+    CHECK(clean3 < -80.0);
+    const auto [d2h2, d2h3] = harmonics(1);
+    CHECK(d2h2 > -40.0);      // DIST 2 puts a 2nd harmonic there…
+    CHECK(d2h2 > d2h3 + 6.0); // …and more of it than 3rd
+    const auto [d3h2, d3h3] = harmonics(2);
+    CHECK(d3h3 > -40.0);
+    CHECK(d3h3 > d3h2 + 6.0); // DIST 3 the other way round
+    const auto [brit2, brit3] = harmonics(3);
+    CHECK(std::max(brit2, brit3) > -35.0); // BRITISH is the dirty one
+}
+
+TEST_CASE("fet comp: no mode leaves DC behind", "[fx][analog][comp]")
+{
+    // DIST 2 is an EVEN shaper, and an even shaper always makes DC — the blocker has to take it out. Left in, a
+    // constant offset eats headroom, thumps on every bypass and is inaudible until a bounce clips for no reason.
+    // (A fixed correction constant is not a fix: it was −0.125 on SILENCE before this gate existed.)
+    for (int mode = 0; mode < 4; ++mode)
+    {
+        auto fx = makeComp(3, 6.0f, 3.0f, 150.0f, 0, mode);
+        const auto sil = run(*fx, static_cast<int>(kSr * 0.3), [](int) { return 0.0; });
+        double mean = 0.0;
+        for (const double v : sil)
+            mean += v;
+        CHECK(std::abs(mean / static_cast<double>(sil.size())) < 1e-5);
+
+        auto fx2 = makeComp(3, 6.0f, 3.0f, 150.0f, 0, mode);
+        const auto sine = run(*fx2, static_cast<int>(kSr * 0.5), tone(120.0, 0.5));
+        double m2 = 0.0;
+        const int from = static_cast<int>(kSr * 0.25);
+        for (int i = from; i < static_cast<int>(sine.size()); ++i)
+            m2 += sine[static_cast<std::size_t>(i)];
+        CHECK(std::abs(m2 / static_cast<double>(static_cast<int>(sine.size()) - from)) < 2e-3);
+    }
+}
+
+TEST_CASE("fet comp: NUKE pins it, and nothing blows up", "[fx][analog][comp]")
+{
+    auto nuke = makeComp(7, 12.0f, 1.0f, 200.0f);
+    const auto out = run(*nuke, static_cast<int>(kSr * 1.0), tone(150.0, 0.7));
+    CHECK(nuke->gainReductionDb() < -20.0f); // it really is pinned
+    for (const double v : out)
+    {
+        REQUIRE(std::isfinite(v));
+        REQUIRE(std::abs(v) < 8.0);
+    }
+    // Every ratio × mode × detector at every rate, full scale in: finite and bounded.
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int ratio = 0; ratio < 8; ++ratio)
+            for (int mode = 0; mode < 4; ++mode)
+            {
+                auto fx = makeComp(ratio, 24.0f, 0.05f, 20.0f, ratio % 4, mode, sr);
+                const auto o =
+                    run(*fx, static_cast<int>(sr * 0.1), [](int i) { return (i / 32) % 2 == 0 ? 1.0 : -1.0; }, 64);
+                for (const double v : o)
+                {
+                    REQUIRE(std::isfinite(v));
+                    REQUIRE(std::abs(v) < 24.0); // INPUT +24 dB is ×15.8 before the attack has caught it
+                }
+            }
+}
+
+TEST_CASE("fet comp: INPUT and OUTPUT are the two ends", "[fx][analog][comp]")
+{
+    // There is no threshold: INPUT is how hard it works. +12 dB in must produce clearly more gain reduction.
+    auto soft = makeComp(4, 0.0f);
+    auto hard = makeComp(4, 12.0f);
+    const double a = outDb(*soft, 300.0, -18.0, 1.2);
+    const double b = outDb(*hard, 300.0, -18.0, 1.2);
+    CHECK(soft->gainReductionDb() > hard->gainReductionDb() + 3.0f);
+    CHECK(b > a); // driven harder it is still louder out, just more squashed
+    // OUTPUT is a clean trim: +6 dB out is +6 dB, nothing else.
+    auto trim = makeComp(0, 0.0f);
+    trim->setParam(kOut, 6.0f, true);
+    CHECK(outDb(*trim, 300.0, -30.0, 0.5) == Approx(-24.0).margin(0.3));
 }
