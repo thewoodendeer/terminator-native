@@ -326,3 +326,96 @@ TEST_CASE("monitor: an armed take with the monitor open allocates nothing on the
     r.engine.stopRecord();
     f.deleteFile();
 }
+
+TEST_CASE("record source: a MASTER take is Terminator's own output, post fader", "[record][resample]")
+{
+    // 5.1d. The page's tap cannot do this inside the shell at all: the TS engine's pad voices are muted there, so
+    // its master node carries silence and a RESAMPLE take came out empty. This one is the engine's own output.
+    Rig r(128);
+    const auto f = tempWav("terminator-master-take.wav");
+    f.deleteFile();
+    juce::String err;
+    Engine::RecordArm arm;
+    arm.source = Engine::RecordSource::master;
+    REQUIRE(r.engine.startRecord(r.cfg(f, 2), err, arm));
+    r.push(Command::setTestTone(true, 480.0f, 0.5f)); // 480 Hz at 48k = exactly 100 samples a cycle
+    r.push(Command::setMasterGain(0.5f));             // the take is POST the master fader
+    r.runDc(0.0f, 8);
+    r.engine.stopRecord();
+    const auto wav = readWav(f);
+    REQUIRE(wav.size() == 2);
+    REQUIRE(wav[0].size() >= 512);
+    float pk = 0.0f;
+    for (std::size_t i = 256; i < wav[0].size(); ++i) // past the first block, where the gain is still ramping
+        pk = std::max(pk, std::abs(wav[0][i]));
+    CHECK(pk == Approx(0.25f).margin(0.01)); // 0.5 tone x 0.5 master
+    f.deleteFile();
+}
+
+TEST_CASE("record source: the count-in is NOT in a master take", "[record][resample]")
+{
+    // You count yourself in and then resample the beat: the clicks are the count, not part of the sample. They are
+    // added after the tap, exactly as they bypass the mixer.
+    Rig r(128);
+    const auto f = tempWav("terminator-master-noclick.wav");
+    f.deleteFile();
+    juce::String err;
+    Engine::RecordArm arm;
+    arm.source = Engine::RecordSource::master;
+    REQUIRE(r.engine.startRecord(r.cfg(f, 2), err, arm));
+    r.push(Command::seqSetBpm(240.0)); // a beat every 12000 samples
+    r.push(Command::countIn(4));
+    r.runDc(0.0f, 400); // well past four beats: every count-in click has fired
+    CHECK(r.engine.snapshot().metronomeClicks >= 4);
+    r.engine.stopRecord();
+    const auto wav = readWav(f);
+    REQUIRE(wav.size() == 2);
+    REQUIRE(!wav[0].empty());
+    float pk = 0.0f;
+    for (float v : wav[0])
+        pk = std::max(pk, std::abs(v));
+    CHECK(pk == 0.0f); // the clicks were heard, and none of them is in the file
+    f.deleteFile();
+}
+
+TEST_CASE("record arm: latency compensation puts the performance, not the round trip, at frame 0", "[record][arm]")
+{
+    // What you played for musical time M only reaches the input stream a round trip later, so the take starts
+    // there: frame 0 is the sound that belongs at M.
+    Rig r(128);
+    const auto f = tempWav("terminator-arm-latency.wav");
+    f.deleteFile();
+    juce::String err;
+    Engine::RecordArm arm;
+    arm.mode = Engine::RecordStart::atSample;
+    arm.atSample = 300;
+    arm.latencyCompensationSamples = 137; // reported in + out + the measured driver error
+    REQUIRE(r.engine.startRecord(r.cfg(f), err, arm));
+    r.run(8);
+    CHECK(r.engine.recordStartSample() == 300 + 137);
+    r.engine.stopRecord();
+    const auto wav = readWav(f);
+    REQUIRE(wav.size() == 1);
+    CHECK(wav[0][0] == Approx(marker(437)));
+    f.deleteFile();
+}
+
+TEST_CASE("record source: a master take ignores latency compensation", "[record][resample]")
+{
+    // Nothing left the machine, so there is no round trip to undo. Compensating one would shift the take off the
+    // grid it was armed to.
+    Rig r(128);
+    const auto f = tempWav("terminator-master-nocomp.wav");
+    f.deleteFile();
+    juce::String err;
+    Engine::RecordArm arm;
+    arm.mode = Engine::RecordStart::atSample;
+    arm.source = Engine::RecordSource::master;
+    arm.atSample = 300;
+    arm.latencyCompensationSamples = 137;
+    REQUIRE(r.engine.startRecord(r.cfg(f, 2), err, arm));
+    r.runDc(0.0f, 8);
+    CHECK(r.engine.recordStartSample() == 300);
+    r.engine.stopRecord();
+    f.deleteFile();
+}

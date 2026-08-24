@@ -71,15 +71,21 @@ export const native = {
   exportProject: lazy<AnyRecord, AnyRecord>('terminatorExport'),
   /** Phase 5.1a/b/c: RECORD from the interface's own inputs, in the ENGINE — what RECORD SAMPLE uses in the shell
    *  for a real input (Terminator's own output and system audio stay on the page's getUserMedia path).
-   *  `{verb:'start', path, channels?, inputs?[], bitDepth?, countIn?, atSample?, atTransport?, lengthSeconds?}` →
-   *  `{ok, path, armed, error?}`; `{verb:'stop'}` → `{ok, frames, seconds, dropped}`; `{verb:'status'}` →
+   *  `{verb:'start', path, channels?, inputs?[], bitDepth?, countIn?, atSample?, atTransport?, lengthSeconds?,
+   *  source?:'inputs'|'master', compensate?}` → `{ok, path, armed, source, compensationSamples, error?}`; `{verb:'stop'}` → `{ok, frames, seconds, dropped}`; `{verb:'status'}` →
    *  `{recording, armed, complete, frames, captured, dropped, peakL, peakR, startSample, startPlayhead}`;
    *  `{verb:'monitor', enabled, inputs?[], gainDb?, strip?}` → the input through the engine, live.
    *
    *  THE ARM (5.1c): with `countIn` the shell books the clicks AND the take, and capture begins on the downbeat
    *  itself — the first frame of the file is that beat. `atSample` starts on an exact engine sample, `atTransport`
    *  on the transport's own anchor, and `lengthSeconds` punches out on its own frame: the shell then closes the
-   *  file and emits `terminator.recordFinished` `{path, frames, dropped, seconds}` — nobody has to hold STOP. */
+   *  file and emits `terminator.recordFinished` `{path, frames, dropped, seconds}` — nobody has to hold STOP.
+   *
+   *  5.1d: `source:'master'` records TERMINATOR'S OWN OUTPUT (post master fader, before the click) — the RESAMPLE
+   *  take, which the page's Web Audio tap cannot make inside the shell because the TS engine's voices are muted
+   *  there. A take aimed at a musical position is shifted by the round trip (the loopback calibration's measured
+   *  number, else the driver's reported in + out latency) so frame 0 is the performance, not the latency;
+   *  `compensate:false` turns that off, and a master take never needs it. */
   record: lazy<AnyRecord, AnyRecord>('terminatorRecord'),
 };
 

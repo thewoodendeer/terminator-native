@@ -218,6 +218,12 @@ is a bounce, and system audio, which is the OS's).
   and the take starts on the DOWNBEAT the count is counting to; `atSample` starts on an exact engine sample;
   `atTransport` on the transport's own anchor (`seqPlay(atSample)`, not the block the command landed in);
   `lengthSeconds` punches out on its own frame.
+- **`source`** (5.1d): `inputs` (default) or **`master`** — Terminator's OWN output, post master fader and BEFORE the
+  click (the RESAMPLE take). The page's Web Audio tap cannot make that take inside the shell at all: the TS engine's
+  voices are muted there, so its master node carries silence. A take aimed at a MUSICAL position is also shifted by
+  the round trip (`calibration.roundTripSamples` when it was measured at this rate, else the driver's reported
+  in + out latency) so frame 0 is the performance rather than the latency — `compensate:false` opts out, and a
+  master take never needs it. The reply carries `source` + `compensationSamples`.
 - `stop` → `{ok, frames, seconds, dropped}` · `status` → `{recording, armed, complete, frames, captured, dropped,
   peakL, peakR, startSample, startPlayhead}` — `startPlayhead` is the TRANSPORT position of the take's first frame,
   which is where it belongs in the song. `dropped` is reported on purpose: a take with a counted hole in it beats one

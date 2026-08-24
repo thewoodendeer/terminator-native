@@ -116,6 +116,10 @@ bool Engine::startRecord(const RecorderConfig& cfg, juce::String& error, const R
     recStarted_.store(0, std::memory_order_relaxed);
     recPlayhead_.store(0, std::memory_order_relaxed);
     recLength_.store(arm.lengthSamples, std::memory_order_relaxed);
+    recSource_.store(static_cast<std::uint8_t>(arm.source), std::memory_order_relaxed);
+    // Only an INPUT take is late by the round trip: a master take never left the machine.
+    recCompensation_.store(arm.source == RecordSource::inputs ? arm.latencyCompensationSamples : 0,
+                           std::memory_order_relaxed);
     recArmMode_.store(static_cast<std::uint8_t>(arm.mode), std::memory_order_relaxed);
     // `atSample` is the only mode the caller can resolve itself; the other two are resolved by the audio thread when
     // the count-in or the transport says so. 0 = unresolved.
@@ -166,6 +170,9 @@ void Engine::pushRecordWindow(const float* const* inputs, int numIn, int numSamp
                 return;
             recArmSample_.store(at, std::memory_order_relaxed);
         }
+        // LATENCY COMPENSATION (5.1d): the sound that belongs at `at` only reaches the input stream a round trip
+        // later, so an input take starts there and its frame 0 is the performance that belongs at `at`.
+        at += recCompensation_.load(std::memory_order_relaxed);
         if (at == 0 || at >= blockStart + static_cast<std::uint64_t>(numSamples))
             return; // not this block
         offset = at > blockStart ? static_cast<int>(at - blockStart) : 0;
@@ -975,8 +982,10 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
             }
     // RECORDING (5.1a): the take gets the block BEFORE anything else looks at it — what is on the interface is
     // what lands in the file, with nothing of ours in between. 5.1c: an ARMED take starts inside the block, at its
-    // own sample, and a punch-out length ends it at its own sample too.
-    pushRecordWindow(inputs, numIn, numSamples);
+    // own sample, and a punch-out length ends it at its own sample too. 5.1d: a MASTER take is pushed further down
+    // instead, from Terminator's own output.
+    if (recSource_.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(RecordSource::inputs))
+        pushRecordWindow(inputs, numIn, numSamples);
     if (calibState_ == 1 && inputs != nullptr && calibIn_ < nIn && inputs[calibIn_] != nullptr)
     {
         const float* in = inputs[calibIn_];
@@ -1112,6 +1121,17 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
             outputPeak_[ch] = pk;
     }
     masterGainCurrent_ = gainEnd;
+
+    // RESAMPLE (5.1d): a MASTER take is what the speakers get — post master gain, and BEFORE the click, because a
+    // count-in you recorded against is not part of the sample you are making. (The page's tap could never do this
+    // in the shell: the TS engine's voices are muted here, so its master node carries silence.)
+    if (recSource_.load(std::memory_order_relaxed) == static_cast<std::uint8_t>(RecordSource::master))
+    {
+        const int pair = mixer_->mainOut() * 2;
+        recTap_[0] = pair < numOut ? outputs[pair] : nullptr;
+        recTap_[1] = pair + 1 < numOut ? outputs[pair + 1] : (pair < numOut ? outputs[pair] : nullptr);
+        pushRecordWindow(recTap_, 2, numSamples);
+    }
 
     // the metronome + count-in clicks (3.6): synthesised at their samples, added AFTER the master gain — the TS clicks
     // went straight to the destination past the mixer. With a CLICK strip (setSourceStrip 1, Phase 4.1) they were

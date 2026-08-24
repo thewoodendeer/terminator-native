@@ -3489,7 +3489,7 @@ export function ChopperView() {
     ctx.fillRect(0, Math.round(h * 0.25), Math.round(w * frac), Math.round(h * 0.5));
   };
 
-  const startNativeRecording = async (): Promise<boolean> => {
+  const startNativeRecording = async (source: 'inputs' | 'master' = 'inputs'): Promise<boolean> => {
     const boot = nativeBoot();
     const dir = boot?.dirs?.temp ?? boot?.dirs?.dataDir;
     if (!dir) return false;
@@ -3497,7 +3497,7 @@ export function ChopperView() {
     // 24-bit, stereo, the first two inputs — the same shape the page path produced, but without the round trip
     // through WebKit. With a COUNT-IN (5.1c) the engine opens the file now and starts capturing on the downbeat
     // itself, so the take's first frame IS the downbeat — nothing to trim.
-    const res = await native.record({ verb: 'start', path, channels: 2, bitDepth: 24, countIn: recordCountIn });
+    const res = await native.record({ verb: 'start', path, channels: 2, bitDepth: 24, countIn: recordCountIn, source });
     if (!res?.ok) { setError(String(res?.error ?? 'Recording failed to start')); return false; }
     // The level meter reads the ENGINE's own peaks — there is no MediaStream to hang an analyser on, and the
     // engine's number is the true one anyway (it is the interface's sample, before anything of ours). The same
@@ -3556,7 +3556,7 @@ export function ChopperView() {
     const read = await readBinaryFile(take.path);
     await native.fs({ verb: 'trash', path: take.path });
     if (!read) { setError('The take could not be read back'); return; }
-    const filename = `recording-${recordTimestamp()}.wav`;
+    const filename = `${recordInputId === INTERNAL_OUTPUT_ID ? 'resample' : 'recording'}-${recordTimestamp()}.wav`;
     try {
       // saveRecording takes an ArrayBuffer; readBinaryFile hands back a view, so pass its buffer slice.
       const ab = read.bytes.buffer.slice(read.bytes.byteOffset, read.bytes.byteOffset + read.bytes.byteLength) as ArrayBuffer;
@@ -3593,9 +3593,16 @@ export function ChopperView() {
     // The engine's own path, for a real input in the shell. Terminator's own output and system audio stay on the
     // page path: the first is a bounce of what we are playing, the second is the OS's, and neither arrives on the
     // interface's inputs.
-    if (isNative() && recordInputId !== INTERNAL_OUTPUT_ID && recordInputId !== SYSTEM_AUDIO_ID) {
+    if (isNative() && recordInputId !== SYSTEM_AUDIO_ID) {
       setError(null);
-      if (await startNativeRecording()) return;
+      // 🔁 TERMINATOR OUTPUT is the ENGINE's output here (5.1d). The page's Web Audio tap records SILENCE inside
+      // the shell — the TS engine's voices are muted because the native engine plays them — so this is a fix, not
+      // a preference. System audio is the OS's and never reaches us; it stays on the page path.
+      const source = recordInputId === INTERNAL_OUTPUT_ID ? 'master' : 'inputs';
+      if (await startNativeRecording(source)) {
+        if (source === 'master') flash('RECORDING TERMINATOR OUTPUT — play pads, the seq, anything: STOP lands it on the next empty pad');
+        return;
+      }
       // fall through to the page path if the engine would not start
     }
     setError(null);

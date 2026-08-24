@@ -128,11 +128,23 @@ class Engine
         countInDownbeat = 2, // the downbeat a pending count-in is counting to — the take lands ON the grid
         transportStart = 3   // the next time the transport starts rolling (its anchor sample, not the block's)
     };
+    /// What the take is made OF.
+    enum class RecordSource : std::uint8_t
+    {
+        inputs = 0, // the interface's own inputs (5.1a)
+        master = 1  // Terminator's own output, post master gain, pre-click (5.1d: the RESAMPLE take)
+    };
     struct RecordArm
     {
         RecordStart mode = RecordStart::immediate;
+        RecordSource source = RecordSource::inputs;
         std::uint64_t atSample = 0;      // mode == atSample
         std::uint64_t lengthSamples = 0; // 0 = until stopRecord(); else punch out after exactly this many frames
+        /// The round trip (output latency + input latency + the measured driver error). A performance meant for
+        /// musical time M reaches the input stream that many samples later, so an INPUT take starts that much after
+        /// its musical target and frame 0 is the sound that belongs there. Ignored for a master take (nothing has
+        /// left the machine).
+        std::uint64_t latencyCompensationSamples = 0;
     };
     /// Start a take from the interface's inputs. The audio callback hands every block to it until `stopRecord()`.
     /// With an arm, the audio thread waits for the take's sample and captures from EXACTLY there.
@@ -251,14 +263,17 @@ class Engine
     Recorder recorder_;
     // THE ARM (5.1c). Written by the message thread before the recorder is started, then owned by the audio thread;
     // atomics because both read them (a take is armed on one thread and starts on the other).
-    std::atomic<std::uint8_t> recArmMode_{0};    // RecordStart
-    std::atomic<std::uint64_t> recArmSample_{0}; // the sample capture starts at (0 = not resolved yet)
-    std::atomic<std::uint64_t> recLength_{0};    // punch-out length in frames (0 = none)
-    std::atomic<std::uint64_t> recStarted_{0};   // the sample capture began at (0 = not yet)
-    std::atomic<std::uint64_t> recPlayhead_{0};  // the transport position at that sample
-    std::atomic<std::uint8_t> recRolling_{0};    // capture is live (the arm resolved)
-    std::atomic<std::uint8_t> recComplete_{0};   // the punch-out fired: the file is finished, close it
+    std::atomic<std::uint8_t> recArmMode_{0};       // RecordStart
+    std::atomic<std::uint8_t> recSource_{0};        // RecordSource
+    std::atomic<std::uint64_t> recCompensation_{0}; // the round trip added to a resolved INPUT start
+    std::atomic<std::uint64_t> recArmSample_{0};    // the sample capture starts at (0 = not resolved yet)
+    std::atomic<std::uint64_t> recLength_{0};       // punch-out length in frames (0 = none)
+    std::atomic<std::uint64_t> recStarted_{0};      // the sample capture began at (0 = not yet)
+    std::atomic<std::uint64_t> recPlayhead_{0};     // the transport position at that sample
+    std::atomic<std::uint8_t> recRolling_{0};       // capture is live (the arm resolved)
+    std::atomic<std::uint8_t> recComplete_{0};      // the punch-out fired: the file is finished, close it
     void pushRecordWindow(const float* const* inputs, int numIn, int numSamples) noexcept TERMINATOR_NONBLOCKING;
+    const float* recTap_[2] = {nullptr, nullptr}; // a MASTER take's two channels (pointers into the output buffers)
     /// A transport start was applied at `atSample`: a take armed to the transport begins exactly there.
     void noteTransportStart(std::uint64_t atSample) noexcept TERMINATOR_NONBLOCKING
     {

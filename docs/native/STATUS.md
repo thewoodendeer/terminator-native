@@ -1751,6 +1751,29 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 5 — 5.1d DONE (THE RESAMPLE TAKE IS THE ENGINE'S, AND A TAKE IS NOT LATE ANY MORE), 2026-08-24
+
+**A BUG, not a preference: 🔁 TERMINATOR OUTPUT recorded SILENCE in the shell.** The page taps its own Web Audio
+master (`engine.mixerEngine.master.output`) — but inside the shell the native engine plays the pads and the TS
+engine's voices are routed into a silent bus (`nativeEngineShadow` → `mutePadVoices`). So the resample take was a
+tap on a muted graph. Nobody had reported it because 5.1b only moved the INPUT sources onto the engine.
+
+- **`RecordSource::master`** — the take is Terminator's own output, taken post master gain and **before the click**
+  (a count-in you recorded against is not part of the sample you are making; the clicks bypass the mixer exactly as
+  they always did). `terminatorRecord {verb:'start', source:'master'}`; the page sends it for 🔁 and the whole
+  Web Audio tap is unused in the shell.
+- **LATENCY COMPENSATION** — what you played for musical time M only reaches the input stream a round trip later,
+  so an INPUT take armed to a musical position now starts at `M + roundTrip` and frame 0 is the performance rather
+  than the latency. The number is the LOOPBACK-MEASURED one (`calibration.roundTripSamples`, and only at the rate
+  it was measured at), else the driver's reported in + out latency — the fallback every DAW uses.
+  `compensate:false` opts out. A MASTER take never gets it: nothing left the machine, and shifting it would move
+  the take off the grid it was armed to.
+- Gates: 4 more cases in `test_record_arm.cpp` (the master take is post-fader; the count-in is NOT in it; the
+  compensation lands frame 0 on the performance; a master take ignores compensation). **ctest 387/387 · probe OK ·
+  ui typecheck 5 = baseline.**
+- **Owed to his ears:** resample a beat (🔁) — it should now actually contain the beat — and a count-in take
+  against the click, which should sit on the grid without nudging.
+
 ## Phase 5 — 5.1c DONE (THE ARM: A TAKE STARTS ON A SAMPLE, AND YOU CAN HEAR YOURSELF), 2026-08-24
 
 5.1a made the engine record and 5.1b put the button on it. What was still missing is everything that turns a

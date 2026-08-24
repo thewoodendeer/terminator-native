@@ -603,6 +603,21 @@ juce::var WebShell::deviceInfoVar() const
 }
 
 /// RECORDING (5.1a) — start / stop / status for a native take.
+// The round trip a take aimed at a musical position has to be shifted by (5.1d). The MEASURED one wins — that is
+// what the loopback calibration is for — and only at the rate it was measured at; otherwise the driver's own
+// reported in + out latency, which is what every DAW falls back to.
+std::uint64_t WebShell::recordLatencyCompensation() const
+{
+    const auto dev = audioIO_.currentDevice();
+    const double sr = dev.sampleRate > 0.0 ? dev.sampleRate : 48000.0;
+    const int measured = static_cast<int>(settings_.get("calibration.roundTripSamples", juce::var(-1)));
+    const double calSr = static_cast<double>(settings_.get("calibration.sampleRate", juce::var(0.0)));
+    if (measured > 0 && std::abs(calSr - sr) < 1.0)
+        return static_cast<std::uint64_t>(measured);
+    const int reported = dev.inputLatencySamples + dev.outputLatencySamples;
+    return reported > 0 ? static_cast<std::uint64_t>(reported) : 0;
+}
+
 juce::var WebShell::handleRecord(const juce::var& req)
 {
     auto* obj = new juce::DynamicObject();
@@ -635,6 +650,10 @@ juce::var WebShell::handleRecord(const juce::var& req)
         if (auto* ins = req.getProperty("inputs", juce::var()).getArray())
             for (const auto& v : *ins)
                 cfg.inputChannels.push_back(static_cast<int>(v));
+        // WHAT THE TAKE IS MADE OF (5.1d): the interface's inputs, or Terminator's OWN OUTPUT (the RESAMPLE take —
+        // post master fader, before the click). The page's Web Audio tap cannot do the second one in the shell at
+        // all: the TS engine's voices are muted here, so its master node carries silence.
+        const bool master = req.getProperty("source", "inputs").toString().equalsIgnoreCase("master");
         // THE ARM (5.1c). `countIn` beats -> the take starts on the downbeat the count is counting to (and the
         // shell books the clicks itself, so the count-in can never be booked after the arm and missed);
         // `atSample` -> an exact engine sample; `atTransport` -> the next transport start, on its own anchor;
@@ -655,6 +674,16 @@ juce::var WebShell::handleRecord(const juce::var& req)
         const auto lengthSeconds = static_cast<double>(req.getProperty("lengthSeconds", 0.0));
         if (lengthSeconds > 0.0)
             arm.lengthSamples = static_cast<std::uint64_t>(lengthSeconds * sr);
+        arm.source = master ? Engine::RecordSource::master : Engine::RecordSource::inputs;
+        if (master)
+        {
+            cfg.numChannels = 2; // the master pair, whatever the request said
+            cfg.inputChannels.clear();
+        }
+        // LATENCY COMPENSATION (5.1d): only for a take aimed at a MUSICAL position. A free-running take has no
+        // target to be late for, and shifting it would just clip its first milliseconds off.
+        if (arm.mode != Engine::RecordStart::immediate && static_cast<bool>(req.getProperty("compensate", true)))
+            arm.latencyCompensationSamples = recordLatencyCompensation();
         juce::String err;
         const bool ok = cfg.file.getFullPathName().isNotEmpty() && engine_.startRecord(cfg, err, arm);
         if (ok)
@@ -665,6 +694,8 @@ juce::var WebShell::handleRecord(const juce::var& req)
         }
         obj->setProperty("ok", ok);
         obj->setProperty("armed", engine_.recordArmed());
+        obj->setProperty("source", master ? "master" : "inputs");
+        obj->setProperty("compensationSamples", static_cast<double>(arm.latencyCompensationSamples));
         if (!ok)
             obj->setProperty("error", err.isNotEmpty() ? err : juce::String("no path"));
         obj->setProperty("path", cfg.file.getFullPathName());
@@ -1944,8 +1975,7 @@ void WebShell::runProbeAsyncChecks()
 juce::var WebShell::probeRecordArm()
 {
     auto* o = new juce::DynamicObject();
-    const auto f =
-        juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("terminator-probe-take.wav");
+    const auto f = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("terminator-probe-take.wav");
     f.deleteFile();
     const double sr = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
     auto* start = new juce::DynamicObject();
