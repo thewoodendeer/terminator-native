@@ -52,6 +52,9 @@ type AnyRecord = Record<string, any>;
 const CHUNK_BYTES = 3 * 1024 * 1024; // float32 bytes per upload chunk (≈ 4 MB of base64 through the bridge)
 const RELEASE_GRACE_MS = 2000;       // an unreferenced buffer is released after this (a reshuffle re-references it)
 const MAX_PADS = 64;
+/** Probe only: how many times the live-record PATH check may re-hit before it gives up (see part 7). Retries cost a
+ *  starved runner ~300 ms each and nothing on a healthy one, which is why this is generous. */
+const LIVE_REC_ATTEMPTS = 5;
 
 interface PadDesc {
   buf: AudioBuffer;
@@ -1012,11 +1015,16 @@ class NativeEngineShadow {
         await new Promise((res) => setTimeout(res, 300));
         this.engine.startLiveRecord(); // playing → arms at once
         r.liveRecArmed = this.engine.getState().liveRecording;
-        // up to 2 attempts: the hidden probe page's clock re-anchoring has been seen to run late once (WebKit throttles
-        // the page it does not consider visible) and book one hit off the grid — a second hit lands; the sample-exact
-        // landing itself is gated in C++ (test_engine / test_chop_sequencer), this is the PATH check
+        // Up to LIVE_REC_ATTEMPTS tries: the hidden probe page's clock re-anchoring runs late when WebKit throttles
+        // the page it does not consider visible, booking that hit off the grid — a later hit lands. This is the PATH
+        // check (does a live hit travel page → engine → grid at all); the sample-EXACT landing is gated in C++
+        // (test_engine / test_chop_sequencer), so retrying here does not weaken the exactness contract, it only stops
+        // a starved runner from failing the path.
+        //   2 was enough until the macOS arm64 CI runner got slower (2026-08-23: two runs failed with the hit landing
+        //   5–6 steps out, offsets 15000/18000 samples, while the SAME commit landed offset 0 first try on a local
+        //   machine every time). The assertion below is unchanged — still within 1 sample.
         let step = -1;
-        for (let attempt = 1; attempt <= 2; attempt++) {
+        for (let attempt = 1; attempt <= LIVE_REC_ATTEMPTS; attempt++) {
           r.liveRecAttempts = attempt;
           const trig0 = this.stats.triggers;
           this.engine.triggerPad(62, 1, performance.now());

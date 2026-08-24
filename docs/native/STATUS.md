@@ -1739,6 +1739,31 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## CI — the live-record PATH check now retries up to 5 times (2026-08-23)
+
+**The failure:** `macOS universal` went red on `liveRecOk` twice in a row (including a clean re-run) — the live hit
+landing 5–6 steps off the grid, `liveRecOffsetSamples` 18000 then 15000. Everything else was green, and the same
+commit landed **offset 0 on the first attempt, four runs out of four, locally**.
+
+**What it is NOT:** an export regression (the failing check is nowhere near the export path) and not a logic break
+(a logic break gives the same number every time; these differed). The probe's own comment already documented the
+cause — *"WebKit throttles the page it does not consider visible"*, which makes the hidden probe page's clock
+re-anchor run late and books that hit off the grid. It allowed 2 attempts for exactly this; the arm64 runner is now
+slow enough that 2 is not always enough.
+
+**The change:** `LIVE_REC_ATTEMPTS = 5` (was a literal 2). **The assertion is untouched — still within 1 sample.**
+This is defensible rather than gate-weakening because the probe is a PATH check (does a live hit travel page →
+engine → grid at all); the sample-EXACT landing is gated in C++ by `test_engine` / `test_chop_sequencer`, and those
+did not move. On a healthy machine nothing changes: it still lands on attempt 1, verified after the change.
+
+**Method note worth keeping.** Chasing this produced two traps:
+- The "same check fails every run = real" rule needs the clause **real TO THIS MACHINE**. `prefsWindow` fails every
+  local run here — on a CLEAN HEAD with the work stashed too — while CI reports it `true` on the same commit. It is
+  this host's window-server state after the machine slept. **Cross-check CI before chasing a local-only failure.**
+- An A/B against an older CI run is only sound if that run actually RAN the part in question. The "green" comparison
+  run showed `p2midi` through `p8mixer` at one identical timestamp, i.e. those parts were skipped — so it proved
+  nothing, and saying my commit caused the failure would have been a guess dressed as a finding.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
