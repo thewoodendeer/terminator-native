@@ -1578,6 +1578,38 @@ flakiness: a DIFFERENT check each run = flaky, the SAME check every run = real.)
 export dialog with every option incl. trackouts (Victor's design call — NEXT); bundling a `lame` binary per platform
 so MP3 works on machines without one; the legacy chopper chain for the single-chop bake.
 
+## Phase 4 — 4.5g DONE (PROGRESS + CANCEL ON A RENDER), 2026-08-23
+
+Victor asked for both. A bounce of a long arrangement is the one place the app can appear frozen, and a cancel that
+leaves a half-written file behind is worse than no cancel at all.
+
+**Engine:** `RenderCallbacks { onProgress(0..1) → bool, everyBlocks }` passed to `renderOffline` / `renderProject`.
+Returning **false aborts**, and `RenderResult::cancelled` says so. **A cancelled render returns EARLY with a partial
+buffer and the caller must not write it** — the shell honours that: on cancel it writes nothing at all, so no
+half file is ever left on disk. Reporting defaults to ~every 1% of the render, so the callback is never the cost.
+
+**Shell:** the export verb takes an `id`; progress rides the normal event stream as `terminator.exportProgress`
+`{id, pct}`, throttled to WHOLE PERCENTS (the page draws a bar, not a firehose). `{verb: 'cancel', id}` flips that
+job's flag and the render thread notices at its next report. Jobs are held in `exportCancels_` and **erased when
+they report back**, so the map cannot grow; cancelling a finished id simply fails. `this` is captured by the render
+thread but only ever dereferenced inside the message-thread callbacks, after `alive_` confirms the shell is still
+there — and since the destructor clears that flag on the same thread, there is no window between the check and the
+use.
+
+**Page:** `exportProjectNative(req, onProgress)` returns `{done, cancel, id}` and unsubscribes its listener when the
+promise settles.
+
+**Gates (4.5g):** mac-debug 0 warnings + ctest **282/282** (279 + 3) · RTSan 283/283 · universal (0 warnings) +
+ctest 282/282 · ui gate (tsc baseline 5) · probe OK on debug AND universal · clang-format clean.
+Engine tests: progress rises monotonically and reaches 1.0; returning false stops on the exact report asked for and
+leaves `blocksProcessed` far short of the full length; a render with no callbacks is bit-identical to before.
+**Probe:** `progressReports: 101`, and the cancel case asserts all three of `cancelled`, `cancelWroteNothing` and
+`cancelLeftNoFile` — the last one is the point: a cancelled export must not leave a stub on disk.
+
+**Still owed on the export:** the Ableton-style dialog (NEXT — Victor's design: one popup, every option, trackouts
+inside it); bundling a `lame` binary per platform (QUEUED as its own task); the legacy chopper chain for the
+single-chop bake.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every
