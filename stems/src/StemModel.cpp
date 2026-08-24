@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdlib>
 #include <mutex>
+
+#include <juce_core/juce_core.h>
 
 #define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
@@ -65,8 +66,9 @@ std::vector<std::string> runtimeCandidates(const std::string& override)
     std::vector<std::string> out;
     if (!override.empty())
         out.push_back(override);
-    if (const char* env = std::getenv("TERMINATOR_ORT_LIB"); env != nullptr && *env != 0)
-        out.emplace_back(env);
+    // JUCE's reader, not std::getenv: MSVC deprecates getenv and this build is /WX.
+    if (const auto env = juce::SystemStats::getEnvironmentVariable("TERMINATOR_ORT_LIB", {}); env.isNotEmpty())
+        out.push_back(env.toStdString());
 #if defined(TERMINATOR_ORT_DYLIB_PATH)
     out.emplace_back(TERMINATOR_ORT_DYLIB_PATH);
 #endif

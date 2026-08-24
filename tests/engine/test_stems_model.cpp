@@ -5,9 +5,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
-#include <cstdlib>
 #include <string>
 #include <vector>
+
+#include <juce_core/juce_core.h>
 
 #include "terminator/stems/SplitSession.h"
 #include "terminator/stems/StemModel.h"
@@ -42,13 +43,14 @@ TEST_CASE("Stems model: a missing or malformed model fails cleanly", "[stems][or
 
 TEST_CASE("Stems model: a real htdemucs chunk comes back finite and shaped", "[stems][ort][model]")
 {
-    const char* path = std::getenv("TERMINATOR_STEMS_MODEL");
-    if (path == nullptr || *path == 0)
+    // juce's reader rather than std::getenv: MSVC deprecates getenv and the Windows build is /WX.
+    const auto path = juce::SystemStats::getEnvironmentVariable("TERMINATOR_STEMS_MODEL", {});
+    if (path.isEmpty())
         SKIP("set TERMINATOR_STEMS_MODEL to htdemucs_fp16weights.onnx to run this case");
 
     StemModel model;
     std::string error;
-    REQUIRE(model.load({std::string(path)}, error));
+    REQUIRE(model.load({path.toStdString()}, error));
     REQUIRE(model.modelCount() == 1);
 
     // A quiet chunk with one tone in it: the point is the plumbing (shape, finiteness, no NaN), not the split.
