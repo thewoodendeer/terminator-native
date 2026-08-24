@@ -34,7 +34,7 @@
 import { MixerEngine, ChannelName, setMixerNativeSink, setMixerNativeMeters, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
 import type { FxId } from '../../mixer/fx';
 import { native } from './juceBridge';
-import { forgetStrip, isInstrumentId, noteStrip } from './pluginSlots';
+import { forgetStrip, isInstrumentId, noteStrip, registerPluginStateSync } from './pluginSlots';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -128,6 +128,7 @@ export class NativeMixerShadow {
     this.installMeters();
     // 6.2: keep the plugins' own state fresh in the page's chain (see syncPluginStates)
     this.stateTimer = window.setInterval(() => { void this.syncPluginStates(); }, 15000);
+    registerPluginStateSync(() => this.syncPluginStates()); // …and a project save pulls them itself
     this.activate(CLICK_STRIP, 'channel', 'click');
     this.queue({ type: 'mixerSetFader', strip: CLICK_STRIP, db: 0 });
     this.queue({ type: 'setSourceStrip', source: 'click', strip: CLICK_STRIP });
@@ -137,6 +138,7 @@ export class NativeMixerShadow {
   detach(): void {
     this.detached = true;
     if (this.stateTimer !== 0) { clearInterval(this.stateTimer); this.stateTimer = 0; }
+    registerPluginStateSync(null);
     for (const idx of this.live) void native.plugins({ verb: 'close', strip: idx, slot: -1 }).catch(() => {});
     setMixerNativeSink(null);
     setMixerNativeMeters(null);
@@ -302,13 +304,19 @@ export class NativeMixerShadow {
   async syncPluginStates(): Promise<void> {
     if (this.detached) return;
     const rack: any = await native.plugins({ verb: 'rack' }).catch(() => null);
-    for (const entry of (rack?.rack ?? []) as Array<{ strip: number; slot: number }>) {
+    for (const entry of (rack?.rack ?? []) as Array<{ strip: number; slot: number; id?: string }>) {
       const name = [...this.names.entries()].find(([, idx]) => idx === entry.strip)?.[0]
         ?? (entry.strip === 0 ? 'master' : undefined);
       if (!name) continue;
       const pageStrip = name === 'master' ? this.mixer.master : this.mixer.channels.get(name as ChannelName);
-      const fx = pageStrip?.fx[entry.slot];
-      if (!fx || pageStrip?.fxIds[entry.slot] !== 'plugin') continue;
+      // An INSTRUMENT (6.3) is not in any insert slot — it reports slot −1 — so its state goes back into the slot
+      // whose PLUGIN param chose it. Without this an instrument's own settings were simply never saved.
+      const slot = entry.slot >= 0
+        ? entry.slot
+        : (pageStrip?.fxIds.findIndex((id, i) => id === 'plugin' && String(pageStrip.fx[i]?.params.PLUGIN ?? '') === String(entry.id ?? '')) ?? -1);
+      if (slot < 0) continue;
+      const fx = pageStrip?.fx[slot];
+      if (!fx || pageStrip?.fxIds[slot] !== 'plugin') continue;
       const st: any = await native.plugins({ verb: 'state', strip: entry.strip, slot: entry.slot }).catch(() => null);
       // written straight into the params record: setFxParam would send it back to the app and re-load the plugin
       if (st?.ok && typeof st.state === 'string') fx.params.STATE = st.state;

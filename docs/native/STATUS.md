@@ -1751,6 +1751,17 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.2/6.3 follow-up: A SAVE CARRIES WHAT IS LOADED, 2026-08-24
+
+Two holes in how a hosted plugin's own settings reach the project, both found by reading the save path rather than
+by a crash:
+- **A save now pulls the plugin states itself** (`doSaveProject` awaits `syncNativePluginStates()`), instead of
+  trusting whatever the 15-second poll last saw. A plugin's state changes while you turn ITS knobs in ITS window
+  and nothing tells the page — so the moment that matters is the save.
+- **An INSTRUMENT's state was never saved at all.** It reports slot −1 (it is not in any insert chain), so the
+  sync's `fx[slot]` lookup found nothing and skipped it silently; it now goes back into the slot whose PLUGIN
+  param chose it.
+
 ## Phase 8 — 8.6a DONE (THE APP HAS A MENU), 2026-08-24
 
 Terminator 3.0 had no menu bar at all — no ⌘S, no ⌘O, no Open Recent — and `ipc.onShortcut`, the contract the page

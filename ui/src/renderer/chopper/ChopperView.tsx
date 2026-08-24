@@ -5,6 +5,7 @@ import { SubscribeModal } from '../components/SubscribeModal';
 import { ChopperEngine, ChopperState, ChopPreset, MetronomeSound, SEQ_MAX_STEPS, NO_SAMPLE_ID } from './ChopperEngine';
 import { attachNativeEngineShadow } from '../native/nativeEngineShadow';
 import { isNative, native, nativeBoot, onNativeEvent } from '../native/juceBridge';
+import { syncNativePluginStates } from '../native/pluginSlots';
 import { readBinaryFile } from '../native/assetsNative';
 
 const isWeb = (import.meta as any).env?.MODE === 'web';
@@ -2708,6 +2709,10 @@ export function ChopperView() {
       vid = NO_SAMPLE_ID;
     }
     const name = (nameOverride ?? '').trim() || presetName.trim() || state.trackTitle || 'preset';
+    // PLUGINS (6.2/6.3): a hosted plugin's own settings change while you turn ITS knobs in ITS window, and nothing
+    // tells the page when. Pull them into the chain HERE so a save carries exactly what is loaded, rather than
+    // whatever the 15-second sync last saw.
+    await syncNativePluginStates();
     const data = buildPreset(vid);
     setConfirmSave(null);
     if (nameOverride) { setPresetName(name); setLoadedPresetId(null); }   // the project is now "name"

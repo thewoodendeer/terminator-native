@@ -59,6 +59,12 @@ export function setInstrumentMidi(on: boolean): void {
   if (isNative()) void native.command({ type: 'setInstrumentMidi', on });
 }
 
+/** The mixer shadow registers its own state-pull here, so a project save can wait for it (see doSaveProject). */
+let syncStates: (() => Promise<void>) | null = null;
+export function registerPluginStateSync(fn: (() => Promise<void>) | null): void { syncStates = fn; }
+/** Pull every hosted plugin's own settings back into the page's chain. No-op outside the shell. */
+export async function syncNativePluginStates(): Promise<void> { if (syncStates) await syncStates(); }
+
 /** Every loaded plugin's own state, for a project save: `{ 'sample1:2': '<base64>' }`. */
 export async function collectPluginStates(): Promise<Record<string, string>> {
   if (!isNative()) return {};
