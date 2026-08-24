@@ -61,6 +61,7 @@ export async function runExport(
   ctx?: ExportRunContext,
   audioFormat: 'wav' | 'flac' = 'wav',
   shouldCancel?: () => boolean,
+  bitDepth: 16 | 24 = 16,
 ): Promise<string> {
   const state = engine.getState();
   const baseName = safeFileName(state.trackTitle || 'terminator');
@@ -71,7 +72,7 @@ export async function runExport(
     const { exportArrangement } = await import('../../arranger/exportArrangement');
     const arrOpts = {
       engine, drumEngine: ctx.drumEngine, arrangement: ctx.arrangement, bpm: ctx.bpm,
-      title: state.trackTitle || 'terminator', bitDepth: 16 as const,
+      title: state.trackTitle || 'terminator', bitDepth,
       // FLAC only reaches the targets that can take it (exportArrangement
       // enforces the same rule, so a stray caller can't hand MPC a FLAC).
       audioFormat: FLAC_CAPABLE.has(format) ? audioFormat : ('wav' as const),

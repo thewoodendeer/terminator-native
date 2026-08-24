@@ -665,6 +665,8 @@ export const TOPICS: Topic[] = [
       {
         k: [
           ['Master Mixdown', 'the whole thing as one stereo WAV. What you send someone'],
+          ['16 or 24 bit', 'the BIT DEPTH row. 24-bit keeps more headroom if the file is going on to be mixed or mastered further; 16-bit is the deliverable — it is what a CD or a streaming upload wants, and it is dithered on the way down so quiet tails and fades stay clean instead of going gritty. MP3 is always made from 16-bit.'],
+          ['Sample rate', 'there is no rate menu on purpose: an export renders at the project\'s own rate and never resamples. The box tells you what that rate is.'],
           ['WAV, FLAC or MP3', 'the FORMAT row in the export box. FLAC is LOSSLESS — the very same audio as the WAV, sample for sample, in about half the space (often far less), and every DAW opens it. MP3 is lossy and for sending someone a listen: pick the bitrate under it, 320 is the best. Master Mixdown and Trackouts can be any of the three; the MPC project and the Drum Rack are always WAV because the sampler reads WAV headers, so the row greys out there instead of quietly doing nothing'],
           ['Trackouts (Chops + Drums)', 'one WAV per track — SAMPLE 1 and every extra SAMPLE strip (sample2, sample3…), kick, snare, hihat, openhat, perc and every drum lane you added, the BASS, plus any send return that is actually fed. Mixer FX baked in. Zipped, ready for any DAW'],
           ['MPC Project', 'a zip of one-shot WAVs plus a .mpcsample program. Unzip onto your MPC and the pads and sequences load ready to play'],

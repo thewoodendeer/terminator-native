@@ -30,14 +30,19 @@ export interface ExportModalProps {
     audioFormat: 'wav' | 'flac',
     onProgress: (pct: number) => void,
     shouldCancel: () => boolean,
+    bitDepth: 16 | 24,
   ) => Promise<string>;
   /** False while no audio is loaded — Export stays disabled and says why. */
   canExport: boolean;
+  /** The project's own rate, shown for information. There is no rate CONTROL: the arrangement renders at the
+   *  loaded track's rate, and offering a menu that silently resampled (or did nothing) would be worse than saying so. */
+  sampleRate?: number;
 }
 
-export default function ExportModal({ open, onClose, onRun, canExport }: ExportModalProps): React.ReactElement | null {
+export default function ExportModal({ open, onClose, onRun, canExport, sampleRate }: ExportModalProps): React.ReactElement | null {
   const [target, setTarget] = useState<ExportFormat>('master-wav');
   const [audio, setAudio] = useState<ExportAudioFormat>('wav');
+  const [depth, setDepth] = useState<16 | 24>(16);
   const [kbps, setKbps] = useState(320);
   const [busy, setBusy] = useState(false);
   const [pct, setPct] = useState<number | null>(null);
@@ -48,6 +53,12 @@ export default function ExportModal({ open, onClose, onRun, canExport }: ExportM
   const canChooseAudio = AUDIO_CHOICE_TARGETS.has(target);
   const mp3Available = isNative(); // the encoder lives in the shell
   const effectiveAudio: ExportAudioFormat = canChooseAudio ? audio : 'wav';
+  // MP3 is always 16-bit source material; the page's FLAC encoder is 16-bit only, so a 24-bit FLAC has to be written
+  // by the shell (render 24-bit WAV, then transcode) — which means it needs the desktop app.
+  const canChoose24 = canChooseAudio && effectiveAudio !== 'mp3' && (effectiveAudio === 'wav' || isNative());
+  const effectiveDepth: 16 | 24 = canChoose24 ? depth : 16;
+  // WAV 24 is written by the page; FLAC 24 goes through the shell's writer; MP3 always does
+  const needsTranscode = effectiveAudio === 'mp3' || (effectiveAudio === 'flac' && effectiveDepth === 24);
 
   // Escape closes when nothing is running; while a render is going it cancels instead of leaving it orphaned.
   useEffect(() => {
@@ -74,16 +85,20 @@ export default function ExportModal({ open, onClose, onRun, canExport }: ExportM
     try {
       // MP3 renders as WAV first and is re-encoded by the shell — one render path, and the MP3 carries the same
       // samples the WAV would have.
-      const rendered = effectiveAudio === 'mp3' ? 'wav' : effectiveAudio;
-      const status = await onRun(target, rendered, p => setPct(p), () => cancelRef.current);
-      if (effectiveAudio === 'mp3') {
+      const rendered = needsTranscode ? 'wav' : effectiveAudio;
+      const status = await onRun(target, rendered, p => setPct(p), () => cancelRef.current, effectiveDepth);
+      if (needsTranscode) {
         setPct(97);
         const from = extractPath(status);
         if (!from) {
-          setMsg('Exported as WAV — could not find the file to convert to MP3.');
+          setMsg(`Exported as WAV — could not find the file to convert to ${effectiveAudio.toUpperCase()}.`);
         } else {
-          const r = await native.exportProject({ verb: 'transcode', from, to: from, format: 'mp3', mp3Kbps: kbps });
-          setMsg(r?.ok ? `Exported ${String(r.path ?? '').split(/[\\/]/).pop()}` : `MP3 failed: ${r?.error ?? 'unknown'}`);
+          const r = await native.exportProject({
+            verb: 'transcode', from, to: from, format: effectiveAudio, bitDepth: effectiveDepth, mp3Kbps: kbps,
+          });
+          setMsg(r?.ok
+            ? `Exported ${String(r.path ?? '').split(/[\\/]/).pop()}`
+            : `${effectiveAudio.toUpperCase()} failed: ${r?.error ?? 'unknown'}`);
           if (r?.ok) await native.fs({ verb: 'trash', path: from }); // the intermediate WAV is not a deliverable
         }
       } else {
@@ -98,7 +113,7 @@ export default function ExportModal({ open, onClose, onRun, canExport }: ExportM
       setBusy(false);
       cancelRef.current = false;
     }
-  }, [target, effectiveAudio, kbps, onRun]);
+  }, [target, effectiveAudio, effectiveDepth, needsTranscode, kbps, onRun]);
 
   if (!open) return null;
 
@@ -143,6 +158,23 @@ export default function ExportModal({ open, onClose, onRun, canExport }: ExportM
                 ))}
               </span>
             </div>
+            {effectiveAudio !== 'mp3' && (
+              <div className="export-row">
+                <span className="export-row-label">Bit depth</span>
+                <span className="export-seg" title={canChoose24
+                  ? '24-bit keeps more headroom for further mixing or mastering. 16-bit is the deliverable — dithered, and what a CD or a streaming upload wants.'
+                  : '24-bit FLAC is written by the desktop app; in the browser FLAC is 16-bit.'}>
+                  {([16, 24] as const).map(d => (
+                    <button key={d} type="button"
+                            className={`export-seg-btn${effectiveDepth === d ? ' on' : ''}`}
+                            disabled={busy || !canChooseAudio || (d === 24 && !canChoose24)}
+                            onClick={() => { setDepth(d); setMsg(null); }}>
+                      {d}-BIT
+                    </button>
+                  ))}
+                </span>
+              </div>
+            )}
             {effectiveAudio === 'mp3' && (
               <div className="export-row">
                 <span className="export-row-label">Bitrate</span>
@@ -156,8 +188,14 @@ export default function ExportModal({ open, onClose, onRun, canExport }: ExportM
               {effectiveAudio === 'flac' && 'Lossless — the same samples as the WAV, about half the size.'}
               {effectiveAudio === 'mp3' && !mp3Available && 'MP3 needs the desktop app.'}
               {effectiveAudio === 'mp3' && mp3Available && 'Rendered as WAV, then encoded — same audio, smaller file.'}
-              {effectiveAudio === 'wav' && '16-bit WAV, dithered.'}
+              {effectiveAudio === 'wav' && effectiveDepth === 16 && 'Dithered on the way down to 16-bit.'}
+              {effectiveAudio === 'wav' && effectiveDepth === 24 && 'No dither needed at 24-bit.'}
             </p>
+            {sampleRate ? (
+              <p className="export-note">
+                Sample rate {(sampleRate / 1000).toFixed(1)} kHz — the project's own rate. Exports never resample.
+              </p>
+            ) : null}
           </section>
         </div>
 

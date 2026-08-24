@@ -180,6 +180,37 @@ TEST_CASE("export files: 24-bit and float are NOT dithered", "[export][files]")
     }
 }
 
+TEST_CASE("export files: a 24-bit FLAC really is 24-bit, and carries no dither", "[export][files]")
+{
+    // the page's own FLAC encoder is 16-bit only, so a 24-bit FLAC is written HERE (the dialog renders a 24-bit WAV
+    // and has the shell transcode it). It must come back at 24 bits, and digital silence must stay silent — dither
+    // belongs at a 16-bit reduction and nowhere else.
+    const auto f = tempOut("terminator-24.flac");
+    juce::String err;
+    REQUIRE(writeAudioFile(f, fixtureBuffer(1024), 48000.0, AudioFileFormat::flac, 24, err));
+    INFO(err);
+    juce::AudioFormatManager m;
+    m.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r(m.createReaderFor(f));
+    REQUIRE(r != nullptr);
+    REQUIRE(r->bitsPerSample == 24);
+    REQUIRE(r->lengthInSamples == 1024);
+    r.reset();
+    f.deleteFile();
+
+    juce::AudioBuffer<float> quiet(2, 512);
+    quiet.clear();
+    const auto q = tempOut("terminator-quiet24.flac");
+    REQUIRE(writeAudioFile(q, quiet, 48000.0, AudioFileFormat::flac, 24, err));
+    std::unique_ptr<juce::AudioFormatReader> qr(m.createReaderFor(q));
+    REQUIRE(qr != nullptr);
+    juce::AudioBuffer<float> back(2, 512);
+    qr->read(&back, 0, 512, 0, true, true);
+    REQUIRE(back.getMagnitude(0, 512) == 0.0f);
+    qr.reset();
+    q.deleteFile();
+}
+
 TEST_CASE("export files: the format names and extensions round-trip", "[export][files]")
 {
     REQUIRE(audioFileFormatFromName("wav") == AudioFileFormat::wav);

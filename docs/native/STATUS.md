@@ -1709,6 +1709,36 @@ check the layout, then try a cancel mid-render. Fast loop for tweaks, no rebuild
 `bitDepth: 16` and renders at the engine's rate, so showing those controls would have meant showing controls that do
 nothing. Wiring them through is the next step. Also: the legacy chopper chain for the single-chop bake.
 
+## Phase 4 — 4.5k DONE (BIT DEPTH IN THE BOX; THE RATE STATED, NOT FAKED), 2026-08-23
+
+The two controls 4.5j deliberately left out, now that they can be real.
+
+**Bit depth 16 / 24.** `ExportArrangementOpts::bitDepth` already existed and already reached
+`renderArrangementMix` — `runExport` was simply pinning it to `16 as const`. It is a parameter now and the box has
+a BIT DEPTH row. **The catch: the page's FLAC encoder is 16-bit only** (`encodeFLAC(quantizeTPDF16(…), …, 16)`), so
+a 24-bit FLAC cannot come from it. Rather than quietly hand back a 16-bit file, 24-bit FLAC renders a 24-bit WAV and
+has the SHELL write the FLAC through `writeAudioFile` — the same route MP3 already takes. In a browser (no shell)
+24-bit is offered for WAV and disabled for FLAC, with the reason in the tooltip. Gated: a 24-bit FLAC reads back at
+`bitsPerSample == 24`, and digital silence stays silent in it (dither belongs at a 16-bit reduction and nowhere else).
+
+**Sample rate is NOT a control, and the box says so.** The arrangement renders at the loaded track's rate and
+nothing resamples; a menu that silently did nothing — or silently resampled — would be worse than a sentence. The
+dialog states the project's rate instead.
+
+Help updated in the same commit: a "16 or 24 bit" entry (what each is for, and that 16 is dithered on the way down)
+and a "Sample rate" entry explaining why there is no menu.
+
+**Gates (4.5k):** ui gate (tsc baseline 5) · mac-debug 0 warnings + ctest **285/285** (284 + 1) · RTSan 286/286 ·
+universal (0 warnings) + ctest 285/285 · clang-format clean.
+
+### The probe's `prefsWindow` on THIS machine — environment, not code
+Local probes started failing `prefsWindow` (openPreferences reports ok and `prefsReady` is true, but the window is
+not `isVisible()` at the final read) — **three consecutive runs, idle, and it reproduces on a CLEAN HEAD with my work
+stashed, so it is not the change in flight.** CI on the SAME commit reports `"prefsWindow": true`. So this is the
+host's window-server state (the machine slept mid-session), not a shipped bug — do not chase it as one. **The rule
+"same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
+local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every

@@ -5690,7 +5690,8 @@ export function ChopperView() {
         open={showExportModal}
         canExport={state.hasBuffer}
         onClose={() => setShowExportModal(false)}
-        onRun={async (format, audioFormat, onProgress, shouldCancel) => {
+        sampleRate={engine.buffer?.sampleRate}
+        onRun={async (format, audioFormat, onProgress, shouldCancel, bitDepth) => {
           setExportBusy(true);
           // iOS: persist the session BEFORE the share sheet backgrounds the tab, so a WebKit reload-on-return
           // can restore it (the inline button did this too — it must not be lost with the layout change).
@@ -5700,7 +5701,7 @@ export function ChopperView() {
               drumEngine,
               arrangement: buildFinishArrangement(currentFinishSections()),
               bpm: engine.getMasterBpm() || 90,
-            }, audioFormat, shouldCancel);
+            }, audioFormat, shouldCancel, bitDepth);
           } finally {
             setExportBusy(false);
           }
