@@ -1751,6 +1751,18 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.1b: THE SCAN RUNS FOUR AT A TIME, AND THE MENU FIRED TWICE, 2026-08-24
+
+- **The scan is parallel now.** A machine with hundreds of plugins is the normal case (Victor's has hundreds), and
+  one child process at a time is ten to twenty minutes of watching a bar. Up to four children run at once
+  (`min(4, cpus/2)`) — they are independent processes, and the only shared state is the job's own, already behind
+  its lock. Verified: four concurrent children each returned their plugin, 1.6 s wall for all four.
+- **FIXED: every menu item fired TWICE.** Choosing a COMMAND item invokes the command manager AND then calls
+  `menuItemSelected` (juce_MainMenu_mac.mm: `invoke()` then `invokeDirectly()`), so File → Save would have opened
+  two save dialogs. `perform()` now acts only for the KEY EQUIVALENTS (`invocationMethod != fromMenu`); the menu
+  path goes through `menuItemSelected` alone. Found by reading JUCE's dispatch, not by a crash — a headless probe
+  cannot click a menu, so **his pass should confirm one dialog per click, on both platforms**.
+
 ## Phase 6 — 6.6a DONE (A PLUGIN THAT CRASHES CANNOT TRAP YOU), 2026-08-24
 
 Real isolation means hosting plugins out of process, which is a phase of its own. This is the cheap half that

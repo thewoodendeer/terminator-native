@@ -1,6 +1,9 @@
 #include "PluginHub.h"
 
+#include <atomic>
 #include <iostream>
+#include <thread>
+#include <vector>
 
 namespace terminator::app
 {
@@ -67,16 +70,34 @@ class PluginHub::ScanJob final : public juce::Thread
             }
         }
         total_ = files.size();
-        for (int i = 0; i < files.size() && !threadShouldExit(); ++i)
+        // SEVERAL AT ONCE. A machine with hundreds of plugins is the normal case, and one child process at a time
+        // means ten to twenty minutes of watching a bar. The children are independent processes, so the only
+        // shared thing is this job's own state — which is already behind `lock_`. Kept modest on purpose: each
+        // child loads a plugin, and four of those at once is plenty of RAM.
+        const int workers = juce::jlimit(1, 4, juce::SystemStats::getNumCpus() / 2);
+        std::atomic<int> next{0};
+        std::vector<std::thread> pool;
+        auto work = [&]
         {
-            const auto file = files[i];
+            for (;;)
             {
-                const juce::ScopedLock sl(lock_);
-                current_ = file;
-                done_ = i;
+                const int i = next.fetch_add(1);
+                if (i >= files.size() || threadShouldExit())
+                    break;
+                const auto file = files[i];
+                {
+                    const juce::ScopedLock sl(lock_);
+                    current_ = file;
+                    ++done_;
+                }
+                scanOne(formats_.getFormat(formatOf[i])->getName(), file);
             }
-            scanOne(formats_.getFormat(formatOf[i])->getName(), file);
-        }
+        };
+        for (int w = 1; w < workers; ++w)
+            pool.emplace_back(work);
+        work(); // this thread is one of them
+        for (auto& t : pool)
+            t.join();
         const juce::ScopedLock sl(lock_);
         done_ = files.size();
         finished_ = true;
