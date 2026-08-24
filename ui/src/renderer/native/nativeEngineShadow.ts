@@ -1050,23 +1050,33 @@ class NativeEngineShadow {
           const ds = this.drums;
           const key = ds.getState().tracks[0]?.key;
           if (key && ds.getState().playing) {
-            const rows = [...(ds.getState().pattern[key] ?? [])]; // a COPY: the engine mutates the row in place
-            const on0 = rows.filter(Boolean).length;
             ds.startLiveRec();
-            const trigD = this.stats.drumHits;
-            ds.liveHit(0, performance.now());
-            for (let t = 0; t < 40 && (this.stats.drumHits === trigD || Number(this.latestSnapshot?.lastLiveHitPad) !== 64); t++) await this.tick();
-            await new Promise((res) => setTimeout(res, 120)); // the drum engine flushes its live writes on its 25 ms tick
-            const sd = this.latestSnapshot;
-            const rowsAfter = ds.getState().pattern[key] ?? [];
-            const spb = Number(sd?.drumStepCount ?? 0) / Math.max(1, ds.getState().bars);
-            const dStep = 60 / (Number(sd?.seqBpm) || 240) * 4 / (spb || 96) * sr; // the EXACT step length (fractional samples — the engine's grid is double)
+            // Same retry the chop half gets, and for the same reason: on a starved runner the drum hit had not
+            // reached the snapshot before the wait ran out, so this measured the PREVIOUS hit — `hitPad: 62` (the
+            // chop pad) with a nonsense offset. Re-hitting is free on a healthy machine (it passes on attempt 1).
             let wrote = -1;
-            for (let i = 0; i < rowsAfter.length; i++) if (rowsAfter[i] && !rows[i]) { wrote = i; break; }
-            const dHit = Number(sd?.lastLiveHitSample ?? 0), dls = Number(sd?.drumLoopStartSample ?? 0), dLoop = dStep * rowsAfter.length;
-            const dRel = dHit > 0 && dLoop > 0 ? (((dHit - dls) % dLoop) + dLoop) % dLoop : NaN;
-            r.drumLiveRec = { wroteStep: wrote, before: on0, after: rowsAfter.filter(Boolean).length, hitPad: Number(sd?.lastLiveHitPad), offsetSamples: wrote >= 0 && Number.isFinite(dRel) ? Math.round(Math.min(Math.abs(dRel - wrote * dStep), dLoop - Math.abs(dRel - wrote * dStep))) : null };
-            drumOk = wrote >= 0 && Number(sd?.lastLiveHitPad) === 64 && r.drumLiveRec.offsetSamples !== null && r.drumLiveRec.offsetSamples <= 1;
+            for (let attempt = 1; attempt <= LIVE_REC_ATTEMPTS; attempt++) {
+              r.drumLiveRecAttempts = attempt;
+              const rows = [...(ds.getState().pattern[key] ?? [])]; // a COPY: the engine mutates the row in place
+              const on0 = rows.filter(Boolean).length;
+              const trigD = this.stats.drumHits;
+              ds.liveHit(0, performance.now());
+              for (let t = 0; t < 40 && (this.stats.drumHits === trigD || Number(this.latestSnapshot?.lastLiveHitPad) !== 64); t++) await this.tick();
+              await new Promise((res) => setTimeout(res, 120)); // the drum engine flushes its live writes on its 25 ms tick
+              const sd = this.latestSnapshot;
+              const rowsAfter = ds.getState().pattern[key] ?? [];
+              const spb = Number(sd?.drumStepCount ?? 0) / Math.max(1, ds.getState().bars);
+              const dStep = 60 / (Number(sd?.seqBpm) || 240) * 4 / (spb || 96) * sr; // the EXACT step length (fractional samples — the engine's grid is double)
+              wrote = -1;
+              for (let i = 0; i < rowsAfter.length; i++) if (rowsAfter[i] && !rows[i]) { wrote = i; break; }
+              const dHit = Number(sd?.lastLiveHitSample ?? 0), dls = Number(sd?.drumLoopStartSample ?? 0), dLoop = dStep * rowsAfter.length;
+              const dRel = dHit > 0 && dLoop > 0 ? (((dHit - dls) % dLoop) + dLoop) % dLoop : NaN;
+              r.drumLiveRec = { wroteStep: wrote, before: on0, after: rowsAfter.filter(Boolean).length, hitPad: Number(sd?.lastLiveHitPad), offsetSamples: wrote >= 0 && Number.isFinite(dRel) ? Math.round(Math.min(Math.abs(dRel - wrote * dStep), dLoop - Math.abs(dRel - wrote * dStep))) : null };
+              drumOk = wrote >= 0 && Number(sd?.lastLiveHitPad) === 64 && r.drumLiveRec.offsetSamples !== null && r.drumLiveRec.offsetSamples <= 1;
+              if (drumOk) break;
+              if (wrote >= 0) { ds.toggleStep(key, wrote); wrote = -1; } // undo the bad write before trying again
+              await new Promise((res) => setTimeout(res, 300));
+            }
             ds.stopLiveRec();
             if (wrote >= 0) ds.toggleStep(key, wrote); // leave the pattern as it was
           }

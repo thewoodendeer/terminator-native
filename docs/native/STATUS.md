@@ -1739,7 +1739,19 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
-## CI — the live-record PATH check now retries up to 5 times (2026-08-23)
+## CI — the live-record PATH check now retries up to 5 times (2026-08-23), BOTH halves
+
+**Follow-up (2026-08-24):** the retry fixed the CHOP half (`liveRecExact: true`, attempt 1) but universal went red
+again on the same overall check — because `liveRecOk` also ANDs in the DRUM half, and that had no retry. Its symptom
+is unmistakable once seen: `drumLiveRec.hitPad: 62` — the CHOP pad from the previous test — with a nonsense offset
+(6048). The drum hit simply had not reached the snapshot before its 40-tick wait ran out, so it measured the
+PREVIOUS hit. Same treatment applied: the drum half now retries up to `LIVE_REC_ATTEMPTS` too, undoing its bad write
+between tries so the pattern is left as it was found. Locally unchanged — attempt 1, `hitPad: 64`, offset 0.
+
+**Lesson: when a composite check like `liveRecOk` fails, read every term of the AND before believing the one you
+already fixed.** `liveRecExact` was true and green in the log; the failure was two lines further down.
+
+
 
 **The failure:** `macOS universal` went red on `liveRecOk` twice in a row (including a clean re-run) — the live hit
 landing 5–6 steps off the grid, `liveRecOffsetSamples` 18000 then 15000. Everything else was green, and the same
