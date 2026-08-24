@@ -108,6 +108,27 @@ class DelayLine
     double maxD_ = 0.0;
 };
 
+/// A 4-pole Butterworth lowpass (two cascaded TPT state-variable sections) used as the ladder's DECIMATION filter:
+/// it runs at the oversampled rate and kills the images the nonlinearity throws above the base Nyquist before the
+/// 4:1 drop. Minimum phase, so the device still reports ZERO latency (its in-band group delay is a fraction of a
+/// base sample) — a filter you put on a live pad must not push the whole strip back through PDC.
+class ButterLp4
+{
+  public:
+    void reset() noexcept TERMINATOR_NONBLOCKING;
+    void set(double cutoffHz, double sampleRate) noexcept TERMINATOR_NONBLOCKING;
+    double process(double x) noexcept TERMINATOR_NONBLOCKING;
+
+  private:
+    struct Section
+    {
+        double ic1 = 0.0, ic2 = 0.0;
+        double g = 0.0, k = 1.414213562373095, a1 = 0.0, a2 = 0.0, a3 = 0.0;
+        double process(double v0) noexcept TERMINATOR_NONBLOCKING;
+    };
+    Section s1_, s2_;
+};
+
 /// An integer delay (the PDC lines): an exact-size ring of maxDelay + maxBlock doubles; delay 0 = a true pass-through.
 class IntDelay
 {

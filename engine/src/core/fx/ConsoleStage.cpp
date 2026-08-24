@@ -23,6 +23,15 @@ constexpr Flavour kFlavours[] = {
     {0.048, 0.072, 20.0, 100.0, 0.4, 6000.0, -0.2, 0.0, 0.0, 18000.0, 0.03, 0.18, 0.3, 17000.0},
     // API — punch: 2nd AND 3rd, a presence lift around 3 kHz
     {0.03, 0.12, 22.0, 120.0, 0.2, 8000.0, 0.0, 3000.0, 0.25, 0.0, 0.02, 0.2, 0.15, 20000.0},
+    // --- the PREMIUM re-models (4.6i). Same desks, same EQ family and the same per-channel tolerances, but the
+    // saturation runs 4x oversampled with a flavour-specific output stage, so the drive can be pushed further
+    // than the parity stage could without turning to fizz.
+    // SSL+ — the op-amp: tighter, more odd, a touch more air
+    {0.010, 0.210, 24.0, 100.0, 0.0, 8000.0, 0.35, 0.0, 0.0, 0.0, 0.008, 0.30, 0.0, 21000.0},
+    // NEVE+ — the transformer: even harmonics and real low-end compression (see premiumStage)
+    {0.072, 0.090, 20.0, 100.0, 0.5, 6000.0, -0.25, 0.0, 0.0, 18000.0, 0.04, 0.20, 0.35, 17000.0},
+    // API+ — discrete class-AB: 2nd and 3rd together, a firmer presence lift
+    {0.044, 0.160, 22.0, 120.0, 0.25, 8000.0, 0.05, 3000.0, 0.35, 0.0, 0.028, 0.24, 0.18, 20000.0},
 };
 
 void hpCoeffs(double* c, double f, double sr, double q) noexcept TERMINATOR_NONBLOCKING
@@ -113,7 +122,13 @@ std::uint32_t ConsoleStage::fnv1a(const char* name) noexcept
 void ConsoleStage::prepare(double sampleRate)
 {
     sr_ = sampleRate;
+    srOs_ = sampleRate * static_cast<double>(kOversample);
     dcR_ = 1.0 - (2.0 * kPi * 5.0) / sampleRate;
+    for (auto& d : dec_)
+    {
+        d.reset();
+        d.set(sampleRate * 0.47, srOs_);
+    }
     reset();
     recompute();
 }
@@ -142,11 +157,23 @@ void ConsoleStage::reset() noexcept TERMINATOR_NONBLOCKING
         c.hp.z1 = c.hp.z2 = c.lo.z1 = c.lo.z2 = c.hi.z1 = c.hi.z2 = c.pk.z1 = c.pk.z2 = 0.0;
         c.lp = c.dcX = c.dcY = 0.0;
     }
+    for (auto& d : dec_)
+        d.reset();
+    xfmrZ_[0] = xfmrZ_[1] = 0.0;
 }
 
 void ConsoleStage::set(ConsoleFlavour flavour, float amount01, bool immediate) noexcept TERMINATOR_NONBLOCKING
 {
+    if (flavour != flavour_)
+    {
+        // Switching between a parity desk and its re-model changes which stage runs; clear what the other one left
+        // behind so the first sample of the new flavour is not the tail of the old one.
+        for (auto& d : dec_)
+            d.reset();
+        xfmrZ_[0] = xfmrZ_[1] = 0.0;
+    }
     flavour_ = flavour;
+    premium_ = consolePremium(flavour);
     amountTarget_ = std::clamp(amount01, 0.0f, 1.0f);
     if (immediate)
         amount_ = amountTarget_;
@@ -155,7 +182,7 @@ void ConsoleStage::set(ConsoleFlavour flavour, float amount01, bool immediate) n
 
 void ConsoleStage::recompute() noexcept TERMINATOR_NONBLOCKING
 {
-    const Flavour& F = kFlavours[static_cast<int>(flavour_) > 2 ? 0 : static_cast<int>(flavour_)];
+    const Flavour& F = kFlavours[static_cast<int>(flavour_) > 5 ? 0 : static_cast<int>(flavour_)];
     const double amt = static_cast<double>(amount_);
     const double* t = tol_;
     const double sr = sr_;
@@ -220,6 +247,37 @@ double ConsoleStage::sat(double x) const noexcept TERMINATOR_NONBLOCKING
     return x - a3_ * x * ax * ax + a2_ * x * x;
 }
 
+/// The premium output stage. The polynomial saturator is the same one — the desks have to stay recognisably
+/// themselves — but it runs at 4x with a minimum-phase decimator (so the stage still reports no latency), and each
+/// re-model adds the part of the hardware the parity port could not afford:
+///   SSL+   an op-amp edge: a little extra odd harmonic that stays tight instead of spreading.
+///   NEVE+  the TRANSFORMER: its core saturates on LOW frequencies first, so the bottom compresses and thickens
+///          while the top stays clean. That asymmetry between bands is the thing people mean by "Neve weight",
+///          and no amount of static curve gives it.
+///   API+   discrete class-AB: a firmer push with both harmonics, the "punch".
+double ConsoleStage::premiumStage(double x, int ch) noexcept TERMINATOR_NONBLOCKING
+{
+    double out = 0.0;
+    for (int k = 0; k < kOversample; ++k)
+    {
+        double v = x;
+        if (flavour_ == ConsoleFlavour::nevePlus)
+        {
+            // a 1-pole low band, saturated on its own, then put back — the core running out of headroom down low
+            const double a = std::exp(-2.0 * kPi * 160.0 / srOs_);
+            xfmrZ_[ch] = v + a * (xfmrZ_[ch] - v);
+            const double low = xfmrZ_[ch], high = v - low;
+            const double drive = 1.0 + 3.0 * static_cast<double>(amount_);
+            v = std::tanh(low * drive) / drive + high;
+        }
+        v = sat(v);
+        if (flavour_ == ConsoleFlavour::apiPlus)
+            v += 0.05 * static_cast<double>(amount_) * v * std::abs(v) * (1.0 - std::abs(v) * 0.5);
+        out = dec_[ch].process(v);
+    }
+    return out;
+}
+
 void ConsoleStage::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
 {
     // AMOUNT glides over ~23 ms so a knob move never steps (1/1024 per frame, the worklet's).
@@ -249,7 +307,7 @@ void ConsoleStage::process(double* l, double* r, int n) noexcept TERMINATOR_NONB
                 s.lp = v + lpA_ * (s.lp - v);
                 v = s.lp;
             }
-            v = sat(v);
+            v = premium_ ? premiumStage(v, c) : sat(v);
             // DC blocker (1-pole HPF at 5 Hz) — always in, so AMOUNT sweeping through 0 never switches modes.
             const double y = v - s.dcX + dcR_ * s.dcY;
             s.dcX = v;

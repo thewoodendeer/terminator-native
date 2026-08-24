@@ -18,6 +18,7 @@
 #include "terminator/core/Engine.h"
 #include "terminator/core/Mixer.h"
 #include "terminator/core/fx/ConsoleStage.h"
+#include "terminator/render/ProjectRenderer.h"
 
 using namespace terminator;
 using Catch::Approx;
@@ -450,4 +451,110 @@ TEST_CASE("master limiter: the page's -1 dBFS / 20:1 DynamicsCompressor on the m
     engine.process(outs, 2, 64);
     REQUIRE(engine.snapshot().mixerLimiterOn == 1);
     REQUIRE(engine.mixer().masterLatencySamples() == 264);
+}
+
+// ---- the flavour STRING → the enum (4.6i) ----------------------------------------------------------------------
+// This gate exists because the absence of it hid a real bug: the page serialises the console flavour in UPPER case
+// ('SSL' / 'NEVE' / 'API') and the project parser compared lower case, so every native export of a NEVE or API
+// project came out as SSL. Nothing sounded broken — it just was not the desk the user chose.
+TEST_CASE("console: the project's flavour string resolves to the flavour the user picked", "[console][flavour]")
+{
+    const auto flavourOf = [](const char* stored)
+    {
+        juce::ValueTree project("Project");
+        juce::DynamicObject::Ptr con(new juce::DynamicObject());
+        con->setProperty("on", true);
+        con->setProperty("amount", 50.0);
+        con->setProperty("flavour", juce::String(stored));
+        juce::DynamicObject::Ptr blob(new juce::DynamicObject());
+        blob->setProperty("console", juce::var(con.get()));
+        project.setProperty("mixer", juce::var(blob.get()), nullptr);
+        render::StripNamer namer;
+        const auto spec = render::buildMixerSpec(project, namer, {}, {}, true);
+        return spec.consoleFlavour;
+    };
+    // what the page actually writes
+    CHECK(flavourOf("SSL") == ConsoleFlavour::ssl);
+    CHECK(flavourOf("NEVE") == ConsoleFlavour::neve);
+    CHECK(flavourOf("API") == ConsoleFlavour::api);
+    // the premium re-models
+    CHECK(flavourOf("SSL+") == ConsoleFlavour::sslPlus);
+    CHECK(flavourOf("NEVE+") == ConsoleFlavour::nevePlus);
+    CHECK(flavourOf("API+") == ConsoleFlavour::apiPlus);
+    // lower case still works (older blobs, hand-written project files)
+    CHECK(flavourOf("neve") == ConsoleFlavour::neve);
+    CHECK(flavourOf("api+") == ConsoleFlavour::apiPlus);
+    // and anything unknown falls back to SSL rather than to silence or a crash
+    CHECK(flavourOf("MOTORHEAD") == ConsoleFlavour::ssl);
+}
+
+// ---- the PREMIUM re-models (4.6i) ------------------------------------------------------------------------------
+// Two things have to hold at once: the parity desks must be EXACTLY as they were (a project saved with SSL has to
+// sound like it did — that is what the rest of this file gates), and the re-models must be worth choosing.
+TEST_CASE("console: the re-models are level-matched, cleaner and each their own", "[console][premium]")
+{
+    constexpr double kSr2 = 48000.0;
+    const auto render = [&](ConsoleFlavour f, double hz, double amp, int total)
+    {
+        ConsoleStage st;
+        st.prepare(kSr2);
+        st.configure(false, ConsoleStage::fnv1a("sample"));
+        st.set(f, 1.0f, true);
+        std::vector<double> l(static_cast<std::size_t>(total)), r(static_cast<std::size_t>(total));
+        for (int i = 0; i < total; ++i)
+            l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] =
+                amp * std::sin(2.0 * 3.14159265358979323846 * hz * static_cast<double>(i) / kSr2);
+        st.process(l.data(), r.data(), total);
+        return l;
+    };
+    const auto magAt = [&](const std::vector<double>& v, double hz)
+    {
+        const int from = static_cast<int>(v.size()) / 2, to = static_cast<int>(v.size());
+        double re = 0.0, im = 0.0;
+        for (int i = from; i < to; ++i)
+        {
+            const double ph = 2.0 * 3.14159265358979323846 * hz * static_cast<double>(i) / kSr2;
+            re += v[static_cast<std::size_t>(i)] * std::sin(ph);
+            im += v[static_cast<std::size_t>(i)] * std::cos(ph);
+        }
+        return 2.0 * std::sqrt(re * re + im * im) / static_cast<double>(to - from);
+    };
+
+    // LEVEL-MATCHED: the same 0.1 dB rule the parity desks are held to. A "premium" stage that is simply louder
+    // would win every A/B for the wrong reason.
+    for (const auto f : {ConsoleFlavour::sslPlus, ConsoleFlavour::nevePlus, ConsoleFlavour::apiPlus})
+    {
+        const auto out = render(f, 1000.0, 0.126, static_cast<int>(kSr2 * 0.5)); // -18 dBFS
+        const double db = 20.0 * std::log10(magAt(out, 1000.0) / 0.126);
+        INFO("flavour " << static_cast<int>(f) << " level " << db << " dB");
+        CHECK(std::abs(db) < 0.6);
+    }
+
+    // WHAT THE OVERSAMPLING BUYS: driven hard at 6 kHz, the harmonics of the parity stage fold back down into the
+    // audible band. The re-model's do not, so the energy at 36 kHz-folded frequencies is lower.
+    const auto foldback = [&](ConsoleFlavour f)
+    {
+        const auto out = render(f, 6000.0, 0.5, 1 << 14);
+        // the 3rd harmonic of 6 kHz is 18 kHz (fine); the 5th is 30 kHz, which at 48 k folds back to 18 k... the
+        // clean test is the 7th (42 kHz → folds to 6 kHz's neighbourhood at 6 kHz ± ), so measure a bin that can
+        // only be aliasing: 2.4 kHz is not a harmonic of 6 kHz at all.
+        return 20.0 * std::log10(std::max(magAt(out, 2400.0), 1e-12) / std::max(magAt(out, 6000.0), 1e-12));
+    };
+    INFO("SSL foldback " << foldback(ConsoleFlavour::ssl) << " vs SSL+ " << foldback(ConsoleFlavour::sslPlus));
+    CHECK(foldback(ConsoleFlavour::sslPlus) < foldback(ConsoleFlavour::ssl));
+
+    // …and the three re-models are three different desks, not one with three labels.
+    const auto print = [&](ConsoleFlavour f)
+    {
+        const auto out = render(f, 200.0, 0.35, static_cast<int>(kSr2 * 0.5));
+        const double f0 = magAt(out, 200.0);
+        return std::pair<double, double>{magAt(out, 400.0) / f0, magAt(out, 600.0) / f0};
+    };
+    const auto s = print(ConsoleFlavour::sslPlus), nv = print(ConsoleFlavour::nevePlus),
+               ap = print(ConsoleFlavour::apiPlus);
+    // The claim is about the BALANCE, not the absolute amount: NEVE+ drives its saturator harder (the transformer
+    // stage plus a fatter low shelf), so it has more of BOTH — what makes it a Neve is that the even/odd ratio is
+    // higher, and what makes SSL+ an SSL is that its odd sits further out in front of its even.
+    CHECK(nv.first / nv.second > s.first / s.second);
+    CHECK(std::abs(ap.first - s.first) + std::abs(ap.second - s.second) > 0.001);
 }

@@ -4,7 +4,7 @@ import { useKeepOnScreen } from '../renderer/hooks/useKeepOnScreen';
 const STRIP_W_LS = 'terminator.mixer.stripWidths.v1';
 import {
   MixerEngine, ChannelName, REGULAR_CHANNELS, SEND_CHANNELS,
-  FADER_MIN_DB, FADER_MAX_DB, SEND_MIN_DB, CONSOLE_FLAVOURS,
+  FADER_MIN_DB, FADER_MAX_DB, SEND_MIN_DB, CONSOLE_FLAVOURS, CONSOLE_FLAVOUR_HELP,
 } from './MixerEngine';
 import { FX_REGISTRY, FX_ORDER, FxId, ParamSpec, WET_PARAM_KEYS } from './fx';
 import { MidiMapTarget } from '../renderer/chopper/MidiMap';
@@ -1292,11 +1292,7 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
               <button key={fl}
                 className={`mx-gainmatch mx-size-btn${engine.console.flavour === fl ? ' on' : ''}`}
                 onClick={() => { engine.setConsole({ flavour: fl }); force(); }}
-                title={fl === 'SSL'
-                  ? 'SSL — clean and forward: odd harmonics, tight sub filter, a hair of air on top. The default.'
-                  : fl === 'NEVE'
-                    ? 'NEVE — transformer warmth: even harmonics, a little weight down low, softened top end.'
-                    : 'API — punch: 2nd and 3rd harmonics with a presence lift around 3 kHz.'}
+                title={CONSOLE_FLAVOUR_HELP[fl]}
               >{fl}</button>
             ))}
             <input

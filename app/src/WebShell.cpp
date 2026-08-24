@@ -977,8 +977,15 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         c = Command::mixerSetPdc(static_cast<bool>(json.getProperty("on", true)));
     else if (type == "mixerSetConsole")
     {
-        const auto f = json.getProperty("flavour", "SSL").toString();
-        const std::uint8_t flavour = f == "NEVE" ? 1 : (f == "API" ? 2 : 0);
+        // The parity three and their PREMIUM re-models (4.6i). Unknown = SSL, so an older page cannot pick a
+        // flavour the engine does not have.
+        const auto f = json.getProperty("flavour", "SSL").toString().toUpperCase();
+        const std::uint8_t flavour = f == "NEVE"    ? 1
+                                     : f == "API"   ? 2
+                                     : f == "SSL+"  ? 3
+                                     : f == "NEVE+" ? 4
+                                     : f == "API+"  ? 5
+                                                    : 0;
         c = Command::mixerSetConsole(static_cast<bool>(json.getProperty("on", false)), flavour,
                                      static_cast<float>(static_cast<double>(json.getProperty("amount", 50.0))));
     }

@@ -55,27 +55,6 @@ struct MoogLadder
     double tapLp4() const noexcept TERMINATOR_NONBLOCKING { return -V[3]; }
 };
 
-/// A 4-pole Butterworth lowpass (two cascaded TPT state-variable sections) used as the ladder's DECIMATION filter:
-/// it runs at the oversampled rate and kills the images the nonlinearity throws above the base Nyquist before the
-/// 4:1 drop. Minimum phase, so the device still reports ZERO latency (its in-band group delay is a fraction of a
-/// base sample) — a filter you put on a live pad must not push the whole strip back through PDC.
-class ButterLp4
-{
-  public:
-    void reset() noexcept TERMINATOR_NONBLOCKING;
-    void set(double cutoffHz, double sampleRate) noexcept TERMINATOR_NONBLOCKING;
-    double process(double x) noexcept TERMINATOR_NONBLOCKING;
-
-  private:
-    struct Section
-    {
-        double ic1 = 0.0, ic2 = 0.0;
-        double g = 0.0, k = 1.414213562373095, a1 = 0.0, a2 = 0.0, a3 = 0.0;
-        double process(double v0) noexcept TERMINATOR_NONBLOCKING;
-    };
-    Section s1_, s2_;
-};
-
 /// FET COMP — the premium dynamics device (Phase 4.6c).
 ///   RATIO   1:1 | 2:1 | 3:1 | 4:1 | 6:1 | 10:1 | 20:1 | NUKE (the SWITCH is the character, not just the slope:
 ///           the knee tightens as it climbs and NUKE drops the threshold, hardens the knee and slows the release)

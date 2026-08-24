@@ -280,4 +280,43 @@ void Fft::transform(double* re, double* im, bool inverse) const noexcept TERMINA
     }
 }
 
+// ---- ButterLp4 (shared: the premium devices' decimator) ---------------------------------------------------
+
+double ButterLp4::Section::process(double v0) noexcept TERMINATOR_NONBLOCKING
+{
+    const double v3 = v0 - ic2;
+    const double v1 = a1 * ic1 + a2 * v3;
+    const double v2 = ic2 + a2 * ic1 + a3 * v3;
+    ic1 = 2.0 * v1 - ic1;
+    ic2 = 2.0 * v2 - ic2;
+    return v2;
+}
+
+void ButterLp4::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    s1_.ic1 = s1_.ic2 = s2_.ic1 = s2_.ic2 = 0.0;
+}
+
+void ButterLp4::set(double cutoffHz, double sampleRate) noexcept TERMINATOR_NONBLOCKING
+{
+    // Two Butterworth biquad sections: Q = 1/(2·cos(π(2k+1)/8)) → 0.5412, 1.3066 (k = 0, 1).
+    const double g = std::tan(3.14159265358979323846 * std::min(0.49 * sampleRate, cutoffHz) / sampleRate);
+    const double qs[2] = {0.541196100146197, 1.306562964876377};
+    Section* secs[2] = {&s1_, &s2_};
+    for (int i = 0; i < 2; ++i)
+    {
+        Section& s = *secs[i];
+        s.g = g;
+        s.k = 1.0 / qs[i];
+        s.a1 = 1.0 / (1.0 + g * (g + s.k));
+        s.a2 = g * s.a1;
+        s.a3 = g * s.a2;
+    }
+}
+
+double ButterLp4::process(double x) noexcept TERMINATOR_NONBLOCKING
+{
+    return s2_.process(s1_.process(x));
+}
+
 } // namespace terminator

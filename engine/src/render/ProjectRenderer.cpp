@@ -287,10 +287,17 @@ RenderMixerSpec buildMixerSpec(const juce::ValueTree& project, StripNamer& namer
     {
         mix.consoleOn = static_cast<bool>(con.getProperty("on", false));
         mix.consoleAmount = static_cast<float>(static_cast<double>(con.getProperty("amount", 50.0)));
-        const auto fl = con.getProperty("flavour", "ssl").toString();
-        mix.consoleFlavour = fl == "neve"  ? ConsoleFlavour::neve
-                             : fl == "api" ? ConsoleFlavour::api
-                                           : ConsoleFlavour::ssl;
+        // CASE-INSENSITIVE, and that is a BUG FIX, not a nicety: the page serialises 'SSL' / 'NEVE' / 'API' in
+        // UPPER case (MixerEngine.serialize → console: {...this.console}) while this compared against lower case,
+        // so **every native export rendered a NEVE or API project as SSL** — the exact "export == what you hear"
+        // break the whole phase exists to prevent. Nothing caught it because no gate ever set the flavour string.
+        const auto fl = con.getProperty("flavour", "SSL").toString().toUpperCase();
+        mix.consoleFlavour = fl == "NEVE"    ? ConsoleFlavour::neve
+                             : fl == "API"   ? ConsoleFlavour::api
+                             : fl == "SSL+"  ? ConsoleFlavour::sslPlus
+                             : fl == "NEVE+" ? ConsoleFlavour::nevePlus
+                             : fl == "API+"  ? ConsoleFlavour::apiPlus
+                                             : ConsoleFlavour::ssl;
     }
     return mix;
 }

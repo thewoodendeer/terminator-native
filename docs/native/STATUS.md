@@ -1739,6 +1739,44 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.6i DONE (THE PREMIUM CONSOLE RE-MODELS — AND A REAL EXPORT BUG THEY UNCOVERED), 2026-08-24
+
+The last item on B4's premium list that fits the current param model. `ConsoleFlavour` gains **SSL+ / NEVE+ / API+**
+beside the frozen SSL / NEVE / API. The parity three are untouched by construction — the existing console gates
+(level-matching, harmonics per flavour, the seeded tolerances) all still pass unchanged, which IS the proof.
+
+**What the re-models add:** the same polynomial saturator and the same per-strip tolerances, but run **4×
+oversampled** through the shared `ButterLp4` decimator (moved out of `AnalogFx.h` into `FxDsp.h` this phase, where
+shared DSP belongs), plus the part of each desk the parity stage could not afford:
+- **NEVE+ — the actual transformer.** Its core saturates on LOW frequencies first: the signal is split at 160 Hz,
+  the low band is driven through its own tanh and put back, so the bottom compresses and thickens while the top
+  stays clean. That band asymmetry is what "Neve weight" means and no static curve produces it.
+- **SSL+ — the op-amp:** more odd harmonic, kept tight (a3 0.21 vs 0.144), a touch more air.
+- **API+ — discrete class-AB:** both harmonics pushed together with a firmer presence lift.
+
+**THE BUG THIS UNCOVERED — every native export rendered NEVE and API projects as SSL.** The page serialises the
+console flavour in UPPER case (`MixerEngine.serialize()` → `console: {...this.console}`, values `'SSL' | 'NEVE' |
+'API'`), and `ProjectRenderer`'s parser compared **lower case** (`fl == "neve"`). It never matched, so every
+project fell through to the default. Nothing sounded broken — the bounce just was not the desk the user chose,
+which is precisely the "export == what you hear" break the phase exists to prevent. **No gate had ever set the
+flavour string.** Both parsers are case-insensitive now, and there is a gate that walks every string the page can
+write (plus lower case, plus a nonsense value falling back to SSL).
+
+**Gates (4.6i):** 2 more cases in `test_console.cpp` — the flavour string → the flavour the user picked (9
+assertions), and the re-models being level-matched to the same 0.6 dB rule, folding back LESS than the parity stage
+when driven at 6 kHz (what the oversampling buys), and being three different desks (NEVE+ has the higher even/odd
+RATIO, not merely more of both — measured that way because the transformer stage drives its saturator harder, so
+an absolute comparison would have said the wrong thing).
+**mac-debug ctest 348/348 · RTSan 349/349 · ui typecheck 5 = baseline · vite clean · format clean.**
+Page side: six flavour buttons, a `CONSOLE_FLAVOUR_HELP` map so each button says what it is, and the Help section
+explaining why the plain three will never change.
+
+### Phase 4.6 (premium devices) — SEVEN devices and the console re-models, all shipped
+ANALOG FILTER · FET COMP · TAPE ECHO · HALL 224 · SATURATOR · LIMITER · RETRO · CONSOLE+. What is LEFT from B4's
+brief needs the param-model step first (see the 4.6f note): the Pro-Q-4-style EQ and the SSL 4000 G channel strip,
+both of which need more than 12 params. **M/S everywhere is also still open and is cross-cutting** — it belongs on
+the insert chain as a per-slot ROUTE (STEREO / MID / SIDE / L / R), not inside each device.
+
 ## Phase 4 — 4.6h DONE (THE SEVENTH PREMIUM DEVICE: RETRO — THE CHARACTER BOX), 2026-08-24
 
 `RetroFx` in `AnalogFx.{h,cpp}`, `FxType::retro` appended. The RC-20 shape from B4, six modules in series: NOISE

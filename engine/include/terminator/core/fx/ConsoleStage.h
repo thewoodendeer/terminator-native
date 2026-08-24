@@ -9,16 +9,29 @@
 #include <cstdint>
 
 #include "terminator/core/RtAssert.h"
+#include "terminator/core/fx/FxDsp.h" // ButterLp4 — the premium stage's decimator
 
 namespace terminator
 {
 
+/// The three desks, and their PREMIUM re-models (Phase 4.6i). The plain three are the parity port and are frozen:
+/// a project saved with SSL has to sound like it did. The `+` three are the same desks modelled properly —
+/// 4x-oversampled saturation with a flavour-specific output stage — and are a different choice the user makes.
 enum class ConsoleFlavour : std::uint8_t
 {
     ssl = 0,
     neve,
-    api
+    api,
+    sslPlus,
+    nevePlus,
+    apiPlus
 };
+
+/// True for the re-models. Kept as a free function so every call site reads as a question about the flavour.
+inline bool consolePremium(ConsoleFlavour f) noexcept
+{
+    return static_cast<int>(f) >= static_cast<int>(ConsoleFlavour::sslPlus);
+}
 
 class ConsoleStage
 {
@@ -66,6 +79,10 @@ class ConsoleStage
     };
     void recompute() noexcept TERMINATOR_NONBLOCKING;
     double sat(double x) const noexcept TERMINATOR_NONBLOCKING;
+    /// The PREMIUM output stage: the same polynomial saturator, run 4x oversampled, plus the part that makes each
+    /// desk itself — the transformer's low-end compression on a NEVE, the op-amp's tighter odd edge on an SSL, the
+    /// discrete class-AB push on an API.
+    double premiumStage(double x, int ch) noexcept TERMINATOR_NONBLOCKING;
 
     double sr_ = 48000.0;
     bool bus_ = false;
@@ -77,6 +94,12 @@ class ConsoleStage
     double lpA_ = 0.0;
     double a2_ = 0.0, a3_ = 0.0, x0_ = 1e9, oddHold_ = 0.0, evenHold_ = 0.0;
     double dcR_ = 0.0;
+    // PREMIUM only (zero cost on the parity path: nothing below is touched unless the flavour is a `+` one)
+    static constexpr int kOversample = 4;
+    bool premium_ = false;
+    double srOs_ = 192000.0;
+    ButterLp4 dec_[2];
+    double xfmrZ_[2] = {}; // the transformer's low-frequency memory
 };
 
 } // namespace terminator

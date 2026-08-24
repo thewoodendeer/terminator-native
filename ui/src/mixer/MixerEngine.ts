@@ -19,7 +19,7 @@ import { MixerFX, FxId, createFx, FX_REGISTRY, WET_PARAM_KEYS } from './fx';
 import { compressorLatencySec } from '../renderer/audio/compressorLatency';
 import { buildOfflineFXChain, type SerializedFX } from './fx/buildFXChain';
 import { ConsoleStage, DEFAULT_CONSOLE, normalizeConsole, type ConsoleSettings } from './ConsoleStage';
-export { CONSOLE_FLAVOURS, type ConsoleFlavour, type ConsoleSettings } from './ConsoleStage';
+export { CONSOLE_FLAVOURS, CONSOLE_FLAVOUR_HELP, type ConsoleFlavour, type ConsoleSettings } from './ConsoleStage';
 const PDC_LS = 'terminator.mixer.pdc.v1';
 const CONSOLE_LS = 'terminator.mixer.console.v1';
 

@@ -6,8 +6,23 @@
 // what you heard is what prints. Until the worklet module lands (or if it
 // can't) the stage is a clean passthrough — never silence.
 
-export type ConsoleFlavour = 'SSL' | 'NEVE' | 'API';
-export const CONSOLE_FLAVOURS: ConsoleFlavour[] = ['SSL', 'NEVE', 'API'];
+export type ConsoleFlavour = 'SSL' | 'NEVE' | 'API' | 'SSL+' | 'NEVE+' | 'API+';
+/** The three desks, then their PREMIUM re-models (Terminator 3.0, phase 4.6i — engine/core/fx/ConsoleStage.h).
+ *  The plain three are FROZEN: a project saved with SSL has to sound like it did. The '+' three are the same desks
+ *  modelled properly (4x-oversampled saturation, a transformer stage on NEVE+, an op-amp edge on SSL+, discrete
+ *  class-AB on API+) and are only heard in the native app, where the engine is what makes the sound. */
+export const CONSOLE_FLAVOURS: ConsoleFlavour[] = ['SSL', 'NEVE', 'API', 'SSL+', 'NEVE+', 'API+'];
+
+/** One line per desk, for the button tooltips. The '+' entries say plainly what they are, because the difference
+ *  between "SSL" and "SSL+" is not guessable from the label. */
+export const CONSOLE_FLAVOUR_HELP: Record<ConsoleFlavour, string> = {
+  SSL: 'SSL — clean and forward: odd harmonics, tight sub filter, a hair of air on top. The default.',
+  NEVE: 'NEVE — transformer warmth: even harmonics, a little weight down low, softened top end.',
+  API: 'API — punch: 2nd and 3rd harmonics with a presence lift around 3 kHz.',
+  'SSL+': 'SSL+ — the same desk modelled properly: the saturation runs oversampled (so you can push it without fizz) with an op-amp edge that keeps the odd harmonics tight. Pick the plain SSL if you want a project to sound exactly as it did before.',
+  'NEVE+': 'NEVE+ — the re-model, with the actual TRANSFORMER: its core saturates on low frequencies first, so the bottom compresses and thickens while the top stays clean. That is the "Neve weight" no static curve gives you.',
+  'API+': 'API+ — the re-model: discrete class-AB push, 2nd and 3rd together, oversampled. More punch than the original, and it holds together when driven.',
+};
 
 export interface ConsoleSettings {
   on: boolean;
