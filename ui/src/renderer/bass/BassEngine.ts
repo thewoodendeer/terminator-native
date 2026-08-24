@@ -259,6 +259,19 @@ export interface BassRenderNote { time: number; note: number; vel: number; dur: 
 /** A timed pitch bend for the arranger / exports (absolute seconds). */
 export interface BassRenderBend { time: number; semis: number }
 
+/** The arranger's notes as the WORKLET's absolute-time note list (a slide is one event; a plain note is an on and
+ *  an off). Used by `playTimeline` for the live preview AND by the native exporter, so the bass in a bounce is the
+ *  same event list the preview plays — not a second reading of the same notes. */
+export function bassTimelineNotes(notes: BassRenderNote[]): Array<Record<string, unknown>> {
+  const list: Array<Record<string, unknown>> = [];
+  for (const n of notes) {
+    if (n.slide) { list.push({ on: true, slide: true, note: n.note, dur: Math.max(0.005, n.dur), at: n.time, tag: 'arr' }); continue; }
+    list.push({ on: true, note: n.note, vel: n.vel, at: n.time, tag: 'arr' });
+    list.push({ on: false, note: n.note, at: n.time + Math.max(0.005, n.dur), tag: 'arr' });
+  }
+  return list;
+}
+
 /** Offline render of absolute-time notes through the same worklet + patch —
  *  the export path. Standalone so renderArrangementDAW can call it without an
  *  engine instance. */
@@ -882,13 +895,7 @@ export class BassEngine {
   playTimeline(notes: BassRenderNote[], bends: BassRenderBend[] = []): void {
     if (!this.engineReady) return;
     if (bends.length) this.post({ type: 'bends', list: bends.map((b) => ({ semis: b.semis, at: b.time, tag: 'arr' })) });
-    const list: any[] = [];
-    for (const n of notes) {
-      if (n.slide) { list.push({ on: true, slide: true, note: n.note, dur: Math.max(0.005, n.dur), at: n.time, tag: 'arr' }); continue; }
-      list.push({ on: true, note: n.note, vel: n.vel, at: n.time, tag: 'arr' });
-      list.push({ on: false, note: n.note, at: n.time + Math.max(0.005, n.dur), tag: 'arr' });
-    }
-    this.post({ type: 'notes', list });
+    this.post({ type: 'notes', list: bassTimelineNotes(notes) });
   }
   clearTimeline(): void { this.post({ type: 'clear', tag: 'arr', release: true }); this.post({ type: 'bend', semis: 0 }); }
   /** While the arranger drives the bass, the pattern scheduler stays quiet. */

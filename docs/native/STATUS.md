@@ -1827,6 +1827,54 @@ running in the shell. MPC Project / Drum Rack stay on the page exporters (no .mp
 key maps (`main` / `sources` / `drumLanes`) come from the live shadow's own SampleStore keys — every buffer the
 export needs is already uploaded because it is what is playing.
 
+## Phase 4 — 4.7b DONE (THE EXPORT IS NATIVE: THE MASTER AND THE TRACKOUTS COME OUT OF THE ENGINE), 2026-08-24
+
+The page half. **In the shell, Master Mixdown and Trackouts are now rendered by the C++ engine and written by the
+shell** — the same voices, strips, inserts, CONSOLE, PDC and master limiter that are playing. The 4.6a blocker is
+closed: a native-only device is in the file.
+
+**The split that made it small.** The page keeps what only it knows and loses what it should never have owned:
+- `native/arrangementNative.ts` builds the payload out of the EXISTING flatteners — `buildChopEvents`,
+  `buildDrumTrackHits`, `drumGraphsOf`, `buildBassNotes` / `buildBassBends` — the very functions the live arranger
+  preview and the Web Audio exporter already run. There is ONE reading of a section's bars, swing, per-step
+  VELOCITY / SHIFT / PAN / REPEAT and bass line, and it is the one you hear when you press play in the arranger.
+  (`buildChopEvents` / the two bass builders had to be exported; nothing was copied.)
+- `native/exportArrangementNative.ts` drives it: save dialog → `terminatorExport` → reveal. Progress and CANCEL ride
+  the native job (a cancelled render writes nothing), and it FAILS LOUDLY on a silent render (`peak === 0`) instead
+  of handing over a file with nothing in it.
+- The trackout CHANNEL LIST is still the page's own (`routesForEvents` + `drumPlanFor` + the active sends), deduped
+  because several drum lanes share one channel.
+- `runExport` intercepts `master-wav` / `wav-stems` when a project is passed and the shell is present; the Beat
+  Finisher modal's own export takes the same branch. **MPC Project and Drum Rack stay on the page's exporters** —
+  the native renderer has no .mpcsample / .adg writer, and those are files to be parsed, not audio to be mixed.
+
+**Three things worth knowing:**
+- **The key maps cost nothing.** Every buffer a bounce reads is ALREADY in the shell's SampleStore, because the live
+  shadow uploaded it when the pad or lane was bound — so `nativeSampleKeys` resolves keys (`nativeEngineShadow()` is
+  now reachable) and the export sends key maps, never bytes.
+- **No transcode step any more.** WAV, FLAC and MP3 all come straight out of the shell at the chosen depth (MP3
+  through the bundled `lame`), so `ExportModal`'s render-a-WAV-then-convert path is switched off for these targets
+  via a `nativeRendered` prop. The dialog's own MP3 / 24-bit-FLAC transcode still serves the page-rendered targets.
+- **A real discrepancy found, and a deliberate choice made:** the native engine applies the DRUM MASTER volume live
+  (`DrumSequencer`: lane × step velocity × master) while the page's Web Audio desktop path routes drum tracks
+  straight into their mixer channels, bypassing its own drum master gain — so the shipping app's export drops it.
+  The native arrangement export FOLDS IT IN, because native playback is the authority and a bounce must match what
+  he hears. **Flag for Victor: the Electron app's drum master volume does nothing on desktop.**
+- Mute-group cuts are NOT sent: the drum pads carry their groups, so the engine chokes in the same order playback
+  does. Chop hits carry no gain either — the pad already has CHOP level × NORM on it, exactly as a live pad press.
+
+Help updated in the same commit ("WHAT ACTUALLY RENDERS IT" + where the file goes).
+
+**Gates (4.7b):** ui gate = typecheck **5 errors, baseline 5, new 0** · library 39/39 · clock · bass-theory · vite
+build clean; mac-debug builds 0 warnings; **app probe PROBE OK** (ChopperView renders, no page errors, the native
+engine shadow and the export self-test both green).
+
+**NEEDS VICTOR — this is the one to test by ear.** Load a beat with drums, bass and mixer FX, then EXPORT →
+Master Mixdown, and Trackouts. What to listen for: it should sound like the app (console + limiter + any device the
+page cannot make a sound with), the stems should sum to the master, MP3 and 24-bit FLAC should come out as asked,
+and a CANCEL mid-render should leave no file. Compare against an export from the Electron app if you want the
+before/after.
+
 ### THE BLOCKER THIS UNCOVERED — a premium device is heard but NOT exported (needs Victor's call)
 `exportProjectNative` (the whole of 4.5) is wired to **the probe only**. The shipping EXPORT dialog calls the
 PAGE's `exportArrangement` → `renderArrangementDAW`, i.e. the Web Audio mixer, because that is the only thing that

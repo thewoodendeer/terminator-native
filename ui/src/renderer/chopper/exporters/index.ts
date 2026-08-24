@@ -24,6 +24,13 @@ export interface ExportRunContext {
   drumEngine: DrumEngine;
   arrangement: Arrangement;
   bpm: number;
+  /** Terminator 3.0 (Phase 4.7): the project as JSON. Present = the MASTER and the TRACKOUTS are rendered by the
+   *  ENGINE in the shell (`native/exportArrangementNative`) instead of the page's Web Audio mixer, so the file
+   *  carries the native console, PDC, limiter and every native-only device. Absent (or in a browser / the Electron
+   *  app) = the page's arrangement renderer, unchanged. */
+  project?: Record<string, unknown>;
+  /** The live mixer — the trackout channel list is read from it. */
+  mixer?: unknown;
 }
 
 // Re-export the lightweight metadata so existing imports from './exporters'
@@ -59,14 +66,39 @@ export async function runExport(
   format: ExportFormat,
   onProgress?: (pct: number) => void,
   ctx?: ExportRunContext,
-  audioFormat: 'wav' | 'flac' = 'wav',
+  audioFormat: 'wav' | 'flac' | 'mp3' = 'wav',
   shouldCancel?: () => boolean,
   bitDepth: 16 | 24 = 16,
+  mp3Kbps?: number,
 ): Promise<string> {
   const state = engine.getState();
   const baseName = safeFileName(state.trackTitle || 'terminator');
 
   if (ctx) {
+    // Terminator 3.0 (Phase 4.7): in the shell the master and the trackouts render in the ENGINE — the same voices,
+    // mixer, console, PDC, limiter and devices that are playing — and the shell writes the file. Everything else
+    // (MPC Project, Drum Rack, and every arrangement-independent format) stays on the page's exporters.
+    if (ctx.project && (format === 'master-wav' || format === 'wav-stems')) {
+      const { isNative } = await import('../../native/juceBridge');
+      if (isNative()) {
+        const { exportArrangementNative } = await import('../../native/exportArrangementNative');
+        return exportArrangementNative({
+          engine,
+          drumEngine: ctx.drumEngine,
+          mixer: (ctx.mixer ?? engine.mixerEngine ?? null) as never,
+          arrangement: ctx.arrangement,
+          bpm: ctx.bpm,
+          project: ctx.project,
+          title: state.trackTitle || 'terminator',
+          target: format === 'wav-stems' ? 'stems' : 'master',
+          audioFormat,
+          bitDepth,
+          mp3Kbps,
+          onProgress: (p) => onProgress?.(Math.round(p * 100)),
+          shouldCancel,
+        });
+      }
+    }
     // Lazy like the views' own imports — keeps the arrangement renderer out of
     // the initial bundle for callers that never pass a context (HardwareView).
     const { exportArrangement } = await import('../../arranger/exportArrangement');
@@ -75,7 +107,8 @@ export async function runExport(
       title: state.trackTitle || 'terminator', bitDepth,
       // FLAC only reaches the targets that can take it (exportArrangement
       // enforces the same rule, so a stray caller can't hand MPC a FLAC).
-      audioFormat: FLAC_CAPABLE.has(format) ? audioFormat : ('wav' as const),
+      // the page's renderer writes WAV or FLAC only — MP3 there is a transcode the dialog does afterwards
+      audioFormat: FLAC_CAPABLE.has(format) && audioFormat === 'flac' ? ('flac' as const) : ('wav' as const),
       onProgress: (p: number) => onProgress?.(Math.round(p * 100)),
       shouldCancel,
     };

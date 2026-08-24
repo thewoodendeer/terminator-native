@@ -1186,13 +1186,20 @@ declare global {
 
 /** Attach the shadow to a ChopperEngine (+ its DrumEngine — Phase 3.3, + its BassEngine — Phase 3.4) (ChopperView /
  *  HardwareView, on mount). Returns the detach. No-op outside the shell. */
+let attachedShadow: NativeEngineShadow | null = null;
+/** The live shadow while one is attached. The native EXPORTER needs its SampleStore keys: every buffer a bounce
+ *  reads is already uploaded, because it is what is playing — so an export sends KEY MAPS, never bytes. */
+export function nativeEngineShadow(): NativeEngineShadow | null { return attachedShadow; }
+
 export function attachNativeEngineShadow(engine: ChopperEngine, drums: DrumEngine | null = null, bass: BassEngine | null = null): () => void {
   if (!isNative()) return () => {};
   const shadow = new NativeEngineShadow(engine, drums, bass);
   shadow.attach();
+  attachedShadow = shadow;
   window.__terminatorNativeShadow = { stats: () => ({ ...shadow.stats }), selfTest: () => shadow.selfTest() };
   return () => {
     shadow.detach();
+    if (attachedShadow === shadow) attachedShadow = null;
     delete window.__terminatorNativeShadow;
   };
 }

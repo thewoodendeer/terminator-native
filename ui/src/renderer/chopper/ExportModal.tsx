@@ -27,19 +27,24 @@ export interface ExportModalProps {
   /** Runs the export. `shouldCancel` is polled by the renderer; throwing ExportCancelled is treated as "cancelled". */
   onRun: (
     format: ExportFormat,
-    audioFormat: 'wav' | 'flac',
+    /** 'mp3' only reaches here for a target the ENGINE renders (`nativeRendered`) — the page's own renderer writes
+     *  WAV or FLAC and the dialog transcodes afterwards. */
+    audioFormat: 'wav' | 'flac' | 'mp3',
     onProgress: (pct: number) => void,
     shouldCancel: () => boolean,
     bitDepth: 16 | 24,
   ) => Promise<string>;
   /** False while no audio is loaded — Export stays disabled and says why. */
   canExport: boolean;
+  /** Terminator 3.0 (Phase 4.7): true for the targets the ENGINE renders and the shell writes. Those already come
+   *  out as WAV / FLAC / MP3 at the asked-for depth, so the dialog must NOT render a WAV and transcode it. */
+  nativeRendered?: (target: ExportFormat) => boolean;
   /** The project's own rate, shown for information. There is no rate CONTROL: the arrangement renders at the
    *  loaded track's rate, and offering a menu that silently resampled (or did nothing) would be worse than saying so. */
   sampleRate?: number;
 }
 
-export default function ExportModal({ open, onClose, onRun, canExport, sampleRate }: ExportModalProps): React.ReactElement | null {
+export default function ExportModal({ open, onClose, onRun, canExport, sampleRate, nativeRendered }: ExportModalProps): React.ReactElement | null {
   const [target, setTarget] = useState<ExportFormat>('master-wav');
   const [audio, setAudio] = useState<ExportAudioFormat>('wav');
   const [depth, setDepth] = useState<16 | 24>(16);
@@ -58,7 +63,9 @@ export default function ExportModal({ open, onClose, onRun, canExport, sampleRat
   const canChoose24 = canChooseAudio && effectiveAudio !== 'mp3' && (effectiveAudio === 'wav' || isNative());
   const effectiveDepth: 16 | 24 = canChoose24 ? depth : 16;
   // WAV 24 is written by the page; FLAC 24 goes through the shell's writer; MP3 always does
-  const needsTranscode = effectiveAudio === 'mp3' || (effectiveAudio === 'flac' && effectiveDepth === 24);
+  const engineRenders = !!nativeRendered?.(target);
+  const needsTranscode =
+    !engineRenders && (effectiveAudio === 'mp3' || (effectiveAudio === 'flac' && effectiveDepth === 24));
 
   // Escape closes when nothing is running; while a render is going it cancels instead of leaving it orphaned.
   useEffect(() => {
@@ -189,7 +196,9 @@ export default function ExportModal({ open, onClose, onRun, canExport, sampleRat
             <p className="export-note">
               {effectiveAudio === 'flac' && 'Lossless — the same samples as the WAV, about half the size.'}
               {effectiveAudio === 'mp3' && !mp3Available && 'MP3 needs the desktop app.'}
-              {effectiveAudio === 'mp3' && mp3Available && 'Rendered as WAV, then encoded — same audio, smaller file.'}
+              {effectiveAudio === 'mp3' && mp3Available &&
+                (engineRenders ? 'Encoded by the app as it renders — same audio, smaller file.'
+                               : 'Rendered as WAV, then encoded — same audio, smaller file.')}
               {effectiveAudio === 'wav' && effectiveDepth === 16 && 'Dithered on the way down to 16-bit.'}
               {effectiveAudio === 'wav' && effectiveDepth === 24 && 'No dither needed at 24-bit.'}
             </p>

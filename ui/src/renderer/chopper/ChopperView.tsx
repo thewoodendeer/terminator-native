@@ -1071,6 +1071,16 @@ export function ChopperView() {
 
     const arrangement = buildFinishArrangement(secs);
     const bpm = engine.getMasterBpm() || 90;
+    // Terminator 3.0 (Phase 4.7): master + trackouts render in the ENGINE and the shell writes them, so the Beat
+    // Finisher's own export is the same file the EXPORT dialog makes. MPC stays on the page's exporter.
+    if (isNative() && (target === 'master' || target === 'stems')) {
+      const { exportArrangementNative } = await import('../native/exportArrangementNative');
+      return exportArrangementNative({
+        engine, drumEngine, mixer: mixerEngine, arrangement, bpm,
+        project: buildPreset(currentVideoId ?? NO_SAMPLE_ID) as unknown as Record<string, unknown>,
+        title, target, audioFormat: 'wav', bitDepth: 16, onProgress,
+      });
+    }
     const { exportArrangement } = await import('../arranger/exportArrangement');
     return exportArrangement({ engine, drumEngine, arrangement, bpm, target, title, bitDepth: 16, onProgress });
   };
@@ -5695,6 +5705,9 @@ export function ChopperView() {
         canExport={state.hasBuffer}
         onClose={() => setShowExportModal(false)}
         sampleRate={engine.buffer?.sampleRate}
+        // Terminator 3.0 (Phase 4.7): in the shell the master and the trackouts are rendered by the ENGINE and
+        // written by the shell, in the container asked for — so the dialog must not add its transcode step.
+        nativeRendered={(t) => isNative() && (t === 'master-wav' || t === 'wav-stems')}
         onRun={async (format, audioFormat, onProgress, shouldCancel, bitDepth) => {
           setExportBusy(true);
           // iOS: persist the session BEFORE the share sheet backgrounds the tab, so a WebKit reload-on-return
@@ -5705,6 +5718,9 @@ export function ChopperView() {
               drumEngine,
               arrangement: buildFinishArrangement(currentFinishSections()),
               bpm: engine.getMasterBpm() || 90,
+              // the ENGINE renders the master / trackouts in the shell (4.7): it needs the project itself, because
+              // the pads, drum lanes, bass patch and mixer it plays through are the project's
+              ...(isNative() ? { project: buildPreset(currentVideoId ?? NO_SAMPLE_ID) as unknown as Record<string, unknown>, mixer: mixerEngine } : {}),
             }, audioFormat, shouldCancel, bitDepth);
           } finally {
             setExportBusy(false);

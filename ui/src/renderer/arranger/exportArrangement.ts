@@ -33,7 +33,7 @@ export type ExportTarget = 'master' | 'stems' | 'mpc';
 
 const MPC_PPQ = 960;
 
-type ChopEvent = { padIdx: number; time: number; maxDur: number; reverse?: boolean };
+export type ChopEvent = { padIdx: number; time: number; maxDur: number; reverse?: boolean };
 type DrumHit = { buffer: AudioBuffer; time: number; gain: number; pan?: number; chokeAt?: number; groupCutAt?: number };
 
 function safeName(s: string): string {
@@ -41,7 +41,7 @@ function safeName(s: string): string {
 }
 
 /** Resolve every section's bassNotes into absolute-time notes (seconds). */
-function buildBassNotes(arr: Arrangement, beatDur: number): BassRenderNote[] {
+export function buildBassNotes(arr: Arrangement, beatDur: number): BassRenderNote[] {
   const barDur = beatDur * 4;
   const out: BassRenderNote[] = [];
   let cursor = 0;
@@ -56,7 +56,7 @@ function buildBassNotes(arr: Arrangement, beatDur: number): BassRenderNote[] {
 }
 
 /** Every section's BEND lane as absolute-time bends (seconds). */
-function buildBassBends(arr: Arrangement, beatDur: number): BassRenderBend[] {
+export function buildBassBends(arr: Arrangement, beatDur: number): BassRenderBend[] {
   const barDur = beatDur * 4;
   const out: BassRenderBend[] = [];
   let cursor = 0;
@@ -71,7 +71,7 @@ function buildBassBends(arr: Arrangement, beatDur: number): BassRenderBend[] {
 /** Resolve the chops of every section into absolute-time pad events, cutting
  *  each at the next chop so the sequence plays like the sequencer (matches the
  *  live preview's chopEvents). */
-function buildChopEvents(arr: Arrangement, beatDur: number): ChopEvent[] {
+export function buildChopEvents(arr: Arrangement, beatDur: number): ChopEvent[] {
   const barDur = beatDur * 4;
   // Collect (padIdx, time) pairs across all sections.
   const raw: Array<{ padIdx: number; time: number; reverse: boolean }> = [];

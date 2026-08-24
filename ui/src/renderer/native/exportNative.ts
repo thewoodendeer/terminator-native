@@ -7,6 +7,7 @@
  * so "export == what you hear" is true by construction rather than by two implementations agreeing.
  */
 import { isNative, native, onNativeEvent } from './juceBridge';
+import type { NativeArrangement } from './arrangementNative';
 import { bundledTools } from './processBridge';
 
 type AnyRecord = Record<string, unknown>;
@@ -41,6 +42,11 @@ export interface NativeExportRequest {
   limiter?: boolean;
   /** Channel names to write as trackouts, one stereo file each. */
   stems?: string[];
+  /** THE BEAT FINISHER ARRANGEMENT (Phase 4.7): the song flattened to absolute-time hits by
+   *  `native/arrangementNative.ts`. When present it REPLACES the project's own sequence schedule — the pads, the
+   *  drum lanes, the bass patch, the mixer and the master still come from the project, so only the timing is the
+   *  arrangement's. `song` / `loops` do not apply to it. */
+  arrangement?: NativeArrangement;
   /** Job id — needed to report progress and to cancel. One is generated if you leave it out. */
   id?: string;
 }
