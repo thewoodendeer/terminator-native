@@ -23,6 +23,7 @@ add_executable(terminator-tests
     engine/test_snap_chops.cpp
     engine/test_blocks.cpp
     engine/test_stems_voice.cpp
+    engine/test_stems_split.cpp
     engine/test_effective_buffer.cpp
     engine/test_pad_ops.cpp
     engine/test_chop_sequencer.cpp
