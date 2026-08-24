@@ -32,6 +32,8 @@ const char* const kOffOn[] = {"OFF", "ON"};
 const char* const kLimStyleNames[] = {"TRANSPARENT", "PUNCHY", "DYNAMIC", "ALLROUND", "AGGRESSIVE", "BUS", "SAFE"};
 const char* const kRetroNoise[] = {"VINYL", "TAPE", "STATIC", "RADIO"};
 const char* const kRetroDist[] = {"TUBE", "TAPE", "FUZZ", "DIODE", "FOLD", "BITS", "TRANSISTOR", "CRUSH"};
+const char* const kEqTypes[] = {"OFF", "BELL", "LOW SHELF", "HIGH SHELF", "LOW CUT", "HIGH CUT", "NOTCH", "TILT"};
+const char* const kEqSlopeNames[] = {"12", "24", "36", "48", "72", "96"};
 
 const FxParamDef kClipParams[] = {
     {"AMT", 0.0f, 100.0f, 0.0f},
@@ -179,6 +181,39 @@ const FxParamDef kRetroParams[] = {
     {"MAGNETIC", 0.0f, 100.0f, 0.0f},
     {"WET", 0.0f, 100.0f, 100.0f},
 };
+const FxParamDef kEq6Params[] = {
+    {"TYPE1", 0.0f, 7.0f, 0.0f, kEqTypes, 8},
+    {"FREQ1", 20.0f, 20000.0f, 60.0f},
+    {"GAIN1", -30.0f, 30.0f, 0.0f},
+    {"Q1", 0.1f, 18.0f, 1.0f},
+    {"SLOPE1", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
+    {"TYPE2", 0.0f, 7.0f, 0.0f, kEqTypes, 8},
+    {"FREQ2", 20.0f, 20000.0f, 200.0f},
+    {"GAIN2", -30.0f, 30.0f, 0.0f},
+    {"Q2", 0.1f, 18.0f, 1.0f},
+    {"SLOPE2", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
+    {"TYPE3", 0.0f, 7.0f, 0.0f, kEqTypes, 8},
+    {"FREQ3", 20.0f, 20000.0f, 800.0f},
+    {"GAIN3", -30.0f, 30.0f, 0.0f},
+    {"Q3", 0.1f, 18.0f, 1.0f},
+    {"SLOPE3", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
+    {"TYPE4", 0.0f, 7.0f, 0.0f, kEqTypes, 8},
+    {"FREQ4", 20.0f, 20000.0f, 2500.0f},
+    {"GAIN4", -30.0f, 30.0f, 0.0f},
+    {"Q4", 0.1f, 18.0f, 1.0f},
+    {"SLOPE4", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
+    {"TYPE5", 0.0f, 7.0f, 0.0f, kEqTypes, 8},
+    {"FREQ5", 20.0f, 20000.0f, 6000.0f},
+    {"GAIN5", -30.0f, 30.0f, 0.0f},
+    {"Q5", 0.1f, 18.0f, 1.0f},
+    {"SLOPE5", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
+    {"TYPE6", 0.0f, 7.0f, 0.0f, kEqTypes, 8},
+    {"FREQ6", 20.0f, 20000.0f, 12000.0f},
+    {"GAIN6", -30.0f, 30.0f, 0.0f},
+    {"Q6", 0.1f, 18.0f, 1.0f},
+    {"SLOPE6", 0.0f, 5.0f, 1.0f, kEqSlopeNames, 6},
+    {"OUT", -24.0f, 24.0f, 0.0f},
+};
 const FxParamDef kReverbParams[] = {
     {"ROOM", 0.0f, 100.0f, 50.0f},
     {"PREDELAY", 0.0f, 100.0f, 10.0f},
@@ -214,6 +249,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::saturator, "saturator", kSaturatorParams, 8, 7},
     {FxType::limiter, "limiter", kLimiterParams, 7, -1}, // fully wet: a limiter is not a parallel device
     {FxType::retro, "retro", kRetroParams, 9, 8},
+    {FxType::eq6, "eq6", kEq6Params, 31, -1}, // an EQ is not a parallel device: no WET
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -258,6 +294,8 @@ int capacityOf(FxType t) noexcept
         return 16;
     case FxType::retro:
         return 16;
+    case FxType::eq6:
+        return 32;
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -304,6 +342,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<LimiterFx>();
     case FxType::retro:
         return std::make_unique<RetroFx>();
+    case FxType::eq6:
+        return std::make_unique<EqFx6>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

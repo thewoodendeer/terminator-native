@@ -7,6 +7,8 @@
 //   · FetCompFx — FET COMP: the aggressive FET compressor (Empirical Labs EL8-style) Victor asked for — a RATIO
 //     SWITCH rather than a threshold knob (you drive it with INPUT, exactly like the hardware), a filtered
 //     detector, program-dependent release, the DIST 2 / DIST 3 harmonic modes and BRITISH mode.
+//   · EqFx6 — EQ 6: the multi-band parametric. Six bands, each any of bell / shelf / cut / notch / tilt, with real
+//     Butterworth slopes up to 96 dB/oct on the cuts. The device the param budget had to be raised for (4.7b).
 //   · RetroFx — RETRO: the RC-20-shaped multi-effect — NOISE, WOBBLE, DISTORT (eight curves), DIGITAL, SPACE and
 //     MAGNETIC in one box, every random element seeded so a bounce is the same take you heard.
 //   · LimiterFx — LIMITER: a modern mastering limiter (styles, look-ahead, true peak). The ONE thing it must never
@@ -113,6 +115,43 @@ class FetCompFx final : public Effect
 
 /// A Schroeder allpass on a delay line — the dispersion element the spring tank is built from.
 double springAllpass(DelayLine& dl, double x, double delaySamples, double g) noexcept TERMINATOR_NONBLOCKING;
+
+/// EQ 6 — the multi-band parametric (Phase 4.7b). Six independent bands, each:
+///   TYPE   OFF | BELL | LOW SHELF | HIGH SHELF | LOW CUT | HIGH CUT | NOTCH | TILT
+///   FREQ   20..20000 Hz · GAIN −30..+30 dB · Q 0.1..18 · SLOPE 12..96 dB/oct (the CUTS only — real cascaded
+///          Butterworth sections, not one biquad pretending)
+/// plus an OUTPUT trim. **A band set to OFF is bit-exact** — an EQ with nothing switched on has to be nothing at
+/// all. For mid/side work use the SLOT's ROUTE (4.7a): two EQs on the strip, one MID and one SIDE, gives per-band
+/// M/S without doubling every control.
+class EqFx6 final : public Effect
+{
+  public:
+    static constexpr int kBands = 6;
+    static constexpr int kMaxSections = 8; // 96 dB/oct = eight 2-pole sections
+    static constexpr int kParamsPerBand = 5;
+
+    FxType type() const noexcept TERMINATOR_NONBLOCKING override { return FxType::eq6; }
+    void prepare(double sampleRate, int maxBlockSize) override;
+    void reset() noexcept TERMINATOR_NONBLOCKING override;
+    void setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING override;
+    float param(int index) const noexcept TERMINATOR_NONBLOCKING override;
+    void process(double* l, double* r, int numSamples) noexcept TERMINATOR_NONBLOCKING override;
+
+  private:
+    void recomputeBand(int b) noexcept TERMINATOR_NONBLOCKING;
+
+    struct Band
+    {
+        float type = 0.0f; // 0 = OFF
+        Glide freq, gain, q;
+        float slope = 1.0f; // index into the slope table
+        int sections = 0;   // how many biquads this band actually runs
+    };
+    double sr_ = 48000.0;
+    Band band_[kBands];
+    Glide out_;
+    Biquad sec_[kBands][kMaxSections][2];
+};
 
 /// RETRO — the RC-20-shaped character box (Phase 4.6h). Six modules in series, each doing nothing at 0.
 ///   NOISE / NTYPE  0..100 · VINYL | TAPE | STATIC | RADIO — the floor a record has and a plugin does not.

@@ -1714,4 +1714,198 @@ void RetroFx::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKI
     }
 }
 
+// ---- EQ 6 ---------------------------------------------------------------------------------------------------
+
+namespace
+{
+/// The slopes a CUT band can run, in dB/oct. Each 12 dB is one 2-pole Butterworth section.
+constexpr double kEqSlopes[6] = {12.0, 24.0, 36.0, 48.0, 72.0, 96.0};
+/// Where the six bands sit when the device is inserted — spread across the spectrum so the first thing a user
+/// does is move one, not hunt for it.
+constexpr float kEqDefaultFreq[EqFx6::kBands] = {60.0f, 200.0f, 800.0f, 2500.0f, 6000.0f, 12000.0f};
+} // namespace
+
+void EqFx6::prepare(double sampleRate, int /*maxBlockSize*/)
+{
+    sr_ = sampleRate;
+    reset();
+}
+
+void EqFx6::reset() noexcept TERMINATOR_NONBLOCKING
+{
+    for (int b = 0; b < kBands; ++b)
+    {
+        band_[b].type = 0.0f;
+        band_[b].freq.set(kEqDefaultFreq[b], true);
+        band_[b].gain.set(0.0f, true);
+        band_[b].q.set(1.0f, true);
+        band_[b].slope = 1.0f; // 24 dB/oct
+        band_[b].sections = 0;
+        for (int k = 0; k < kMaxSections; ++k)
+            for (int c = 0; c < 2; ++c)
+            {
+                sec_[b][k][c].reset();
+                sec_[b][k][c].setIdentity();
+            }
+    }
+    out_.set(0.0f, true);
+}
+
+void EqFx6::setParam(int index, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
+{
+    const int nBandParams = kBands * kParamsPerBand;
+    if (index == nBandParams) // OUT
+    {
+        out_.set(clampf(value, -24.0f, 24.0f), immediate);
+        return;
+    }
+    if (index < 0 || index >= nBandParams)
+        return;
+    const int b = index / kParamsPerBand, p = index % kParamsPerBand;
+    Band& bd = band_[b];
+    switch (p)
+    {
+    case 0:
+        bd.type = clampf(std::floor(value), 0.0f, 7.0f);
+        break;
+    case 1:
+        bd.freq.set(clampf(value, 20.0f, 20000.0f), immediate);
+        break;
+    case 2:
+        bd.gain.set(clampf(value, -30.0f, 30.0f), immediate);
+        break;
+    case 3:
+        bd.q.set(clampf(value, 0.1f, 18.0f), immediate);
+        break;
+    default:
+        bd.slope = clampf(std::floor(value), 0.0f, 5.0f);
+        break;
+    }
+    recomputeBand(b);
+}
+
+float EqFx6::param(int index) const noexcept TERMINATOR_NONBLOCKING
+{
+    const int nBandParams = kBands * kParamsPerBand;
+    if (index == nBandParams)
+        return out_.target;
+    if (index < 0 || index >= nBandParams)
+        return 0.0f;
+    const Band& bd = band_[index / kParamsPerBand];
+    switch (index % kParamsPerBand)
+    {
+    case 0:
+        return bd.type;
+    case 1:
+        return bd.freq.target;
+    case 2:
+        return bd.gain.target;
+    case 3:
+        return bd.q.target;
+    default:
+        return bd.slope;
+    }
+}
+
+void EqFx6::recomputeBand(int b) noexcept TERMINATOR_NONBLOCKING
+{
+    Band& bd = band_[b];
+    const double f = static_cast<double>(bd.freq.cur);
+    const double g = static_cast<double>(bd.gain.cur);
+    const double q = static_cast<double>(bd.q.cur);
+    const int t = static_cast<int>(bd.type);
+    // start from "this band does nothing", then fill in only the sections it needs
+    for (int k = 0; k < kMaxSections; ++k)
+        for (int c = 0; c < 2; ++c)
+            sec_[b][k][c].setIdentity();
+    bd.sections = 0;
+    if (t == 0)
+        return; // OFF is bit-exact: no section runs at all
+
+    const auto both = [&](int k, Biquad::Type type, double freq, double qq, double gainDb)
+    {
+        sec_[b][k][0].set(type, freq, qq, gainDb, sr_);
+        sec_[b][k][1].set(type, freq, qq, gainDb, sr_);
+    };
+    switch (t)
+    {
+    case 1: // BELL
+        both(0, Biquad::Type::peaking, f, q, g);
+        bd.sections = 1;
+        break;
+    case 2: // LOW SHELF
+        both(0, Biquad::Type::lowshelf, f, q, g);
+        bd.sections = 1;
+        break;
+    case 3: // HIGH SHELF
+        both(0, Biquad::Type::highshelf, f, q, g);
+        bd.sections = 1;
+        break;
+    case 6: // NOTCH
+        both(0, Biquad::Type::notch, f, q, g);
+        bd.sections = 1;
+        break;
+    case 7: // TILT — one shelf down, one up, around the same point: a whole-spectrum lean
+        both(0, Biquad::Type::lowshelf, f, 0.7071, -g);
+        both(1, Biquad::Type::highshelf, f, 0.7071, g);
+        bd.sections = 2;
+        break;
+    default: // 4 = LOW CUT, 5 = HIGH CUT — a REAL cascade, not one biquad with a big Q
+    {
+        const int n = static_cast<int>(kEqSlopes[static_cast<int>(bd.slope)] / 12.0);
+        const auto type = t == 4 ? Biquad::Type::highpass : Biquad::Type::lowpass;
+        for (int k = 0; k < n; ++k)
+        {
+            // Butterworth section Qs for a 2n-pole cascade. The Web Audio biquad takes Q in DECIBELS for the cut
+            // types (the spec's convention) — passing the linear value here would put every slope in the wrong
+            // place, quietly.
+            const double qLin =
+                1.0 / (2.0 * std::cos(kPi * (2.0 * static_cast<double>(k) + 1.0) / (4.0 * static_cast<double>(n))));
+            both(k, type, f, 20.0 * std::log10(qLin), 0.0);
+        }
+        bd.sections = n;
+        break;
+    }
+    }
+}
+
+void EqFx6::process(double* l, double* r, int n) noexcept TERMINATOR_NONBLOCKING
+{
+    for (int b = 0; b < kBands; ++b)
+    {
+        Band& bd = band_[b];
+        if (bd.freq.moving() || bd.gain.moving() || bd.q.moving())
+        {
+            bd.freq.advance(n, sr_, kFxTau, 1e-3f);
+            bd.gain.advance(n, sr_, kFxTau);
+            bd.q.advance(n, sr_, kFxTau);
+            recomputeBand(b);
+        }
+    }
+    if (out_.moving())
+        out_.advance(n, sr_, kFxTau);
+    const double outGain = std::pow(10.0, static_cast<double>(out_.cur) / 20.0);
+
+    for (int b = 0; b < kBands; ++b)
+    {
+        const int sections = band_[b].sections;
+        for (int k = 0; k < sections; ++k)
+        {
+            Biquad& bl = sec_[b][k][0];
+            Biquad& br = sec_[b][k][1];
+            for (int i = 0; i < n; ++i)
+            {
+                l[i] = bl.process(l[i]);
+                r[i] = br.process(r[i]);
+            }
+        }
+    }
+    if (outGain != 1.0)
+        for (int i = 0; i < n; ++i)
+        {
+            l[i] *= outGain;
+            r[i] *= outGain;
+        }
+}
+
 } // namespace terminator

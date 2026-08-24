@@ -27,6 +27,7 @@ import { PlateVerbFX } from './PlateVerbFX';
 import { SaturatorFX } from './SaturatorFX';
 import { LimiterFX } from './LimiterFX';
 import { RetroFX } from './RetroFX';
+import { Eq6FX } from './Eq6FX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -34,7 +35,7 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro' | 'eq6';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
@@ -164,6 +165,44 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
       { key: 'WET', label: 'WET', kind: 'knob', min: 0, max: 100, step: 1, unit: '%' },
     ],
     create: (c) => new LadderFX(c),
+  },
+  eq6: {
+    name: 'EQ 6',
+    desc: 'Six independent bands, each of them any shape you need: bell, low or high shelf, low or high cut, notch, or a tilt across the whole spectrum. The cuts are REAL cascaded Butterworth slopes — 12 all the way to 96 dB/oct — not one filter with the resonance turned up. A band set to OFF costs nothing at all. For mid/side work put two of these on the strip and set their ROUTE selectors to MID and SIDE. Rendered by the app\'s engine',
+    params: [
+      sel('TYPE1', 'B1 TYPE', ['OFF', 'BELL', 'LOW SHELF', 'HIGH SHELF', 'LOW CUT', 'HIGH CUT', 'NOTCH', 'TILT']),
+      { key: 'FREQ1', label: 'B1 FREQ', kind: 'knob', min: 20, max: 20000, step: 1, log: true, unit: 'Hz' },
+      { key: 'GAIN1', label: 'B1 GAIN', kind: 'knob', min: -30, max: 30, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'Q1', label: 'B1 Q', kind: 'knob', min: 0.1, max: 18, step: 0.05 },
+      sel('SLOPE1', 'B1 SLOPE', ['12', '24', '36', '48', '72', '96']),
+      sel('TYPE2', 'B2 TYPE', ['OFF', 'BELL', 'LOW SHELF', 'HIGH SHELF', 'LOW CUT', 'HIGH CUT', 'NOTCH', 'TILT']),
+      { key: 'FREQ2', label: 'B2 FREQ', kind: 'knob', min: 20, max: 20000, step: 1, log: true, unit: 'Hz' },
+      { key: 'GAIN2', label: 'B2 GAIN', kind: 'knob', min: -30, max: 30, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'Q2', label: 'B2 Q', kind: 'knob', min: 0.1, max: 18, step: 0.05 },
+      sel('SLOPE2', 'B2 SLOPE', ['12', '24', '36', '48', '72', '96']),
+      sel('TYPE3', 'B3 TYPE', ['OFF', 'BELL', 'LOW SHELF', 'HIGH SHELF', 'LOW CUT', 'HIGH CUT', 'NOTCH', 'TILT']),
+      { key: 'FREQ3', label: 'B3 FREQ', kind: 'knob', min: 20, max: 20000, step: 1, log: true, unit: 'Hz' },
+      { key: 'GAIN3', label: 'B3 GAIN', kind: 'knob', min: -30, max: 30, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'Q3', label: 'B3 Q', kind: 'knob', min: 0.1, max: 18, step: 0.05 },
+      sel('SLOPE3', 'B3 SLOPE', ['12', '24', '36', '48', '72', '96']),
+      sel('TYPE4', 'B4 TYPE', ['OFF', 'BELL', 'LOW SHELF', 'HIGH SHELF', 'LOW CUT', 'HIGH CUT', 'NOTCH', 'TILT']),
+      { key: 'FREQ4', label: 'B4 FREQ', kind: 'knob', min: 20, max: 20000, step: 1, log: true, unit: 'Hz' },
+      { key: 'GAIN4', label: 'B4 GAIN', kind: 'knob', min: -30, max: 30, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'Q4', label: 'B4 Q', kind: 'knob', min: 0.1, max: 18, step: 0.05 },
+      sel('SLOPE4', 'B4 SLOPE', ['12', '24', '36', '48', '72', '96']),
+      sel('TYPE5', 'B5 TYPE', ['OFF', 'BELL', 'LOW SHELF', 'HIGH SHELF', 'LOW CUT', 'HIGH CUT', 'NOTCH', 'TILT']),
+      { key: 'FREQ5', label: 'B5 FREQ', kind: 'knob', min: 20, max: 20000, step: 1, log: true, unit: 'Hz' },
+      { key: 'GAIN5', label: 'B5 GAIN', kind: 'knob', min: -30, max: 30, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'Q5', label: 'B5 Q', kind: 'knob', min: 0.1, max: 18, step: 0.05 },
+      sel('SLOPE5', 'B5 SLOPE', ['12', '24', '36', '48', '72', '96']),
+      sel('TYPE6', 'B6 TYPE', ['OFF', 'BELL', 'LOW SHELF', 'HIGH SHELF', 'LOW CUT', 'HIGH CUT', 'NOTCH', 'TILT']),
+      { key: 'FREQ6', label: 'B6 FREQ', kind: 'knob', min: 20, max: 20000, step: 1, log: true, unit: 'Hz' },
+      { key: 'GAIN6', label: 'B6 GAIN', kind: 'knob', min: -30, max: 30, step: 0.1, center: 0, unit: 'dB' },
+      { key: 'Q6', label: 'B6 Q', kind: 'knob', min: 0.1, max: 18, step: 0.05 },
+      sel('SLOPE6', 'B6 SLOPE', ['12', '24', '36', '48', '72', '96']),
+      { key: 'OUT', label: 'OUT', kind: 'knob', min: -24, max: 24, step: 0.5, center: 0, unit: 'dB' },
+    ],
+    create: (c) => new Eq6FX(c),
   },
   retro: {
     name: 'RETRO',
@@ -342,7 +381,7 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'saturator', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
-  'vinyl', 'retro', 'filter', 'ladder', 'eq', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
+  'vinyl', 'retro', 'filter', 'ladder', 'eq', 'eq6', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

@@ -1739,6 +1739,38 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.7b DONE (THE PARAM BUDGET, AND THE MULTI-BAND EQ IT UNBLOCKED), 2026-08-24
+
+**`kMaxFxParams` 12 → 32.** The 4.6f note flagged this as the thing standing between the premium list and an EQ.
+Checked rather than assumed: the constant's only footprint is `Mixer::SavedSlot::params[kMaxFxParams]`, and
+`savedChains_` is a **heap vector** (64 strips × 8 inserts × 32 floats = 64 KB), so it is not inside `Engine` and
+the standing `static_assert(sizeof(Engine) <= 384 KB)` is untouched — it still compiles, which is the proof.
+
+**`EqFx6` — six bands, 31 params.** Each band is TYPE (OFF / BELL / LOW SHELF / HIGH SHELF / LOW CUT / HIGH CUT /
+NOTCH / TILT) · FREQ · GAIN · Q · SLOPE, plus one OUT trim. The cuts are **real cascaded Butterworth sections** —
+12 / 24 / 36 / 48 / 72 / 96 dB per octave, up to eight 2-pole sections — not one biquad with its Q wound up.
+**A band set to OFF is bit-exact:** its sections are set to identity and skipped entirely, so five unused bands
+cost nothing.
+
+**The trap that would have shipped silently:** the Web Audio biquad takes **Q in DECIBELS for the cut types** (the
+spec's convention; linear for everything else). Feeding the Butterworth section Qs in linear would have put every
+slope in the wrong place — quietly, since it would still look like a filter. The cascade converts
+(`20·log10(qLin)`), and the gate below is what would have caught it.
+
+**The gate that had to be rewritten, and why it matters:** the first slope test measured the difference between two
+octaves in the stopband. At 96 dB/oct that is **−192 dB**, far under what a −26 dBFS test tone can resolve, so it
+read **21 dB/oct** — it was measuring the numerical floor, not the filter. Each slope is now checked against the
+**Butterworth magnitude** at the frequency where theory says it is ~40 dB down: comfortably measurable, and a much
+tighter claim than "about that steep". **A gate that cannot see the thing it asserts will happily report a number.**
+
+**Gates (4.7b):** 6 more cases — all-OFF bit-exact (1e-12) + the param ids/ranges · a bell at its frequency with
+its gain, leaving the rest alone, and two stacking to 12 dB · both shelves + TILT · every one of the six slopes vs
+theory, and a HIGH CUT leaving its passband alone · NOTCH depth, OUT trim, reset, block-invariance to 1e-9 · finite
+with all six bands on every type at three rates.
+**mac-debug ctest 359/359 · RTSan 360/360 · ui typecheck 5 = baseline · vite clean · format clean.**
+Page side: `eq6` in `FX_REGISTRY` as **EQ 6** (a flat 31-control panel — a curve editor is a UI project of its own
+and is noted as future work) + Help. Per-band M/S is served by the 4.7a ROUTE: two EQs, one MID, one SIDE.
+
 ## Phase 4 — 4.7a DONE (M/S EVERYWHERE: A ROUTE ON EVERY INSERT SLOT), 2026-08-24
 
 B4's "mid/side everywhere", built the only way it stays maintainable: as a property of the SLOT, not of each

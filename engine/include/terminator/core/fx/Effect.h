@@ -44,10 +44,14 @@ enum class FxType : std::uint8_t
     saturator, // 4.6 premium: SATURATOR
     limiter,   // 4.6 premium: LIMITER
     retro,     // 4.6 premium: RETRO (RC-20 shaped)
+    eq6,       // 4.7b premium: EQ 6 (the multi-band parametric)
     count
 };
 
-inline constexpr int kMaxFxParams = 12;
+// Raised from 12 (Phase 4.7b) so a multi-band EQ can exist: six bands x five controls plus an output trim is 31.
+// The only cost is `Mixer::SavedSlot::params[kMaxFxParams]`, and savedChains_ is a heap vector (64 strips x 8
+// inserts x 32 floats = 64 KB) — it is NOT inside Engine, so the `sizeof(Engine) <= 384 KB` rule is untouched.
+inline constexpr int kMaxFxParams = 32;
 inline constexpr int kMaxFxOptions = 8;
 
 struct FxParamDef

@@ -1697,3 +1697,233 @@ TEST_CASE("retro: SPACE, finiteness, reset", "[fx][analog][retro]")
     const auto quiet = run(*fx, 4096, [](int) { return 0.0; });
     CHECK(rms(quiet, 0, 4096) < 1e-15); // back to not being there at all
 }
+
+// ---- EQ 6 (4.7b) -----------------------------------------------------------------------------------------------
+// The multi-band parametric the param budget was raised for. The gates are the numbers an EQ is only worth having
+// if it hits: a bell is at its frequency with its gain, a shelf lifts one end and leaves the other, a cut's SLOPE
+// is the slope it says (measured per octave, including the 96 dB/oct that needs eight cascaded sections), and a
+// band set to OFF is BIT-EXACT — an EQ with nothing switched on has to be nothing at all.
+
+namespace
+{
+constexpr int kEqPerBand = 5;
+enum
+{
+    kBType = 0,
+    kBFreq,
+    kBGain,
+    kBQ,
+    kBSlope
+};
+constexpr int kEqOut = 6 * kEqPerBand;
+
+int eqP(int band, int which)
+{
+    return band * kEqPerBand + which;
+}
+
+std::unique_ptr<EqFx6> makeEq(double sr = kSr)
+{
+    auto fx = std::make_unique<EqFx6>();
+    fx->prepare(sr, kBlock);
+    return fx;
+}
+
+/// The response (dB) of an effect at `hz`, measured with a settled sine.
+double eqResp(Effect& e, double hz)
+{
+    return gainDb(e, hz, 0.05);
+}
+} // namespace
+
+TEST_CASE("eq6: every band OFF is bit-exact", "[fx][analog][eq6]")
+{
+    REQUIRE(fxTypeFromId("eq6") == FxType::eq6);
+    REQUIRE(fxTypeInfo(FxType::eq6).numParams == 31);
+    REQUIRE(fxTypeInfo(FxType::eq6).wetParam == -1);
+    REQUIRE(fxParamIndex(FxType::eq6, "FREQ3") == eqP(2, kBFreq));
+    REQUIRE(fxParamIndex(FxType::eq6, "OUT") == kEqOut);
+    REQUIRE(fxOptionIndex(FxType::eq6, eqP(0, kBType), "HIGH CUT") == 5);
+    REQUIRE(fxOptionIndex(FxType::eq6, eqP(0, kBSlope), "96") == 5);
+
+    auto fx = makeEq();
+    const int n = 4096;
+    std::vector<double> l(n), r(n), in(n);
+    for (int i = 0; i < n; ++i)
+    {
+        in[static_cast<std::size_t>(i)] = 0.4 * std::sin(kTwoPi * 440.0 * static_cast<double>(i) / kSr);
+        l[static_cast<std::size_t>(i)] = r[static_cast<std::size_t>(i)] = in[static_cast<std::size_t>(i)];
+    }
+    fx->process(l.data(), r.data(), n);
+    for (int i = 0; i < n; ++i)
+        REQUIRE(l[static_cast<std::size_t>(i)] == Approx(in[static_cast<std::size_t>(i)]).margin(1e-12));
+}
+
+TEST_CASE("eq6: a bell is where it says, with the gain it says", "[fx][analog][eq6]")
+{
+    for (const double g : {-12.0, -6.0, 6.0, 12.0})
+    {
+        auto fx = makeEq();
+        fx->setParam(eqP(0, kBType), 1.0f, true); // BELL
+        fx->setParam(eqP(0, kBFreq), 1000.0f, true);
+        fx->setParam(eqP(0, kBGain), static_cast<float>(g), true);
+        fx->setParam(eqP(0, kBQ), 2.0f, true);
+        INFO("gain " << g);
+        CHECK(eqResp(*fx, 1000.0) == Approx(g).margin(0.5));
+        // …and it leaves the rest of the spectrum where it was
+        auto fx2 = makeEq();
+        fx2->setParam(eqP(0, kBType), 1.0f, true);
+        fx2->setParam(eqP(0, kBFreq), 1000.0f, true);
+        fx2->setParam(eqP(0, kBGain), static_cast<float>(g), true);
+        fx2->setParam(eqP(0, kBQ), 2.0f, true);
+        CHECK(eqResp(*fx2, 60.0) == Approx(0.0).margin(0.7));
+    }
+
+    // Two bands at the same spot add up — six of them are six, not one with a bigger number.
+    auto stacked = makeEq();
+    for (int b = 0; b < 2; ++b)
+    {
+        stacked->setParam(eqP(b, kBType), 1.0f, true);
+        stacked->setParam(eqP(b, kBFreq), 1000.0f, true);
+        stacked->setParam(eqP(b, kBGain), 6.0f, true);
+        stacked->setParam(eqP(b, kBQ), 2.0f, true);
+    }
+    CHECK(eqResp(*stacked, 1000.0) == Approx(12.0).margin(0.8));
+}
+
+TEST_CASE("eq6: the shelves lift one end and leave the other", "[fx][analog][eq6]")
+{
+    auto low = makeEq();
+    low->setParam(eqP(0, kBType), 2.0f, true); // LOW SHELF
+    low->setParam(eqP(0, kBFreq), 200.0f, true);
+    low->setParam(eqP(0, kBGain), 9.0f, true);
+    CHECK(eqResp(*low, 40.0) == Approx(9.0).margin(1.0));
+    auto low2 = makeEq();
+    low2->setParam(eqP(0, kBType), 2.0f, true);
+    low2->setParam(eqP(0, kBFreq), 200.0f, true);
+    low2->setParam(eqP(0, kBGain), 9.0f, true);
+    CHECK(eqResp(*low2, 5000.0) == Approx(0.0).margin(0.5));
+
+    auto high = makeEq();
+    high->setParam(eqP(0, kBType), 3.0f, true); // HIGH SHELF
+    high->setParam(eqP(0, kBFreq), 4000.0f, true);
+    high->setParam(eqP(0, kBGain), -9.0f, true);
+    CHECK(eqResp(*high, 12000.0) == Approx(-9.0).margin(1.2));
+
+    // TILT leans the whole spectrum: down one end, up the other, around the same point.
+    auto tilt = makeEq();
+    tilt->setParam(eqP(0, kBType), 7.0f, true);
+    tilt->setParam(eqP(0, kBFreq), 1000.0f, true);
+    tilt->setParam(eqP(0, kBGain), 6.0f, true);
+    CHECK(eqResp(*tilt, 100.0) < -3.0);
+    auto tilt2 = makeEq();
+    tilt2->setParam(eqP(0, kBType), 7.0f, true);
+    tilt2->setParam(eqP(0, kBFreq), 1000.0f, true);
+    tilt2->setParam(eqP(0, kBGain), 6.0f, true);
+    CHECK(eqResp(*tilt2, 10000.0) > 3.0);
+}
+
+TEST_CASE("eq6: a cut's SLOPE is the slope it claims", "[fx][analog][eq6]")
+{
+    // Measured against the BUTTERWORTH MAGNITUDE rather than as a difference between two octaves. A steep slope
+    // runs out of numbers before it runs out of slope: at 96 dB/oct, one octave under a 1 kHz cutoff is −192 dB,
+    // which no measurement on a −26 dBFS test tone can see (the first version of this gate read 21 dB/oct there
+    // and was measuring the noise floor, not the filter). So each slope is checked at the frequency where theory
+    // says it should be ~40 dB down — comfortably measurable, and a much tighter claim than "about that steep".
+    struct Case
+    {
+        int idx;
+        int poles;
+    };
+    for (const Case c : {Case{0, 2}, Case{1, 4}, Case{2, 6}, Case{3, 8}, Case{4, 12}, Case{5, 16}})
+    {
+        const double fc = 1000.0;
+        const double x = std::pow(10.0, -2.0 / static_cast<double>(c.poles)); // where |H| = −40 dB
+        const double f = fc * x;
+        const double xn = std::pow(x, 2.0 * static_cast<double>(c.poles));
+        const double wantDb = 10.0 * std::log10(xn / (1.0 + xn));
+        auto fx = makeEq();
+        fx->setParam(eqP(0, kBType), 4.0f, true); // LOW CUT
+        fx->setParam(eqP(0, kBFreq), static_cast<float>(fc), true);
+        fx->setParam(eqP(0, kBSlope), static_cast<float>(c.idx), true);
+        const double got = eqResp(*fx, f);
+        INFO("slope index " << c.idx << " (" << c.poles << " poles) at " << f << " Hz: want " << wantDb << " dB, got "
+                            << got);
+        CHECK(got == Approx(wantDb).margin(3.0));
+    }
+
+    // A HIGH CUT does the same going the other way, and neither touches the passband.
+    auto hc = makeEq();
+    hc->setParam(eqP(0, kBType), 5.0f, true);
+    hc->setParam(eqP(0, kBFreq), 2000.0f, true);
+    hc->setParam(eqP(0, kBSlope), 3.0f, true); // 48 dB/oct
+    CHECK(eqResp(*hc, 200.0) == Approx(0.0).margin(0.5));
+    auto hc2 = makeEq();
+    hc2->setParam(eqP(0, kBType), 5.0f, true);
+    hc2->setParam(eqP(0, kBFreq), 2000.0f, true);
+    hc2->setParam(eqP(0, kBSlope), 3.0f, true);
+    CHECK(eqResp(*hc2, 8000.0) < -70.0);
+}
+
+TEST_CASE("eq6: NOTCH, OUT, reset and block size", "[fx][analog][eq6]")
+{
+    auto notch = makeEq();
+    notch->setParam(eqP(0, kBType), 6.0f, true);
+    notch->setParam(eqP(0, kBFreq), 1000.0f, true);
+    notch->setParam(eqP(0, kBQ), 8.0f, true);
+    CHECK(eqResp(*notch, 1000.0) < -20.0);
+    auto notch2 = makeEq();
+    notch2->setParam(eqP(0, kBType), 6.0f, true);
+    notch2->setParam(eqP(0, kBFreq), 1000.0f, true);
+    notch2->setParam(eqP(0, kBQ), 8.0f, true);
+    CHECK(eqResp(*notch2, 250.0) == Approx(0.0).margin(0.5));
+
+    auto trim = makeEq();
+    trim->setParam(kEqOut, -6.0f, true);
+    CHECK(eqResp(*trim, 1000.0) == Approx(-6.0).margin(0.2));
+
+    auto fx = makeEq();
+    fx->setParam(eqP(2, kBType), 1.0f, true);
+    fx->setParam(eqP(2, kBGain), 12.0f, true);
+    fx->reset();
+    CHECK(fx->param(eqP(2, kBType)) == Approx(0.0f));
+    CHECK(fx->param(eqP(2, kBGain)) == Approx(0.0f));
+
+    const auto build = [](int block)
+    {
+        auto e = makeEq();
+        e->setParam(eqP(0, kBType), 4.0f, true);
+        e->setParam(eqP(0, kBFreq), 300.0f, true);
+        e->setParam(eqP(0, kBSlope), 4.0f, true);
+        e->setParam(eqP(1, kBType), 1.0f, true);
+        e->setParam(eqP(1, kBFreq), 2000.0f, true);
+        e->setParam(eqP(1, kBGain), 8.0f, true);
+        return run(*e, 8192, tone(500.0, 0.4), block);
+    };
+    const auto a = build(8192), b = build(43);
+    for (std::size_t i = 0; i < a.size(); ++i)
+        REQUIRE(a[i] == Approx(b[i]).margin(1e-9));
+}
+
+TEST_CASE("eq6: finite with every band on at every rate", "[fx][analog][eq6]")
+{
+    for (const double sr : {44100.0, 48000.0, 96000.0})
+        for (int t = 1; t < 8; ++t)
+        {
+            auto fx = makeEq(sr);
+            for (int b = 0; b < 6; ++b)
+            {
+                fx->setParam(eqP(b, kBType), static_cast<float>(t), true);
+                fx->setParam(eqP(b, kBGain), b % 2 == 0 ? 30.0f : -30.0f, true);
+                fx->setParam(eqP(b, kBQ), 18.0f, true);
+                fx->setParam(eqP(b, kBSlope), 5.0f, true);
+            }
+            const auto out =
+                run(*fx, static_cast<int>(sr * 0.1), [](int i) { return (i / 16) % 2 == 0 ? 0.8 : -0.8; }, 64);
+            for (const double v : out)
+            {
+                REQUIRE(std::isfinite(v));
+                REQUIRE(std::abs(v) < 200.0);
+            }
+        }
+}
