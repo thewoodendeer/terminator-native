@@ -1764,6 +1764,35 @@ did not move. On a healthy machine nothing changes: it still lands on attempt 1,
   run showed `p2midi` through `p8mixer` at one identical timestamp, i.e. those parts were skipped — so it proved
   nothing, and saying my commit caused the failure would have been a guess dressed as a finding.
 
+## BUG G — "I hit export FLAC" and the whole app went blank — **FIXED** (2026-08-23)
+
+Victor pressed EXPORT with FLAC and the Terminator window turned into a blank white page reading
+**"Plug-in handled load"**. The app looked dead; only a relaunch brought it back.
+
+**The export itself was fine — DELIVERING the file killed the page.** `lib/download.ts deliverFiles()` ends in the
+classic desktop path: make a Blob URL, click an `<a download>`. **A WKWebView has no download manager**, so that
+click is a NAVIGATION: the WebView leaves the app and loads the blob, WebKit logs "Plug-in handled load", and the
+entire UI is gone. Nothing crashed — the page was simply navigated away from.
+
+The bug was hiding in plain sight: **this file's own header already documents the same failure for the iOS iframe**
+("clicking an `<a href="blob:…">` NAVIGATES the iframe to the blob — which blows away (and on big exports crashes)
+the embedded app"). The native shell is a third host with the same property, and nobody had taught `deliverFiles`
+about it. It would have hit the OLD inline export button too — the dialog just made it easy to reach.
+
+**The fix:** natively the shell owns the filesystem, so bytes never touch an anchor. `deliverFiles` now branches on
+the shell FIRST: `saveDialog` → `writeBinary` (chunked base64, the existing helper) → `reveal`. One dialog even for
+a multi-file export — the user names the first file and the rest land beside it, which is what a DAW does with
+stems. Cancelling the dialog returns `'dismissed'` and writes nothing.
+
+**A consequence worth recording:** the export dialog's MP3 / 24-bit-FLAC step needs the file it just wrote, and it
+had been scraping the name out of the human status message. With a real save dialog the file is wherever the user
+put it, so `lastNativeSavePaths()` now reports the actual absolute paths and the dialog uses those. **Parsing prose
+for a path was always wrong — it would have broken the moment that wording changed.**
+
+**Not covered by a gate:** the probe exercises the NATIVE exporter (`terminatorExport`), not the page's delivery
+path, so this fix is verified by build + types and needs Victor's hands. Retest: EXPORT → FLAC → a save dialog should
+appear, the file should land where you choose and be revealed in Finder, and the app must still be there.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every

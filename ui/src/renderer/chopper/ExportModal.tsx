@@ -89,7 +89,9 @@ export default function ExportModal({ open, onClose, onRun, canExport, sampleRat
       const status = await onRun(target, rendered, p => setPct(p), () => cancelRef.current, effectiveDepth);
       if (needsTranscode) {
         setPct(97);
-        const from = extractPath(status);
+        // the REAL path the shell just wrote — never scraped out of the status text, which is prose
+        const { lastNativeSavePaths } = await import('../lib/download');
+        const from = lastNativeSavePaths()[0] ?? null;
         if (!from) {
           setMsg(`Exported as WAV — could not find the file to convert to ${effectiveAudio.toUpperCase()}.`);
         } else {
@@ -222,9 +224,3 @@ export default function ExportModal({ open, onClose, onRun, canExport, sampleRat
   );
 }
 
-/** The exporters return a human status like `Exported "name.wav"` — pull a usable path/name out of it for the MP3
- *  re-encode. Returns null when the message carries none (then we keep the WAV and say so). */
-function extractPath(status: string): string | null {
-  const m = status.match(/([^\s"']+\.(?:wav|flac))/i);
-  return m ? m[1] : null;
-}

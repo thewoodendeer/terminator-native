@@ -43,6 +43,45 @@ function toBlobPart(bytes: ArrayBuffer | Uint8Array | string): BlobPart {
 /** What actually happened to the bytes. Callers MUST NOT tell the user "exported"
  *  on anything but 'shared' / 'downloaded' — the whole reason this type exists is
  *  that iOS delivery can fail silently (see 'needs-tap'). */
+/** True inside the Terminator shell. Imported lazily-by-value so this module stays usable in the plain web build. */
+function isNativeShell(): boolean {
+  return typeof window !== 'undefined' && !!(window as any).__JUCE__?.backend;
+}
+
+/** The absolute paths the last NATIVE delivery wrote, in order. Empty after a cancelled or non-native delivery.
+ *  The export dialog needs the real path to hand a file to the shell's transcoder (MP3 / 24-bit FLAC) — parsing it
+ *  out of a human status message would break the moment that wording changed. */
+let lastNativePaths: string[] = [];
+export function lastNativeSavePaths(): string[] { return lastNativePaths; }
+
+/** Ask the shell where to put the export, then write every file there. One dialog even for a multi-file export:
+ *  the user names the first file and the rest land beside it, which is what a DAW does with stems. */
+async function saveFilesNative(
+  items: Array<{ name: string; data: ArrayBuffer | Uint8Array | string; mime?: string }>,
+): Promise<DeliveryOutcome> {
+  const { native } = await import('../native/juceBridge');
+  const { writeBinaryFile } = await import('../native/assetsNative');
+  lastNativePaths = [];
+  const chosen = await native.fs({ verb: 'saveDialog', title: 'Export', defaultName: items[0].name });
+  if (!chosen?.ok || !chosen?.path) return 'dismissed'; // the user cancelled the dialog — nothing was written
+  const target = String(chosen.path);
+  const sep = target.includes('\\') ? '\\' : '/';
+  const dir = target.slice(0, target.lastIndexOf(sep));
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    // the first file takes the name the user typed; the rest keep their own, beside it
+    const path = i === 0 ? target : `${dir}${sep}${it.name}`;
+    const bytes = typeof it.data === 'string'
+      ? new TextEncoder().encode(it.data)
+      : (it.data instanceof ArrayBuffer ? new Uint8Array(it.data) : it.data);
+    const w = await writeBinaryFile(path, bytes);
+    if (!w.ok) throw new Error(`could not write ${it.name}: ${w.error ?? 'unknown'}`);
+    lastNativePaths.push(path);
+  }
+  void native.fs({ verb: 'reveal', path: target }); // show it in Finder/Explorer, as a desktop app should
+  return 'downloaded';
+}
+
 export type DeliveryOutcome =
   | 'shared'       // the iOS share sheet took the files (Save to Files, AirDrop, …)
   | 'downloaded'   // classic <a download> fired
@@ -94,6 +133,14 @@ export async function deliverFiles(
   items: Array<{ name: string; data: ArrayBuffer | Uint8Array | string; mime?: string }>,
 ): Promise<DeliveryOutcome> {
   if (items.length === 0) return 'downloaded';
+
+  // NATIVE (the JUCE shell) FIRST — and this is not an optimisation, it is a bug fix. A WKWebView has no download
+  // manager: clicking an <a download href="blob:…"> NAVIGATES THE WEBVIEW to the blob, so the app's whole UI is
+  // replaced by a blank page ("Plug-in handled load") and Terminator looks dead. Exactly the failure this file's
+  // header already documents for the iOS iframe. Natively the shell owns the filesystem, so the bytes go through a
+  // real save dialog and terminatorFs instead of ever touching an anchor.
+  if (isNativeShell()) return saveFilesNative(items);
+
   const files = toShareFiles(items);
 
   if (isIOS() && canShareFiles(files)) {
