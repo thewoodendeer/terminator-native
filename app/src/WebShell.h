@@ -61,6 +61,8 @@ class WebShell final : public juce::Component, private juce::Timer
     static juce::File resolveUiDir();
 
     juce::var engineInfo() const;
+    /// RECORDING (5.1a): the `terminatorRecord` bridge function — start / stop / status for a native take.
+    juce::var handleRecord(const juce::var& req);
     juce::var deviceInfoVar() const;
     juce::var applyJsonCommand(const juce::var& json);
     juce::var handleAudio(const juce::var& req);

@@ -319,6 +319,12 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                 "terminatorSettings",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
                 { complete(services_.handleSettings(args.size() > 0 ? args[0] : juce::var())); })
+            // RECORDING (5.1a): {verb:'start', path, channels, inputs[], bitDepth} / {verb:'stop'} /
+            // {verb:'status'}. The take runs in the ENGINE, from the interface's own inputs — not through the
+            // page's getUserMedia, which is what the shipping app still does.
+            .withNativeFunction("terminatorRecord", [this](const juce::Array<juce::var>& args,
+                                                           juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                { complete(handleRecord(args.size() > 0 ? args[0] : juce::var())); })
             .withNativeFunction("terminatorInfo", [this](const juce::Array<juce::var>&,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { complete(engineInfo()); })
@@ -594,6 +600,58 @@ juce::var WebShell::deviceInfoVar() const
     d->setProperty("calibrationMs", calibrationResultMs_);
     d->setProperty("calibrationReportedSamples", calibrationReportedSamples_);
     return juce::var(d);
+}
+
+/// RECORDING (5.1a) — start / stop / status for a native take.
+juce::var WebShell::handleRecord(const juce::var& req)
+{
+    auto* obj = new juce::DynamicObject();
+    const auto verb = req.getProperty("verb", "status").toString();
+    const auto& rec = engine_.recorder();
+    const auto status = [&](juce::DynamicObject* o)
+    {
+        o->setProperty("recording", rec.recording());
+        o->setProperty("frames", static_cast<double>(rec.framesWritten()));
+        o->setProperty("captured", static_cast<double>(rec.framesCaptured()));
+        // DROPPED is reported to the page on purpose: a take with a hole in it has to be visible, not discovered
+        // later in the mix.
+        o->setProperty("dropped", static_cast<double>(rec.framesDropped()));
+        o->setProperty("peakL", static_cast<double>(rec.peak(0)));
+        o->setProperty("peakR", static_cast<double>(rec.peak(1)));
+    };
+    if (verb == "start")
+    {
+        RecorderConfig cfg;
+        cfg.file = juce::File(req.getProperty("path", "").toString());
+        cfg.sampleRate = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
+        cfg.numChannels = std::clamp(static_cast<int>(req.getProperty("channels", 2)), 1, 32);
+        cfg.bitDepth = static_cast<int>(req.getProperty("bitDepth", 24));
+        if (auto* ins = req.getProperty("inputs", juce::var()).getArray())
+            for (const auto& v : *ins)
+                cfg.inputChannels.push_back(static_cast<int>(v));
+        juce::String err;
+        const bool ok = cfg.file.getFullPathName().isNotEmpty() && engine_.startRecord(cfg, err);
+        obj->setProperty("ok", ok);
+        if (!ok)
+            obj->setProperty("error", err.isNotEmpty() ? err : juce::String("no path"));
+        obj->setProperty("path", cfg.file.getFullPathName());
+        status(obj);
+        return juce::var(obj);
+    }
+    if (verb == "stop")
+    {
+        const auto frames = engine_.stopRecord();
+        obj->setProperty("ok", true);
+        obj->setProperty("frames", static_cast<double>(frames));
+        const double sr = engine_.config().sampleRate > 0 ? engine_.config().sampleRate : 48000.0;
+        obj->setProperty("seconds", static_cast<double>(frames) / sr);
+        obj->setProperty("dropped", static_cast<double>(rec.framesDropped()));
+        obj->setProperty("recording", false);
+        return juce::var(obj);
+    }
+    obj->setProperty("ok", true);
+    status(obj);
+    return juce::var(obj);
 }
 
 juce::var WebShell::engineInfo() const

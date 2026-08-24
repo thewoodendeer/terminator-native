@@ -856,6 +856,9 @@ void Engine::process(const float* const* inputs, int numIn, float* const* output
                 }
                 inputPeak_[ch] = pk;
             }
+    // RECORDING (5.1a): the take gets the block BEFORE anything else looks at it — what is on the interface is
+    // what lands in the file, with nothing of ours in between.
+    recorder_.push(inputs, numIn, numSamples);
     if (calibState_ == 1 && inputs != nullptr && calibIn_ < nIn && inputs[calibIn_] != nullptr)
     {
         const float* in = inputs[calibIn_];

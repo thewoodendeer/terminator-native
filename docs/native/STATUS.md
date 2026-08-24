@@ -1739,6 +1739,37 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 5 — 5.1a DONE (THE NATIVE RECORDER: CAPTURE FROM THE INTERFACE), 2026-08-24
+
+Phase 4 is finished, so this starts Phase 5. **What the app does today:** RECORD SAMPLE goes through the PAGE —
+`getUserMedia` → `MediaRecorder` → decode — which in the native shell means the audio takes a trip through WebKit
+before it is a file: the interface's channels cannot be chosen, the format is whatever the browser felt like, and
+nothing is aligned to the transport. This is the engine's own path.
+
+`engine/io/Recorder.{h,cpp}` + `Engine::startRecord/stopRecord` + the `terminatorRecord` bridge function
+(`start` / `stop` / `status`) and `native.record` on the page's typed bridge.
+
+**The shape is the only safe one:** the audio thread does nothing but COPY into a preallocated ring — no
+allocation, no locks, no file I/O — and a writer thread drains it into a WAV. **If the writer falls behind, the
+ring drops the newest block and COUNTS it.** A take with a counted hole is worth more than one that silently
+splices the two sides together, because the second kind is only discovered later, in the mix. `dropped` is
+reported all the way out to the page for the same reason.
+
+24-bit is the default (what an interface actually gives); 32-bit float and 16 are there too. The take runs
+**before** anything else looks at the block, so what is on the interface is what lands in the file.
+
+**Gates (5.1a):** a new `test_recorder.cpp`, 6 cases — what goes in is what lands in the file, sample for sample at
+32-bit float · 24-bit really is 24-bit and lands within a step and a half · **the audio thread never allocates**
+(the allocation counter around `push()`, so this gate runs on Windows CI too, not only under RTSan) · an overrun is
+counted and every frame is accounted for as either captured or dropped · the recorded channels are the ones asked
+for, in the order asked for (a take of inputs 3 and 1 — "the first two" is not good enough for anyone with more
+than a stereo input) · a bad path fails cleanly and leaves nothing for a later `stop()` to trip over.
+**mac-debug ctest 373/373 · RTSan 374/374 · app probe PROBE OK · ui typecheck 5 = baseline.**
+
+**NEXT (5.1b):** move the RECORD SAMPLE button onto this — which needs the input-device / channel picker, the
+level meter reading `status`, and the recording landing in the library as it does today. Then 5.1c: monitoring,
+punch/count-in, and the transport-aligned start that makes a take land on the grid.
+
 ## Phase 4 — 4.7d DONE (GROUPS AND BUSES — THE LAST ITEM ON THE BRIEF), 2026-08-24
 
 The routing half of B4: "any channel can route to any channel to create groups and busses", and "multi-select

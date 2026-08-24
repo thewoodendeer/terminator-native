@@ -22,6 +22,7 @@
 #include "terminator/core/RtAssert.h"
 #include "terminator/core/Sampler.h"
 #include "terminator/core/StateSnapshot.h"
+#include "terminator/io/Recorder.h"
 
 namespace terminator
 {
@@ -116,6 +117,13 @@ class Engine
     const Mixer& mixer() const noexcept { return *mixer_; }
 
     // --- RT ------------------------------------------------------------------------------------
+    // --- RECORDING (5.1a, message thread) -------------------------------------------------------
+    /// Start a take from the interface's inputs. The audio callback hands every block to it until `stopRecord()`.
+    bool startRecord(const RecorderConfig& cfg, juce::String& error) { return recorder_.start(cfg, error); }
+    /// Stop and close the file; returns the frames written.
+    std::uint64_t stopRecord() { return recorder_.stop(); }
+    const Recorder& recorder() const noexcept { return recorder_; }
+
     /// Renders numSamples into outputs[0..numOut). Always overwrites. inputs may be null / numIn 0. Safe to call
     /// before prepare() (renders silence). hostTimeNs = host time at callback entry (0 = unknown).
     void process(const float* const* inputs, int numIn, float* const* outputs, int numOut, int numSamples,
@@ -203,6 +211,9 @@ class Engine
     std::uint64_t prevBlockHostNs_ = 0; // entry time of the previous block (MIDI offsets are relative to it)
     float outputPeak_[kMaxOutputChannels] = {};
     float inputPeak_[kMaxInputChannels] = {};
+    /// RECORDING (5.1a): the take, if one is running. Owned here because the audio callback has to reach it, but
+    /// started and stopped from the message thread — `push()` is the only thing the audio thread calls.
+    Recorder recorder_;
 
     // the last LIVE trigger (a command / a booked hit / a MIDI note on the direct path): pad + its engine sample — the
     // page's live-record probe compares it to the landed grid line (3.7)

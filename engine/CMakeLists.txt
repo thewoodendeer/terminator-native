@@ -41,6 +41,7 @@ add_library(terminator_engine STATIC
     include/terminator/core/planners/LoopRender.h
     include/terminator/io/AudioIO.h
     include/terminator/io/MidiHub.h
+    include/terminator/io/Recorder.h
     include/terminator/io/SampleLoader.h
     include/terminator/io/SampleStore.h
     include/terminator/io/Settings.h
@@ -79,6 +80,7 @@ add_library(terminator_engine STATIC
     src/core/Arp.cpp
     src/io/AudioIO.cpp
     src/io/MidiHub.cpp
+    src/io/Recorder.cpp
     src/io/SampleLoader.cpp
     src/io/SampleStore.cpp
     src/io/Settings.cpp

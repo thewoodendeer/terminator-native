@@ -69,6 +69,14 @@ export const native = {
    *  `{project, main?, sources?{videoId: key}, drumLanes?{lane: key}, path, bitDepth?, sampleRate?, loops?, tail?,
    *   mixer?, drums?, bass?, limiter?, stems?[channel]}` → `{ok, files[], seconds, sampleRate, bitDepth}`. */
   exportProject: lazy<AnyRecord, AnyRecord>('terminatorExport'),
+  /** Phase 5.1a: RECORD from the interface's own inputs, in the ENGINE. `{verb:'start', path, channels?, inputs?[],
+   *  bitDepth?}` → `{ok, path, error?}`; `{verb:'stop'}` → `{ok, frames, seconds, dropped}`; `{verb:'status'}` →
+   *  `{recording, frames, captured, dropped, peakL, peakR}`.
+   *
+   *  This is NOT what the RECORD SAMPLE button uses yet — that still goes through the page's getUserMedia, which
+   *  in the shell means the audio takes a trip through WebKit before it is a file: no channel choice, no say in
+   *  the format, nothing aligned to the transport. Moving the button onto this is the next step (5.1b). */
+  record: lazy<AnyRecord, AnyRecord>('terminatorRecord'),
 };
 
 /** Subscribe to a shell event (`terminator.snapshot` 20 Hz, `terminator.devicesChanged`, `terminator.midiChanged`,

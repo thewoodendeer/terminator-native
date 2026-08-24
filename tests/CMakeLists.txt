@@ -37,6 +37,7 @@ add_executable(terminator-tests
     engine/test_fx_devices.cpp
     engine/test_analog_fx.cpp
     engine/test_fx_route.cpp
+    engine/test_recorder.cpp
     engine/test_console.cpp
     engine/test_loudness.cpp
     engine/test_pdc.cpp
