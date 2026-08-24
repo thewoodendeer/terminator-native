@@ -4,10 +4,12 @@
 # this target is only "run a chunk through htdemucs".
 add_library(terminator_stems STATIC
     include/terminator/stems/StemModel.h
-    src/StemModel.cpp)
+    include/terminator/stems/StemModels.h
+    src/StemModel.cpp
+    src/StemModels.cpp)
 add_library(terminator::stems ALIAS terminator_stems)
 target_include_directories(terminator_stems PUBLIC include)
 target_link_libraries(terminator_stems
-    PUBLIC terminator::engine onnxruntime::onnxruntime
+    PUBLIC terminator::engine onnxruntime::onnxruntime juce::juce_cryptography
     PRIVATE juce::juce_recommended_config_flags)
 terminator_set_warnings(terminator_stems)

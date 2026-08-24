@@ -1797,12 +1797,28 @@ process, with no Node child, no temp file and no IPC — and it produces the SAM
 Also worth re-running: `arch -x86_64` on the universal CLI, which drives the Intel slice of the same universal
 dylib (measured: 121–124 dB against the arm64 slice, so both slices agree).
 
-### Gates
-`mac-debug` 409/409 · `mac-rtsan` 407/407 · zero warnings · `mac-release-universal` builds and
-`lipo -info terminator-stems` = x86_64 arm64 · the model-backed case runs with
-`TERMINATOR_STEMS_MODEL=<htdemucs_fp16weights.onnx>` and skips without it (a 166 MB model is not a fixture).
+### Gates (the three commits together)
+`mac-debug` **414/414** · `mac-rtsan` **415/415** · zero new warnings (the only ones left are Phase 6's
+`-Wfunction-effects` lines in PluginFx.h) · `mac-release-universal` builds and `lipo -info terminator-stems` =
+`x86_64 arm64` · the model-backed case runs with `TERMINATOR_STEMS_MODEL=<htdemucs_fp16weights.onnx>` and skips
+without it (a 166 MB model is not a repo fixture).
 
-### Next (7.1c, the session after this)
+### 7.1c (part 1) — the models on disk (`stems/StemModels.{h,cpp}`)
+Same files, same R2 URLs and the same SHA-256s as the Electron app, into `<dataDir>/stems/models` (Preferences
+→ FOLDERS can move it, and pointing it at the Electron app's folder skips the download entirely). Every file
+is size- AND hash-checked; a partial or corrupt one is deleted, never left to be "the model" later. Progress
+0..100 over the whole job, cancellable, blocking (it belongs on a background thread). 5 gates run against a
+local fixture server over `file://` URLs with a tiny manifest — nothing in CI touches R2 or a 166 MB file.
+
+### Two things 7.1c part 2 has to handle (known, not bugs yet)
+- **The accumulators are the whole track.** 8 planes + the weight = 36 bytes a frame at 44.1k, so a 6-minute
+  song is ~570 MB while it splits (`SplitSession::accumulatorBytes()` reports it). The plan's answer is
+  streaming: free a chunk's rows once every span covering them has gone out, with a cap above that.
+- **Two downloads of the same model at once** (Preferences → DOWNLOAD while a split starts one) would both
+  write the same `.part`. `StemModels` is documented as one-thread-at-a-time; the hub has to serialise it, the
+  way the Electron version's inflight map does.
+
+### Next (7.1c part 2, the session after this)
 The split is not on the bridge yet — the page's `stemsSplit` / `onStemsChunk` still hit the browser shim, so
 the app's STEMS button does nothing native. **The decision to make first: where the stem audio LIVES.** The
 page contract ships 8 planes of floats per span, which is ~8 MB a span through `emitEvent` — not viable. The

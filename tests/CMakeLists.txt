@@ -53,7 +53,7 @@ add_executable(terminator-tests
 # The stem MODEL cases only exist where onnxruntime was provisioned (not in the RTSan/ASan presets, which build
 # neither the app nor the CLIs).
 if(TARGET terminator_stems)
-    target_sources(terminator-tests PRIVATE engine/test_stems_model.cpp)
+    target_sources(terminator-tests PRIVATE engine/test_stems_model.cpp engine/test_stems_models.cpp)
     target_link_libraries(terminator-tests PRIVATE terminator::stems)
 endif()
 target_include_directories(terminator-tests PRIVATE support)
