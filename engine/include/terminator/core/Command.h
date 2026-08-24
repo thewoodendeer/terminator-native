@@ -92,6 +92,10 @@ enum class CommandType : std::uint32_t
     arpHold,       // arp.pad + arp.velocity + arp.atSample (0 = the next block) — hold: the arp steps from there; with
                    // the arp off it is a plain trigger
     arpRelease,    // arp.pad — release: stops the arp when it is the held pad (−1 = whatever is held)
+    // ---- plugins (Phase 6.2, core/fx/PluginFx.h) ----
+    mixerSetFxProcessor, // fxProc.strip + fxProc.index + fxProc.processor — attach (or detach, nullptr) the APP's
+                         // plugin instance to a `plugin` insert slot. The engine never learns what a VST3 is; the
+                         // app may only DELETE the instance after detaching AND letting blocks run (PluginFx.h)
     // ---- input monitoring (Phase 5.1c, io/Recorder.h is the take; this is hearing it) ----
     setMonitor, // monitor.enabled + monitor.ch0/ch1 (hardware inputs, −1 = none — one channel feeds both sides) +
                 // monitor.gain (linear) + monitor.strip (a mixer strip, so its fader/inserts/console apply;
@@ -282,6 +286,13 @@ struct Command
         {
             std::uint8_t flag;
         } midi;
+
+        struct FxProc
+        {
+            void* processor; // ExternalProcessor* (nullptr = detach)
+            std::int16_t strip;
+            std::int8_t index; // the insert slot
+        } fxProc;
 
         struct Monitor
         {
@@ -759,6 +770,16 @@ struct Command
         return c;
     }
     static Command cancelCountIn() noexcept { return metroCmd(CommandType::cancelCountIn); }
+    /// 6.2: hand a hosted plugin to (or take it from) an insert slot. `processor` is an `ExternalProcessor*`.
+    static Command mixerSetFxProcessor(int strip, int index, void* processor) noexcept
+    {
+        Command c;
+        c.type = CommandType::mixerSetFxProcessor;
+        c.payload.fxProc.processor = processor;
+        c.payload.fxProc.strip = static_cast<std::int16_t>(strip);
+        c.payload.fxProc.index = static_cast<std::int8_t>(index);
+        return c;
+    }
     /// Input monitoring (5.1c): hear inputs ch0/ch1 through the engine at `gain`, optionally through a mixer strip.
     static Command setMonitor(bool enabled, int ch0, int ch1, float gain, int strip) noexcept
     {

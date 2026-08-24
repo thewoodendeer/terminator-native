@@ -1751,6 +1751,57 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 6 — 6.2 DONE (YOUR PLUGINS ARE IN THE CHAIN), 2026-08-24
+
+A VST3 / Audio Unit is an INSERT now: pick it in a mixer slot, hear it in the engine's own chain, open its window,
+and the choice travels with the project.
+
+**The split that keeps the engine headless.** The engine never learns what a VST3 is: `core/fx/PluginFx.h` is a
+slot holding an `ExternalProcessor*` — an interface the APP implements over `juce::AudioPluginInstance` — handed
+over by `Command::mixerSetFxProcessor`. `libterminator` still links no plugin machinery at all (the CLI renderer
+and the tests prove it). An EMPTY plugin slot is a pass-through, bit for bit, so a chain restored from a project
+keeps its slot while the app is still loading the plugin and the mix does not stop for it.
+- **Lifetime is the whole game.** The app may only destroy an instance after detaching it AND letting the engine
+  run blocks; `PluginRack` keeps a retired list and drains it against `blocksProcessed` (or at once when the engine
+  is not running). Same rule on a device change: detach, `releaseResources` / `prepareToPlay` at the new rate,
+  re-attach.
+- **PDC:** a plugin brings its latency with it, so `Mixer::setFxProcessor` rebuilds the plan when the number moves.
+- **The app half** (`app/src/PluginRack.{h,cpp}`): `open` (with a saved state), `close`, `editor` (the plugin's own
+  window, in its own `DocumentWindow`), `state` / `setState` (base64 — what a project carries), `params` /
+  `setParam`, `rack`. Stereo in / stereo out is requested so the engine's two channels are wrapped with NO COPY;
+  a plugin that refuses keeps its own layout and gets a scratch buffer sized once.
+- **The page half:** `plugin` is an FX_REGISTRY entry (`ui/src/mixer/fx/PluginFX.ts`, a documented pass-through
+  like every premium device) offered only inside the shell. Its `PLUGIN` param is the plugin's identifier and
+  `STATE` its own settings — both ordinary params, so they ride the chain into the project, through a copy/paste of
+  the slot, everywhere. The mixer's device panel gets an **EDITOR** button; the picker lists what the scan found.
+  The shadow loads/unloads as slots change (a remove or a reorder re-seats the strip's plugins rather than guessing
+  at the new indices) and pulls each plugin's own state back into the chain every 15 s — a plugin's state changes
+  while you turn ITS knobs, in ITS window, and nothing tells us when.
+
+**Two real bugs, both found by making the gate real:**
+1. **The known-plugin list never survived a relaunch.** `KnownPluginList::createXml()` makes its own
+   `<KNOWNPLUGINS>` element, which `save()` put inside a `<KNOWN>` wrapper — and `load()` handed the WRAPPER to
+   `recreateFromXml`, which silently found no plugins. Every launch started empty, and nothing said so. The probe
+   caught it because it reports `known` before scanning.
+2. **The scan child booted a whole GUI app.** The `--scan-plugin` branch lived in `initialise()`, so every child
+   became an NSApplication. `main()` now forks the road BEFORE JUCE's app machinery: the child brings up only the
+   message manager, hides itself from the Dock and prints the descriptions.
+
+**Gates:** `tests/engine/test_plugin_fx.cpp` (4 cases: an empty slot is bit-identical to no slot · an attached
+processor is heard and WET blends it · its latency joins the PDC plan on attach and leaves on detach · attaching,
+running and detaching allocate nothing) — **ctest 391/391**. Probe: `plugins62` opens a REAL VST3 on a strip and
+asserts the ENGINE's slot is holding it (`attached` / `detached`), and the shadow's self-test drives the same
+thing from the PAGE (`pluginHosted` / `pluginUnhosted` — verified true locally with AIR Tape Echo). Both degrade
+to "skipped" on a machine with no plugins, which is every CI runner.
+
+**Known local flake, NOT this work:** the probe's `prefsWindow` assertion fails on this Mac right now — measured
+against a clean baseline build of the previous commit, which fails it too, while CI is green on the same check.
+Environmental; do not chase it in code.
+
+**Not done in 6.2 (on purpose):** instruments (6.3 — a plugin as a pad/bass sound), plugin params on the page's own
+knobs (the editor is the way in for now), offline render with plugins (6.4 — `ProjectRenderer` builds its own
+mixer, so an exported mix has no plugins in it YET), MIDI learn on plugin params (6.5) and the crash drills (6.6).
+
 ## Phase 6 — 6.1 DONE (THE PLUGIN SCAN, IN CHILD PROCESSES), 2026-08-24
 
 Terminator can see his VST3s and Audio Units. `app/src/PluginHub.{h,cpp}` + `terminatorPlugins` + a

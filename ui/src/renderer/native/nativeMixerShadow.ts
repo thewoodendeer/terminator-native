@@ -33,6 +33,8 @@
  */
 import { MixerEngine, ChannelName, setMixerNativeSink, setMixerNativeMeters, SEND_CHANNELS, FADER_MIN_DB } from '../../mixer/MixerEngine';
 import type { FxId } from '../../mixer/fx';
+import { native } from './juceBridge';
+import { forgetStrip, noteStrip } from './pluginSlots';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -81,7 +83,13 @@ export class NativeMixerShadow {
       mute: (name, on) => this.queue({ type: 'mixerSetMute', strip: this.stripFor(name), on }),
       solo: (name, on) => this.queue({ type: 'mixerSetSolo', strip: this.stripFor(name), on }),
       fxAdd: (name, index, id, params) => this.fxAdd(name, index, id, params),
-      fxRemove: (name, index) => this.queue({ type: 'mixerRemoveFx', strip: this.idxOf(name), index }),
+      fxRemove: (name, index) => {
+        // 6.2: the hosted plugin goes with the slot — and every slot ABOVE it shifts down, so the strip's plugins
+        // are re-seated from the page's chain rather than guessed at.
+        this.closePlugins(this.idxOf(name));
+        this.queue({ type: 'mixerRemoveFx', strip: this.idxOf(name), index });
+        this.reseatPlugins(name);
+      },
       fxBypass: (name, index, on) => this.queue({ type: 'mixerSetFxBypass', strip: this.idxOf(name), index, on }),
       // M/S everywhere (4.7a): the SLOT's route. The engine owns the split (and the delay that keeps the untouched
       // half aligned when the device has latency), so only the choice crosses.
@@ -91,9 +99,21 @@ export class NativeMixerShadow {
         ? { type: 'mixerSetOutput', strip: this.idxOf(name), to: 'master' }
         : { type: 'mixerSetOutput', strip: this.idxOf(name), to: 'strip', index: this.idxOf(target) }),
       fxRoute: (name, index, route) => this.queue({ type: 'mixerSetFxRoute', strip: this.idxOf(name), index, route }),
-      fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value: this.fxValue(id, key, value) }),
-      fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
-      fxClear: (name) => this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) }),
+      fxParam: (name, index, id, key, value) => {
+        // 6.2: PLUGIN is the plugin's IDENTITY, not a knob — picking one loads it; STATE is its own settings and
+        // is handed over when it loads. Neither is a number the engine wants.
+        if (id === 'plugin' && (key === 'PLUGIN' || key === 'STATE')) { this.openPlugin(name, index); return; }
+        this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value: this.fxValue(id, key, value) });
+      },
+      fxReorder: (name, from, to) => {
+        this.closePlugins(this.idxOf(name));
+        this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to });
+        this.reseatPlugins(name);
+      },
+      fxClear: (name) => {
+        this.closePlugins(this.idxOf(name));
+        this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) });
+      },
       console: (settings) => this.queue({ type: 'mixerSetConsole', on: settings.on, flavour: settings.flavour, amount: settings.amount }),
       pdc: (on) => this.queue({ type: 'mixerSetPdc', on }),
     });
@@ -106,6 +126,8 @@ export class NativeMixerShadow {
     this.queue({ type: 'mixerSetLimiter', on: true }); // the page's master always carries its −1 dBFS safety limiter
     this.queue({ type: 'mixerSetPdc', on: this.mixer.pdcOn }); // PDC (4.4) — the engine builds the plan itself
     this.installMeters();
+    // 6.2: keep the plugins' own state fresh in the page's chain (see syncPluginStates)
+    this.stateTimer = window.setInterval(() => { void this.syncPluginStates(); }, 15000);
     this.activate(CLICK_STRIP, 'channel', 'click');
     this.queue({ type: 'mixerSetFader', strip: CLICK_STRIP, db: 0 });
     this.queue({ type: 'setSourceStrip', source: 'click', strip: CLICK_STRIP });
@@ -114,6 +136,8 @@ export class NativeMixerShadow {
 
   detach(): void {
     this.detached = true;
+    if (this.stateTimer !== 0) { clearInterval(this.stateTimer); this.stateTimer = 0; }
+    for (const idx of this.live) void native.plugins({ verb: 'close', strip: idx, slot: -1 }).catch(() => {});
     setMixerNativeSink(null);
     setMixerNativeMeters(null);
     // the sources back to their direct paths, the strips off (the pads are unbound by the engine shadow's detach)
@@ -128,11 +152,12 @@ export class NativeMixerShadow {
    *  place. −1 when the pool is exhausted (63 strips). */
   stripFor(name: ChannelName): number {
     const have = this.names.get(name);
-    if (have !== undefined) { if (!this.live.has(have) && !this.detached) this.activate(have, name.startsWith('send') ? 'send' : name.startsWith('bus') ? 'bus' : 'channel', name); return have; }
+    if (have !== undefined) { noteStrip(name, have); if (!this.live.has(have) && !this.detached) this.activate(have, name.startsWith('send') ? 'send' : name.startsWith('bus') ? 'bus' : 'channel', name); return have; }
     const used = new Set(this.names.values());
     for (let i = FIRST_DYNAMIC_STRIP; i < MAX_STRIPS; i++) {
       if (used.has(i)) continue;
       this.names.set(name, i);
+      noteStrip(name, i); // 6.2: the mixer UI addresses a plugin by CHANNEL, the app by strip index
       this.activate(i, 'channel', name);
       return i;
     }
@@ -242,7 +267,60 @@ export class NativeMixerShadow {
     const strip = this.idxOf(name);
     if (strip < 0) return;
     this.queue({ type: 'mixerAddFx', strip, fx: id });
-    for (const [key, value] of Object.entries(params)) this.queue({ type: 'mixerSetFxParam', strip, index, fx: id, key, value: this.fxValue(id, key, value), immediate: true });
+    for (const [key, value] of Object.entries(params)) {
+      if (id === 'plugin' && (key === 'PLUGIN' || key === 'STATE')) continue; // not knobs: see openPlugin
+      this.queue({ type: 'mixerSetFxParam', strip, index, fx: id, key, value: this.fxValue(id, key, value), immediate: true });
+    }
+    if (id === 'plugin') this.openPlugin(name, index);
+  }
+
+  // ── PLUGINS (6.2): the page owns the CHOICE (the PLUGIN param, which rides the chain into the project); the app
+  // owns the INSTANCE. These three keep the two in step. Everything goes through the same promise chain as the
+  // commands, so a plugin is never loaded into a slot the engine has not made yet.
+  private openPlugin(name: ChannelName | 'master', index: number): void {
+    const strip = this.idxOf(name);
+    if (strip < 0 || this.detached) return;
+    const pageStrip = name === 'master' ? this.mixer.master : this.mixer.channels.get(name);
+    const fx = pageStrip?.fx[index];
+    if (!fx) return;
+    const id = String(fx.params.PLUGIN ?? '');
+    const state = String(fx.params.STATE ?? '');
+    this.chain = this.chain
+      .then(() => (id ? native.plugins({ verb: 'open', strip, slot: index, id, state })
+                      : native.plugins({ verb: 'close', strip, slot: index })))
+      .then(() => {})
+      .catch(() => {});
+  }
+  /** Every loaded plugin's own state, written back into the page's chain so a project save carries it. A plugin's
+   *  state changes while you turn ITS knobs, in ITS window — nothing tells us when — so it is pulled on a slow
+   *  timer and once more whenever `syncPluginStates()` is called (a save can await it). */
+  async syncPluginStates(): Promise<void> {
+    if (this.detached) return;
+    const rack: any = await native.plugins({ verb: 'rack' }).catch(() => null);
+    for (const entry of (rack?.rack ?? []) as Array<{ strip: number; slot: number }>) {
+      const name = [...this.names.entries()].find(([, idx]) => idx === entry.strip)?.[0]
+        ?? (entry.strip === 0 ? 'master' : undefined);
+      if (!name) continue;
+      const pageStrip = name === 'master' ? this.mixer.master : this.mixer.channels.get(name as ChannelName);
+      const fx = pageStrip?.fx[entry.slot];
+      if (!fx || pageStrip?.fxIds[entry.slot] !== 'plugin') continue;
+      const st: any = await native.plugins({ verb: 'state', strip: entry.strip, slot: entry.slot }).catch(() => null);
+      // written straight into the params record: setFxParam would send it back to the app and re-load the plugin
+      if (st?.ok && typeof st.state === 'string') fx.params.STATE = st.state;
+    }
+  }
+
+  /** Unload every plugin on a strip (its slots are about to move or go). */
+  private closePlugins(strip: number): void {
+    if (strip < 0 || this.detached) return;
+    this.chain = this.chain.then(() => native.plugins({ verb: 'close', strip, slot: -1 })).then(() => {}).catch(() => {});
+  }
+  /** …and load them again where the page's chain now says they are. */
+  private reseatPlugins(name: ChannelName | 'master'): void {
+    const pageStrip = name === 'master' ? this.mixer.master : this.mixer.channels.get(name);
+    if (!pageStrip) return;
+    for (let i = 0; i < pageStrip.fx.length; i++)
+      if (pageStrip.fxIds[i] === 'plugin') this.openPlugin(name, i);
   }
   /** A page param value as the engine takes it. Enum strings go through as-is (the shell maps them by the device's
    *  option table); the SC COMP's SOURCE is a page channel NAME here and the key strip's INDEX natively (−1 = NONE). */
@@ -257,7 +335,8 @@ export class NativeMixerShadow {
     if (present) { this.mirror(name, kind); return; }
     const idx = this.names.get(name);
     if (idx === undefined) return;
-    if (idx >= FIRST_DYNAMIC_STRIP) this.names.delete(name); // a dynamic slot goes back to the pool; fixed names keep theirs
+    this.closePlugins(idx); // 6.2: its hosted plugins go with it
+    if (idx >= FIRST_DYNAMIC_STRIP) { this.names.delete(name); forgetStrip(name); } // a dynamic slot goes back to the pool; fixed names keep theirs
     if (this.live.delete(idx)) this.queue({ type: 'mixerSetStrip', strip: idx, kind: 'off' });
   }
   private send(name: ChannelName, index: number, db: number): void {
@@ -267,6 +346,8 @@ export class NativeMixerShadow {
     if (target >= 0 && !this.live.has(target) && !this.detached) this.activate(target, 'send', ret); // the return exists natively even before the page mirrors it
     this.queue({ type: 'mixerSetSend', strip: this.stripFor(name), send: index, db, target });
   }
+  private stateTimer = 0; // 6.2: the slow pull of every hosted plugin's own state
+
   private queue(c: AnyRecord): void {
     if (this.detached) return;
     if (typeof c.strip === 'number' && (c.strip as number) < 0) return;

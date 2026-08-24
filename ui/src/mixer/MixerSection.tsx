@@ -8,6 +8,10 @@ import {
   BUS_CHANNELS,
 } from './MixerEngine';
 import { FX_REGISTRY, FX_ORDER, FxId, ParamSpec, WET_PARAM_KEYS } from './fx';
+// PLUGINS (6.2): the picker's options and the EDITOR button. Outside the Terminator 3.0 shell this module is inert
+// and the `plugin` insert is not offered at all — a browser has nothing to host a VST3 with.
+import { isNative } from '../renderer/native/juceBridge';
+import { cachedPlugins, listPlugins, openPluginEditor } from '../renderer/native/pluginSlots';
 import { MidiMapTarget } from '../renderer/chopper/MidiMap';
 import type { HwPalette } from '../renderer/chopper/hwPalettes';
 import { LoudnessPopup } from './LoudnessPopup';
@@ -367,6 +371,9 @@ function MixerSectionImpl({ engine, clip, onClip, palette, transportOn }: {
   // subset of openPanels that are collapsed to a thin vertical tab
   const [collapsedPanels, setCollapsedPanels] = useState<string[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
+  // PLUGINS (6.2): the scanned effects, fetched once and cached in pluginSlots (empty outside the shell).
+  const [pluginList, setPluginList] = useState(cachedPlugins());
+  useEffect(() => { if (isNative()) void listPlugins().then(setPluginList); }, []);
   const [renaming, setRenaming] = useState<string | null>(null);
 
   // ── strip sizing / sends collapse ──────────────────────────────────
@@ -1115,7 +1122,8 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                 e.currentTarget.value = '';
               }}>
               <option value="">＋ INSERT FX</option>
-              {FX_ORDER.map(fxId => <option key={fxId} value={fxId} title={FX_REGISTRY[fxId].desc}>{FX_REGISTRY[fxId].name}</option>)}
+              {FX_ORDER.filter(fxId => fxId !== 'plugin' || isNative())
+                .map(fxId => <option key={fxId} value={fxId} title={FX_REGISTRY[fxId].desc}>{FX_REGISTRY[fxId].name}</option>)}
             </select>
           );
         })}
@@ -1224,6 +1232,10 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                       <span className="mx-param-val" ref={el => { scGrRefs.current.set(key, el); }}>0.0 dB</span>
                     </span>
                   )}
+                  {id === 'plugin' && (
+                    <button className="mx-plugin-editor" title="Open the plugin's own window"
+                      onClick={e => { e.stopPropagation(); void openPluginEditor(ch, idx); }}>EDITOR</button>
+                  )}
                   {def.params.map(spec0 => {
                     const pKey = `${ch}:${idx}:${spec0.key}`;
                     const mm = midiMappings.current.get(pKey);
@@ -1234,6 +1246,12 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                           { label: 'NONE', value: 'NONE' },
                           ...[...REGULAR_CHANNELS, ...SEND_CHANNELS].filter(n => n !== ch)
                             .map(n => ({ label: names[n] ?? chMeta(engine, n).label, value: n })),
+                        ] }
+                      // PLUGINS (6.2): the options are whatever the app has scanned (Preferences -> PLUGINS)
+                      : spec0.kind === 'select' && spec0.dynamic === 'plugins'
+                      ? { ...spec0, options: [
+                          { label: '— none —', value: '' },
+                          ...pluginList.map(p => ({ label: `${p.name} · ${p.format}`, value: p.id })),
                         ] }
                       : spec0;
                     return (

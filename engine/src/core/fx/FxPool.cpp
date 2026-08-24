@@ -1,5 +1,7 @@
 #include "terminator/core/fx/FxPool.h"
 
+#include "terminator/core/fx/PluginFx.h"
+
 #include <cstring>
 
 #include "terminator/core/fx/AnalogFx.h"
@@ -253,6 +255,10 @@ const FxParamDef kReverbParams[] = {
 
 // wetParam: the WET the CHAIN crossfades (−1 = fully wet in the chain: no WET, or the device blends internally with
 // a latency-matched dry leg — MB SAT, COMP)
+// 6.2 — a hosted plugin's OWN parameters are its business (the app reads them off the instance and the editor
+// drives them); the only thing the chain needs is the mix, so it can sit a plugin in parallel like any device.
+const FxParamDef kPluginParams[] = {{"WET", 0.0f, 100.0f, 100.0f}};
+
 const FxTypeInfo kTypes[] = {
     {FxType::none, "", nullptr, 0, -1},
     {FxType::clip, "clip", kClipParams, 1, -1},
@@ -281,6 +287,7 @@ const FxTypeInfo kTypes[] = {
     {FxType::retro, "retro", kRetroParams, 9, 8},
     {FxType::eq6, "eq6", kEq6Params, 31, -1}, // an EQ is not a parallel device: no WET
     {FxType::channelstrip, "channelstrip", kChannelStripParams, 24, -1},
+    {FxType::plugin, "plugin", kPluginParams, 1, 0}, // 6.2: WET is the chain's own crossfade, so a plugin blends
 };
 static_assert(sizeof(kTypes) / sizeof(kTypes[0]) == static_cast<std::size_t>(FxType::count));
 
@@ -329,6 +336,8 @@ int capacityOf(FxType t) noexcept
         return 32;
     case FxType::channelstrip:
         return 32;
+    case FxType::plugin:
+        return 32; // slots, not plugins: the instance itself lives in the app
     case FxType::wide:
     case FxType::mseq:
     case FxType::pan:
@@ -379,6 +388,8 @@ std::unique_ptr<Effect> make(FxType t)
         return std::make_unique<EqFx6>();
     case FxType::channelstrip:
         return std::make_unique<ChannelStripFx>();
+    case FxType::plugin:
+        return std::make_unique<PluginFx>();
     case FxType::wide:
         return std::make_unique<WideFx>();
     case FxType::mseq:

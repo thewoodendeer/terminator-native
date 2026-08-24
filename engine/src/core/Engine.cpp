@@ -558,6 +558,10 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::countIn:
         metro_.countIn(c.payload.metro.beats, c.payload.metro.atSample, samplesProcessed_);
         break;
+    case CommandType::mixerSetFxProcessor:
+        mixer_->setFxProcessor(c.payload.fxProc.strip, c.payload.fxProc.index,
+                               static_cast<ExternalProcessor*>(c.payload.fxProc.processor));
+        break;
     case CommandType::setMonitor:
         // INPUT MONITORING (5.1c): hear what you are about to record. The gain RAMPS (monitorGainCurrent_), so a
         // level move while you are listening is a fade, not a click.

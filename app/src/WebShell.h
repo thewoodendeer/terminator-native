@@ -26,6 +26,7 @@
 #include "terminator/io/Settings.h"
 
 #include "PluginHub.h"
+#include "PluginRack.h"
 #include "ProcessHub.h"
 #include "SampleRegistry.h"
 #include "ShellServices.h"
@@ -64,7 +65,9 @@ class WebShell final : public juce::Component, private juce::Timer
     juce::var engineInfo() const;
     /// RECORDING (5.1a): the `terminatorRecord` bridge function — start / stop / status for a native take.
     juce::var handleRecord(const juce::var& req);
-    juce::var probeRecordArm();                      // probe: the 5.1c arm + monitor over the bridge handler
+    juce::var probeRecordArm();
+    juce::var probePluginRack(); // probe: a REAL plugin opened on a strip and attached (6.2)                      //
+                                 // probe: the 5.1c arm + monitor over the bridge handler
     std::uint64_t recordLatencyCompensation() const; // 5.1d: the measured round trip, else the reported latencies
     juce::String recordPath_; // the take in progress (5.1c: a punch-out closes it here and tells the page which file)
     juce::var deviceInfoVar() const;
@@ -96,6 +99,8 @@ class WebShell final : public juce::Component, private juce::Timer
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
     ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
     PluginHub plugins_;       // terminatorPlugins — the VST3/AU scan (in child processes) + the known list (6.1)
+    PluginRack rack_;         // …and the loaded ones: instances, editors, state (6.2). MUST be declared after
+                              // plugins_ (it holds a reference) and destroyed before the engine stops
     juce::String audioError_;
     std::unique_ptr<Browser> browser_;
     std::unique_ptr<PrefsWindow> prefsWindow_; // Preferences = a second window hosting the React preferences page

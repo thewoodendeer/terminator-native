@@ -225,7 +225,8 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     : engine_(engine), audioIO_(audioIO), midi_(midi), samples_(samples), loader_(loader), settings_(settings),
       services_(settings), registry_(engine, samples, loader),
       processes_([this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); }),
-      plugins_(settings.file().getSiblingFile("plugins.xml")), audioError_(std::move(audioError))
+      plugins_(settings.file().getSiblingFile("plugins.xml")), rack_(engine, plugins_),
+      audioError_(std::move(audioError))
 {
     plugins_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
     const auto probePath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_FILE", {});
@@ -352,7 +353,12 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
             .withNativeFunction(
                 "terminatorPlugins",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
-                { complete(plugins_.handle(args.size() > 0 ? args[0] : juce::var())); })
+                {
+                    // The scan + the list are PluginHub's; anything touching a LOADED plugin is the rack's.
+                    const auto req = args.size() > 0 ? args[0] : juce::var();
+                    complete(PluginRack::ownsVerb(req.getProperty("verb", "").toString()) ? rack_.handle(req)
+                                                                                          : plugins_.handle(req));
+                })
             .withNativeFunction(
                 "terminatorProcess",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
@@ -1977,6 +1983,69 @@ void WebShell::runProbeAsyncChecks()
 // PROBE (5.1c): the ARM and the MONITOR over the real bridge handler — the engine's own behaviour is gated in
 // ctest; what this checks is the JSON path the page actually calls. The take is armed a minute into the future, so
 // it must report ARMED and capture nothing, and the file is dropped again.
+// PROBE (6.2): a REAL plugin, all the way through — scanned, opened on a strip, attached to the engine's insert
+// slot (checked on the mixer itself, not on the reply), its state read back, then closed. Needs a plugin to point
+// at: TERMINATOR_PROBE_PLUGIN=<a .vst3>. Without one it reports skipped, because CI runners have no plugins.
+juce::var WebShell::probePluginRack()
+{
+    auto* o = new juce::DynamicObject();
+    const auto path = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_PLUGIN", {});
+    o->setProperty("skipped", path.isEmpty());
+    if (path.isEmpty())
+        return juce::var(o);
+    // the id of whatever the scanFile check added
+    juce::String id;
+    {
+        auto* req = new juce::DynamicObject();
+        req->setProperty("verb", "list");
+        const auto list = plugins_.handle(juce::var(req));
+        if (const auto* arr = list.getProperty("plugins", juce::var()).getArray())
+            for (const auto& p : *arr)
+                if (p.getProperty("file", "").toString() == path)
+                    id = p.getProperty("id", "").toString();
+    }
+    o->setProperty("id", id);
+    if (id.isEmpty())
+        return juce::var(o);
+    constexpr int kStrip = 20; // a strip the page's mixer does not use
+    engine_.commands().push(Command::mixerSetStrip(kStrip, static_cast<std::uint8_t>(StripKind::channel)));
+    engine_.commands().push(Command::mixerAddFx(kStrip, static_cast<std::uint8_t>(FxType::plugin)));
+    juce::Thread::sleep(60); // let the audio thread drain those two
+    auto* open = new juce::DynamicObject();
+    open->setProperty("verb", "open");
+    open->setProperty("strip", kStrip);
+    open->setProperty("slot", 0);
+    open->setProperty("id", id);
+    const auto opened = rack_.handle(juce::var(open));
+    o->setProperty("opened", opened.getProperty("ok", false));
+    o->setProperty("name", opened.getProperty("plugin", juce::var()).getProperty("name", ""));
+    juce::Thread::sleep(60); // …and the attach command
+    // THE REAL CHECK: the engine's own slot is holding the app's processor
+    const auto* fx = engine_.mixer().fx(kStrip, 0);
+    o->setProperty("slotIsPlugin", fx != nullptr && fx->type() == FxType::plugin);
+    o->setProperty("attached", fx != nullptr && fx->type() == FxType::plugin &&
+                                   static_cast<const PluginFx*>(fx)->processor() != nullptr);
+    o->setProperty("chainLatency", engine_.mixer().chainLatencySamples(kStrip));
+    auto* state = new juce::DynamicObject();
+    state->setProperty("verb", "state");
+    state->setProperty("strip", kStrip);
+    state->setProperty("slot", 0);
+    o->setProperty("stateBytes", rack_.handle(juce::var(state)).getProperty("bytes", -1));
+    auto* close = new juce::DynamicObject();
+    close->setProperty("verb", "close");
+    close->setProperty("strip", kStrip);
+    close->setProperty("slot", 0);
+    o->setProperty("closed", rack_.handle(juce::var(close)).getProperty("ok", false));
+    juce::Thread::sleep(60);
+    const auto* after = engine_.mixer().fx(kStrip, 0);
+    o->setProperty("detached", after == nullptr || after->type() != FxType::plugin ||
+                                   static_cast<const PluginFx*>(after)->processor() == nullptr);
+    engine_.commands().push(Command::mixerRemoveFx(kStrip, 0));
+    engine_.commands().push(Command::mixerSetStrip(kStrip, static_cast<std::uint8_t>(StripKind::off)));
+    o->setProperty("ok", true);
+    return juce::var(o);
+}
+
 juce::var WebShell::probeRecordArm()
 {
     auto* o = new juce::DynamicObject();
@@ -2070,6 +2139,7 @@ void WebShell::runProbe()
                         const auto* known = reply.getProperty("plugins", juce::var()).getArray();
                         p61->setProperty("known", known != nullptr ? known->size() : 0);
                         o->setProperty("plugins61", juce::var(p61));
+                        o->setProperty("plugins62", probePluginRack());
                     }
                     out = juce::JSON::toString(parsed, true);
                 }

@@ -1173,12 +1173,44 @@ class NativeEngineShadow {
         if (pdcSlot >= 0) ch.removeFx(pdcSlot);
         mx.setPdc(pdcWas);
         mark('p8p'); r.mixerPdcCleared = await wait(() => planOf() === 0);
+        // 6.2: A PLUGIN AS AN INSERT, from the page's side — the mixer adds a `plugin` slot, the PLUGIN param names
+        // one of the scanned effects, and the APP must end up hosting it in THAT slot (the rack says so). A machine
+        // with no plugins scanned skips it rather than failing (CI runners have none).
+        try {
+          const listed: any = await native.plugins({ verb: 'list' }).catch(() => null);
+          const first = ((listed?.plugins ?? []) as Array<any>).filter(p => !p.isInstrument)[0];
+          if (first) {
+            const pslot = ch.addFx('plugin');
+            if (pslot >= 0) {
+              ch.setFxParam(pslot, 'PLUGIN', first.id);
+              const hosted = async () => {
+                const rack: any = await native.plugins({ verb: 'rack' }).catch(() => null);
+                return ((rack?.rack ?? []) as Array<any>).some(e => e.strip === sampleIdx && e.slot === pslot);
+              };
+              // `wait` takes a SYNCHRONOUS predicate — an async one is a Promise, which is always truthy and would
+              // make this gate pass without ever asking the app anything.
+              const waitFor = async (pred: () => Promise<boolean>) => {
+                const t0 = performance.now();
+                while (performance.now() - t0 < 3000) {
+                  if (await pred()) return true;
+                  await new Promise(res => setTimeout(res, 100));
+                }
+                return await pred();
+              };
+              r.pluginId = first.id;
+              r.pluginSlot = pslot;
+              r.pluginHosted = await waitFor(hosted);
+              ch.removeFx(pslot);
+              r.pluginUnhosted = await waitFor(async () => !(await hosted()));
+            }
+          } else r.pluginHosted = null;
+        } catch (e) { r.pluginError = String((e as any)?.message ?? e); }
         // 4.3: the master's BS.1770 reading + the per-slot GR rows ride the snapshot; the page's meters read them
         const lo = mixerOf()?.loudness as Record<string, unknown> | undefined;
         r.mixerLoudnessOk = !!lo && typeof lo.m === 'number' && typeof lo.hops === 'number' && typeof mixerOf()?.fxGr === 'object' && mx.master.updateLoudness().worklet === true;
         r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0 && r.pluginHosted !== false && r.pluginUnhosted !== false;
       } else r.mixerPageOk = null;
       mark('p8mixer');
       this.engine.removePadBuffer(62);

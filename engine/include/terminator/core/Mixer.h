@@ -25,6 +25,7 @@
 #include "terminator/core/fx/DynamicsFx.h"
 #include "terminator/core/fx/FxDsp.h"
 #include "terminator/core/fx/Effect.h"
+#include "terminator/core/fx/PluginFx.h"
 
 namespace terminator
 {
@@ -198,6 +199,9 @@ class Mixer
     std::uint32_t routeRejected() const noexcept { return routeRejected_; }
     /// `immediate` = no glide (a restore / the page's first set).
     void setFxParam(int strip, int index, int param, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING;
+    /// 6.2: attach (or detach — nullptr) the APP's plugin instance to a `plugin` slot. The PDC plan is rebuilt,
+    /// because a plugin's latency arrives with the plugin. False = the slot is not a plugin slot.
+    bool setFxProcessor(int strip, int index, ExternalProcessor* processor) noexcept TERMINATOR_NONBLOCKING;
     bool reorderFx(int strip, int from, int to) noexcept TERMINATOR_NONBLOCKING;
     void clearFx(int strip) noexcept TERMINATOR_NONBLOCKING;
     int fxCount(int strip) const noexcept { return strips_[clampIdx(strip)].fxCount; }

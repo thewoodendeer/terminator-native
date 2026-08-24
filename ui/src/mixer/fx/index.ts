@@ -29,6 +29,7 @@ import { LimiterFX } from './LimiterFX';
 import { RetroFX } from './RetroFX';
 import { Eq6FX } from './Eq6FX';
 import { ChannelStripFX } from './ChannelStripFX';
+import { PluginFX } from './PluginFX';
 
 export type { MixerFX, FxParamValue } from './base';
 
@@ -36,14 +37,16 @@ export type FxId =
   | 'clip' | 'wave' | 'sat' | 'mbsat' | 'wide' | 'mseq' | 'pan' | 'phaser' | 'flanger'
   | 'vinyl' | 'filter' | 'eq' | 'comp' | 'sccomp' | 'delay' | 'reverb' | 'utility'
   /** Terminator 3.0 PREMIUM devices — the real thing lives in the C++ engine (see LadderFX's header). */
-  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro' | 'eq6' | 'channelstrip';
+  | 'ladder' | 'fetcomp' | 'tapeecho' | 'plateverb' | 'saturator' | 'limiter' | 'retro' | 'eq6' | 'channelstrip'
+  /** YOUR own VST3 / Audio Unit, hosted by the app (Terminator 3.0 only — see PluginFX). */
+  | 'plugin';
 
 export type ParamSpec =
   | { key: string; label: string; kind: 'slider' | 'knob'; min: number; max: number; step?: number; unit?: string; log?: boolean; center?: number }
   | { key: string; label: string; kind: 'select'; options: Array<{ label: string; value: FxParamValue }>;
       /** 'channels' = the panel replaces `options` with the live mixer strips
        *  (every channel but the one this effect sits on) — the sidechain SOURCE. */
-      dynamic?: 'channels' }
+      dynamic?: 'channels' | 'plugins' }
   | { key: string; label: string; kind: 'toggle'; onValue: FxParamValue; offValue: FxParamValue };
 
 export interface FxDef {
@@ -408,12 +411,22 @@ export const FX_REGISTRY: Record<FxId, FxDef> = {
     ],
     create: (c) => new UtilityFX(c),
   },
+  plugin: {
+    name: 'PLUGIN',
+    desc: 'One of YOUR plugins — any VST3 or Audio Unit effect you have installed, in this insert slot. Pick it from the list (Preferences → PLUGINS scans for them), press EDITOR for the plugin\u2019s own window, and WET blends it against the dry signal like any other insert. Hosted by the app itself',
+    params: [
+      { key: 'PLUGIN', label: 'PLUGIN', kind: 'select', options: [{ label: '— none —', value: '' }], dynamic: 'plugins' },
+      { key: 'WET', label: 'WET', kind: 'slider', min: 0, max: 100, unit: '%' },
+    ],
+    create: (c) => new PluginFX(c),
+  },
 };
 
 /** Ordered list for the “＋ INSERT FX” dropdown. */
 export const FX_ORDER: FxId[] = [
   'clip', 'wave', 'sat', 'saturator', 'mbsat', 'wide', 'mseq', 'pan', 'phaser', 'flanger',
   'vinyl', 'retro', 'filter', 'ladder', 'eq', 'eq6', 'channelstrip', 'comp', 'fetcomp', 'sccomp', 'delay', 'tapeecho', 'reverb', 'plateverb', 'limiter', 'utility',
+  'plugin', // last, and only listed inside Terminator 3.0 (the browser build has nothing to host it with)
 ];
 
 /** Param keys that are a DRY/WET blend — locked to 100% on send (aux) channels. */

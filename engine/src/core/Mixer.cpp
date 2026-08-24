@@ -623,6 +623,21 @@ void Mixer::setFxParam(int strip, int index, int param, float value, bool immedi
         rebuildKeyMask();
 }
 
+bool Mixer::setFxProcessor(int strip, int index, ExternalProcessor* processor) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return false;
+    auto& s = strips_[strip];
+    if (index < 0 || index >= s.fxCount || s.fx[index] == nullptr || s.fx[index]->type() != FxType::plugin)
+        return false;
+    auto* slot = static_cast<PluginFx*>(s.fx[index]);
+    const int before = slot->latencySamples();
+    slot->setProcessor(processor);
+    if (slot->latencySamples() != before)
+        rebuildPdc(); // a plugin brings its latency with it, and a chain that is not compensated is not aligned
+    return true;
+}
+
 bool Mixer::reorderFx(int strip, int from, int to) noexcept TERMINATOR_NONBLOCKING
 {
     if (strip < 0 || strip >= kMaxStrips)

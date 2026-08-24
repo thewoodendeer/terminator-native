@@ -257,6 +257,14 @@
   border: none; background: none; cursor: pointer; padding: 0;
   color: var(--hw-muted, #ff7766); font-size: 8px; line-height: 1;
 }
+/* PLUGIN (6.2) — the button that opens the hosted plugin's own window, in its device panel. */
+.mx-plugin-editor {
+  font: 700 10px/1 var(--font-mono, monospace); letter-spacing: 1.5px;
+  padding: 5px 10px; margin: 0 8px 6px 0; border-radius: 3px; cursor: pointer;
+  color: var(--hw-accent, #35ff69); background: transparent; border: 1px solid var(--hw-accent, #35ff69);
+}
+.mx-plugin-editor:hover { background: rgba(53, 255, 105, 0.12); }
+
 .mx-fx-add {
   width: 100%;
   height: 16px;

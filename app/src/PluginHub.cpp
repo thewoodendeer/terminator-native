@@ -182,8 +182,12 @@ void PluginHub::load()
         return;
     if (auto xml = juce::parseXML(stateFile_))
     {
-        if (auto* list = xml->getChildByName("KNOWN"))
-            known_.recreateFromXml(*list);
+        // `KnownPluginList::createXml()` makes its OWN <KNOWNPLUGINS> element and we keep it inside a <KNOWN>
+        // wrapper — so the list to restore is that wrapper's CHILD. Handing recreateFromXml the wrapper itself is
+        // silent: it finds no plugins, reports nothing, and every launch starts with an empty list. (It did.)
+        if (auto* wrapper = xml->getChildByName("KNOWN"))
+            if (auto* list = wrapper->getFirstChildElement())
+                known_.recreateFromXml(*list);
         if (auto* blocked = xml->getChildByName("BLOCKLIST"))
             for (auto* f : blocked->getChildIterator())
                 blocklist_.addIfNotAlreadyThere(f->getStringAttribute("file"));

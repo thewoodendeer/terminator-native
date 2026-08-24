@@ -38,7 +38,9 @@ target_sources(Terminator PRIVATE
     src/ProcessHub.h
     src/ProcessHub.cpp
     src/PluginHub.h
-    src/PluginHub.cpp)
+    src/PluginHub.cpp
+    src/PluginRack.h
+    src/PluginRack.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1

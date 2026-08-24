@@ -46,6 +46,7 @@ enum class FxType : std::uint8_t
     retro,        // 4.6 premium: RETRO (RC-20 shaped)
     eq6,          // 4.7b premium: EQ 6 (the multi-band parametric)
     channelstrip, // 4.7c premium: CHANNEL (the SSL 4000 G strip)
+    plugin,       // 6.2: a VST3 / AudioUnit the APP hosts (core/fx/PluginFx.h — the engine only holds a pointer)
     count
 };
 

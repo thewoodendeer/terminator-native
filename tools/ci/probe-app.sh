@@ -119,6 +119,17 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     grep -Eq '"plugins61": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::the plugin hub did not answer (see plugins61)"; exit 1; }
     grep -Eq '"scanFileOk": ?true' "$OUT" || { echo "::error::the plugin scan machinery (child process -> XML -> list) did not answer (see plugins61)"; exit 1; }
     echo "plugin hub OK: $(grep -Eo '"plugins61": ?\{[^}]*\}' "$OUT")"
+    # Phase 6.2: a plugin as an INSERT. The engine-side check (plugins62) only runs with TERMINATOR_PROBE_PLUGIN set;
+    # the PAGE-side one (pluginHosted, in the shadow self-test) only when the machine has a scanned plugin. Neither
+    # is available on a CI runner, so both are asserted as "not false".
+    grep -Eq '"pluginHosted": ?false' "$OUT" && { echo "::error::the page's mixer could not host a plugin in an insert slot (see pluginHosted / pluginError)"; exit 1; } || true
+    grep -Eq '"pluginUnhosted": ?false' "$OUT" && { echo "::error::removing a plugin insert did not unload the plugin (see pluginUnhosted)"; exit 1; } || true
+    grep -Eq '"plugins62": ?\{[^}]*"skipped": ?false' "$OUT" && {
+      grep -Eq '"attached": ?true' "$OUT" || { echo "::error::the hosted plugin never reached the engine's insert slot (see plugins62)"; exit 1; }
+      grep -Eq '"detached": ?true' "$OUT" || { echo "::error::closing the plugin left the engine holding it (see plugins62)"; exit 1; }
+      echo "plugin insert OK (engine): $(grep -Eo '"plugins62": ?\{[^}]*\}' "$OUT")"
+    } || true
+    grep -Eq '"pluginHosted": ?true' "$OUT" && echo "plugin insert OK (page -> app -> engine): $(grep -Eo '"pluginId": ?"[^"]*"' "$OUT")" || true
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
     echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"
