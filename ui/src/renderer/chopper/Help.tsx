@@ -437,7 +437,7 @@ export const TOPICS: Topic[] = [
       },
       { h: 'MOVING PADS (GHOST DRAG)' },
       { p: 'Press ⇄ MOVE above the grid (or the menu\'s MOVE…) and drag a pad: a ghost of it follows your pointer, the pad under it lights up, let go and it lands there — onto an empty pad it moves, onto a loaded pad the two swap. Sequences follow the sound to its new pad. ESC or ⇄ MOVE again to finish. Shortcut: hold ⌘ (Ctrl on Windows) or Alt / Option, click a pad and drag — any time, no mode needed.' },
-      { tip: 'Double-tap SPACE is a panic stop: sequencer, drums and every ringing pad, all silenced at once.' },
+      { tip: 'Double-tap SPACE is a panic stop: sequencer, drums, bass and every ringing pad, all silenced at once. The ■ STOP button does the same thing, so hitting STOP again when everything is already stopped kills any tail still sounding.' },
     ],
   },
   {

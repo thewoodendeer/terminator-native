@@ -4,7 +4,7 @@ import { isSubscribed, isSignedIn, isDemo, recordPull, pullsRemaining, FREE_PAD_
 import { SubscribeModal } from '../components/SubscribeModal';
 import { ChopperEngine, ChopperState, ChopPreset, MetronomeSound, SEQ_MAX_STEPS, NO_SAMPLE_ID } from './ChopperEngine';
 import { attachNativeEngineShadow } from '../native/nativeEngineShadow';
-import { isNative, onNativeEvent } from '../native/juceBridge';
+import { isNative, native, onNativeEvent } from '../native/juceBridge';
 
 const isWeb = (import.meta as any).env?.MODE === 'web';
 declare const __TERMINATOR_VERSION__: string;
@@ -860,6 +860,10 @@ export function ChopperView() {
     bassEngine.panic();
     drumEngine.stop();
     engine.stopAllPads();
+    // NATIVELY the voices are the C++ engine's, not the page's — and `stopAllPads` returns early when the PAGE has
+    // none ringing, so on the desktop app a panic used to leave everything sounding. `panic` stops every voice at
+    // once (3 ms fade), kills the test tone and stops the transport, whatever the page thinks is playing.
+    if (isNative()) void native.command({ type: 'panic' });
   };
 
   // Ask the (Gemini) finisher endpoint for arrangement suggestions. Same-origin in
@@ -4280,13 +4284,13 @@ export function ChopperView() {
         // Blur whatever holds focus so the keystroke can't double-act on it
         // (a focused <select>/<button> would otherwise swallow the next space).
         (document.activeElement as HTMLElement | null)?.blur?.();
-        // Double-tap space (within 300ms) = panic stop: kills the sequencer,
-        // drums, AND any pad voices still ringing. Single tap = normal toggle.
+        // Double-tap space (within 300ms) = panic stop: kills the sequencer, drums, the bass AND any pad voices
+        // still ringing. Single tap = normal toggle. It goes through the SAME killAllAudio the ■ STOP button uses —
+        // this used to be its own inline copy, which is how it ended up missing the bass and the native engine.
         const now = e.timeStamp;
         if (now - lastSpaceTapRef.current < 300) {
           lastSpaceTapRef.current = 0;
-          stopTransport();
-          engine.stopAllPads();
+          killAllAudio();
           return;
         }
         lastSpaceTapRef.current = now;
