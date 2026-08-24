@@ -1632,9 +1632,46 @@ ctest 284/284 · ui gate (tsc baseline 5) · probe OK on universal · clang-form
 Tests: two 1-bar sequences render 4 s of audio with real content at the start of the SECOND bar (which the
 single-pattern render has as silence); song mode with one sequence is sample-identical to not asking for it.
 
-**Still owed on the export:** the Ableton-style dialog (NEXT). MP3 binary bundling landed OUTSIDE this session —
-`cmake/ProvisionTools.cmake` now provisions a universal `lame` 3.100 into `Resources/bin/lame`, which is exactly
-where `findLameBinary` looks; verified present and universal (x86_64 arm64) in the packaged app.
+**Still owed on the export:** the Ableton-style dialog (NEXT). MP3 binary bundling is 4.5i below.
+**This commit shipped BROKEN:** it swept in a concurrent session's half-finished `lame` work — `WebShell.cpp` calls
+`ProcessHub::lameBinary()` and `exportNative.ts` probes for it, but neither existed yet, so `71177a4` does not
+compile. 4.5i is the commit that completes it. One session per repo, always.
+
+## Phase 4 — 4.5i DONE (THE `lame` BINARY SHIPS WITH THE APP), 2026-08-23
+
+MP3 export worked only on a machine that happened to have `lame` installed — Victor's would, a customer's would not.
+`cmake/ProvisionTools.cmake` (the yt-dlp/qjs hook) now provisions it too, landing at `Resources/bin/lame` (mac) /
+`<exe>/bin/lame.exe` (Windows) — exactly where `ProcessHub::lameBinary()` looks and `render::findLameBinary` prefers
+it over anything on the machine.
+
+- **Still a packaging concern, not a linking one.** The app drives the executable through JUCE and links no part of
+  LAME, so shipping the unmodified upstream binary as a separate program keeps us clear of the LGPL. Credited beside
+  yt-dlp in the EULA modal, with the source URL — the notice LGPL actually asks for.
+- **Mac COMPILES it; Windows downloads it.** There is no trustworthy prebuilt macOS `lame`, and none universal at
+  all: Homebrew's is per-OS-version, ships behind a ghcr token, and would have to be relocated. So mac builds the
+  pinned 3.100 tarball (SHA-256 `ddfe36ca…`) in ONE clang pass with both `-arch` flags — every autoconf answer here
+  is arch-independent (both little-endian LP64), so a second configure would only be a second chance to disagree —
+  giving one universal, dependency-free executable (system libs only). ~20 s, ONCE per machine: the result is cached
+  in `third_party/.tools-cache` as `lame-3.100-macos-universal`, and the existing stamp file skips the whole script.
+  Windows takes RareWares' prebuilt x64 `lame.exe` (the binary lame.sourceforge.net points at) — its PE import table
+  is only KERNEL32 + SHLWAPI, so it is fully static and the zip's `lame_enc.dll` is deliberately NOT shipped.
+- **We ad-hoc sign it ourselves.** The linker's own ad-hoc signature survived a hand build and vanished under the
+  cmake one — the same binary, unsigned. An arm64 Mach-O without a valid signature is a coin toss macOS gets to call
+  at export time, so the script runs `codesign --force --sign - --identifier lame` and then VERIFIES, failing the
+  build (and deleting the cached copy) if either step does not hold. **At release, `Contents/Resources/bin/**` must
+  be re-signed with the Developer ID `--options runtime --timestamp` BEFORE the app** — ad-hoc alone fails
+  notarisation. Written into BUILD-RULES.md.
+- **The gate is the real thing, not the file's presence.** The export self-test now renders the probe project to MP3
+  as well, reports `lameBundled` + `lamePath` + `mp3Ok` + `mp3Bytes`, and `probe-app.sh` fails when a build ships a
+  `lame` and the MP3 does not come out with bytes in it.
+
+**Verified with `/opt/homebrew/bin/lame` renamed away** (and no `/usr/local/bin/lame`, no `/usr/bin/lame`): both the
+debug and the universal app exported a 90,240-byte MP3 through their own `Resources/bin/lame`. That is the claim
+that matters — "it works on a machine with no lame" — and it is the one the CI probe now re-checks every run.
+
+**Gates (4.5i):** mac-debug 0 warnings + ctest **284/284** · RTSan 285/285 · universal (0 warnings) + ctest 284/284 ·
+ui gate (tsc baseline 5) · probe OK on debug AND universal, MP3 leg included · bundled `lame` is `x86_64 arm64` and
+`codesign --verify` clean. The only build warning is JUCE's pre-existing `terminator-render` bundle-id-with-spaces.
 
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
