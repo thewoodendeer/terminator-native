@@ -1739,6 +1739,29 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 5 — 5.1b DONE (THE RECORD BUTTON IS ON THE ENGINE), 2026-08-24
+
+RECORD SAMPLE now makes its take in the ENGINE when it is running in the shell and the input is a real one. The
+page's `getUserMedia` path stays exactly where it was for the browser build **and for the two sources the engine
+does not have**: Terminator's own output (🔁 — that is a bounce of what we are playing, not a capture) and system
+audio (that is the OS's, and it does not arrive on the interface's inputs). If the engine refuses to start, the
+code falls through to the page path rather than failing the click.
+
+- The take is written straight to a 24-bit WAV by the engine, read back through `readBinary`, saved into the
+  library and dropped on a pad — **the same library + pad landing as before**, so nothing downstream changed.
+- **The level meter reads the ENGINE's peaks**, painted as a level bar on the same canvas (the engine reports a
+  peak rather than a spectrum, and the peak is what tells you whether you are about to clip the take). There is no
+  MediaStream to hang an analyser on, and the engine's number is the truer one anyway — it is the interface's own
+  sample, before anything of ours.
+- **A dropped-frame take says so.** `stop` returns `dropped`, and anything but 0 surfaces as an error on the take.
+- The temp file is trashed after it is read.
+
+**Gate:** app probe PROBE OK · ui typecheck 5 = baseline · vite build clean. **Owed to Victor's ears — and this one
+genuinely needs him:** record from his interface and confirm it arrives raw, 24-bit, on the right input, with the
+meter moving. That is the whole reason this project exists and it cannot be measured headlessly.
+
+**NEXT (5.1c):** monitoring, punch/count-in, and the transport-aligned start that makes a take land on the grid.
+
 ## Phase 5 — 5.1a DONE (THE NATIVE RECORDER: CAPTURE FROM THE INTERFACE), 2026-08-24
 
 Phase 4 is finished, so this starts Phase 5. **What the app does today:** RECORD SAMPLE goes through the PAGE —

@@ -4,7 +4,8 @@ import { isSubscribed, isSignedIn, isDemo, recordPull, pullsRemaining, FREE_PAD_
 import { SubscribeModal } from '../components/SubscribeModal';
 import { ChopperEngine, ChopperState, ChopPreset, MetronomeSound, SEQ_MAX_STEPS, NO_SAMPLE_ID } from './ChopperEngine';
 import { attachNativeEngineShadow } from '../native/nativeEngineShadow';
-import { isNative, native, onNativeEvent } from '../native/juceBridge';
+import { isNative, native, nativeBoot, onNativeEvent } from '../native/juceBridge';
+import { readBinaryFile } from '../native/assetsNative';
 
 const isWeb = (import.meta as any).env?.MODE === 'web';
 declare const __TERMINATOR_VERSION__: string;
@@ -3459,8 +3460,90 @@ export function ChopperView() {
   };
 
   // Start capture once the user clicks REC.
+  // ── RECORD SAMPLE, natively (Phase 5.1b) ──────────────────────────────────
+  // In the shell the take is made by the ENGINE, from the interface's own inputs, and written straight to a WAV.
+  // The page's getUserMedia path stays for the browser build and for the two SOURCES the engine does not have —
+  // Terminator's own output (that is a bounce, not a capture) and system audio.
+  const nativeTakeRef = useRef<{ path: string; timer: number } | null>(null);
+
+  /** The input level on the same canvas the Web Audio meter uses — a bar, since the engine reports a PEAK rather
+   *  than a spectrum, and the peak is what tells you whether you are about to clip the take. */
+  const paintNativeMeter = (peak: number) => {
+    const cv = meterCanvasRef.current;
+    const ctx = cv?.getContext('2d');
+    if (!cv || !ctx) return;
+    const w = cv.width, h = cv.height;
+    ctx.clearRect(0, 0, w, h);
+    const db = peak > 0 ? 20 * Math.log10(peak) : -80;
+    const frac = Math.max(0, Math.min(1, (db + 60) / 60));
+    ctx.fillStyle = peak >= 0.99 ? '#ff5544' : peak > 0.7 ? '#e7a977' : '#4caf7d';
+    ctx.fillRect(0, Math.round(h * 0.25), Math.round(w * frac), Math.round(h * 0.5));
+  };
+
+  const startNativeRecording = async (): Promise<boolean> => {
+    const boot = nativeBoot();
+    const dir = boot?.dirs?.temp ?? boot?.dirs?.dataDir;
+    if (!dir) return false;
+    const path = `${dir}${boot?.dirs?.sep ?? '/'}terminator-take-${recordTimestamp()}.wav`;
+    // 24-bit, stereo, the first two inputs — the same shape the page path produced, but without the round trip
+    // through WebKit.
+    const res = await native.record({ verb: 'start', path, channels: 2, bitDepth: 24 });
+    if (!res?.ok) { setError(String(res?.error ?? 'Recording failed to start')); return false; }
+    // The level meter reads the ENGINE's own peaks — there is no MediaStream to hang an analyser on, and the
+    // engine's number is the true one anyway (it is the interface's sample, before anything of ours).
+    const timer = window.setInterval(async () => {
+      const st = await native.record({ verb: 'status' });
+      paintNativeMeter(Math.max(Number(st?.peakL ?? 0), Number(st?.peakR ?? 0)));
+    }, 80);
+    nativeTakeRef.current = { path, timer };
+    setRecordState('recording');
+    return true;
+  };
+
+  const finalizeNativeRecording = async () => {
+    const take = nativeTakeRef.current;
+    nativeTakeRef.current = null;
+    if (take) window.clearInterval(take.timer);
+    const res = await native.record({ verb: 'stop' });
+    setRecordState('idle');
+    paintNativeMeter(0);
+    if (!take) return;
+    const frames = Number(res?.frames ?? 0);
+    const dropped = Number(res?.dropped ?? 0);
+    if (frames <= 0) { setError('Nothing was recorded — check the input in Preferences → AUDIO'); return; }
+    // A take with a hole in it is SAID so, not quietly kept: the engine counts what it could not write.
+    if (dropped > 0) setError(`Recorded, but ${dropped} frames were dropped — the disk could not keep up`);
+    const read = await readBinaryFile(take.path);
+    await native.fs({ verb: 'trash', path: take.path });
+    if (!read) { setError('The take could not be read back'); return; }
+    const filename = `recording-${recordTimestamp()}.wav`;
+    try {
+      // saveRecording takes an ArrayBuffer; readBinaryFile hands back a view, so pass its buffer slice.
+      const ab = read.bytes.buffer.slice(read.bytes.byteOffset, read.bytes.byteOffset + read.bytes.byteLength) as ArrayBuffer;
+      const saved = libraryBridge ? await libraryBridge.saveRecording({ filename, data: ab }) : null;
+      if (saved && 'error' in (saved as any)) { setError((saved as any).error || 'Save failed'); return; }
+      setRecordSaved(true);
+      setTimeout(() => setRecordSaved(false), 2000);
+      setUserSamplesRefreshKey(k => k + 1);
+      let padIdx = recordPadTargetRef.current;
+      if (padIdx === null) { padIdx = 0; while (engine.padSourceKey(padIdx)) padIdx++; }
+      await loadAudioFile(new File([ab], filename, { type: 'audio/wav' }), padIdx);
+      setRecordPadTarget(null); flash(`PAD ${padIdx + 1}: recorded`);
+    } catch (e: any) {
+      setError(`Save failed: ${e?.message ?? String(e)}`);
+    }
+  };
+
   const startRecording = async () => {
     if (!recordInputId) return;
+    // The engine's own path, for a real input in the shell. Terminator's own output and system audio stay on the
+    // page path: the first is a bounce of what we are playing, the second is the OS's, and neither arrives on the
+    // interface's inputs.
+    if (isNative() && recordInputId !== INTERNAL_OUTPUT_ID && recordInputId !== SYSTEM_AUDIO_ID) {
+      setError(null);
+      if (await startNativeRecording()) return;
+      // fall through to the page path if the engine would not start
+    }
     setError(null);
     try {
       if (recordInputId === SYSTEM_AUDIO_ID && IS_MAC) {
@@ -3544,6 +3627,7 @@ export function ChopperView() {
 
   // Stop capture — MediaRecorder.onstop fires finalizeRecording.
   const stopRecording = () => {
+    if (nativeTakeRef.current) { void finalizeNativeRecording(); return; }
     const mr = mediaRecorderRef.current
     if (mr && mr.state !== 'inactive') mr.stop()
     const stream = recordStreamRef.current
