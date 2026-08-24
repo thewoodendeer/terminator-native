@@ -1378,6 +1378,54 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
         complete(ok(false, "export needs an object"));
         return;
     }
+    // `{verb: 'transcode', from, to, format, bitDepth?, mp3Kbps?}` — re-encode a file the PAGE rendered. The page's
+    // arrangement renderer is the authority on WHAT the audio is (it alone knows the Beat Finisher arrangement);
+    // this only changes the container, through the same writer + the same app-parity dither as a native export. It
+    // is what lets MP3 exist at all without a second render path.
+    if (req.getProperty("verb", "").toString() == "transcode")
+    {
+        const juce::File from(req.getProperty("from", "").toString());
+        juce::File to(req.getProperty("to", "").toString());
+        if (!from.existsAsFile())
+        {
+            complete(ok(false, "nothing to transcode at " + from.getFullPathName()));
+            return;
+        }
+        const auto fmt = render::audioFileFormatFromName(req.getProperty("format", "mp3").toString());
+        to = to.withFileExtension(render::audioFileExtension(fmt));
+        const auto lameBin = render::findLameBinary(ProcessHub::bundledBinDir().getChildFile("lame"));
+        if (fmt == render::AudioFileFormat::mp3 && !lameBin.existsAsFile())
+        {
+            complete(ok(false, "MP3 needs the `lame` encoder and this build has none — export WAV or FLAC"));
+            return;
+        }
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(fm.createReaderFor(from));
+        if (reader == nullptr)
+        {
+            complete(ok(false, "cannot read " + from.getFileName()));
+            return;
+        }
+        juce::AudioBuffer<float> buf(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+        reader->read(&buf, 0, buf.getNumSamples(), 0, true, true);
+        const double rate = reader->sampleRate;
+        reader.reset();
+        juce::String werr;
+        const int depth = std::clamp(static_cast<int>(req.getProperty("bitDepth", 16)), 16, 32);
+        const int kbps = std::clamp(static_cast<int>(req.getProperty("mp3Kbps", 320)), 32, 320);
+        if (!render::writeAudioFile(to, buf, rate, fmt, depth, werr, kbps, lameBin))
+        {
+            complete(ok(false, werr));
+            return;
+        }
+        auto* o = new juce::DynamicObject();
+        o->setProperty("ok", true);
+        o->setProperty("path", to.getFullPathName());
+        o->setProperty("bytes", static_cast<juce::int64>(to.getSize()));
+        complete(juce::var(o));
+        return;
+    }
     // `{verb: 'cancel', id}` — flip the job's flag; the render thread notices at its next progress report
     if (req.getProperty("verb", "").toString() == "cancel")
     {

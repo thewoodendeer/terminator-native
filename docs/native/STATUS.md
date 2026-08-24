@@ -1673,6 +1673,42 @@ that matters — "it works on a machine with no lame" — and it is the one the 
 ui gate (tsc baseline 5) · probe OK on debug AND universal, MP3 leg included · bundled `lame` is `x86_64 arm64` and
 `codesign --verify` clean. The only build warning is JUCE's pre-existing `terminator-render` bundle-id-with-spaces.
 
+## Phase 4 — 4.5j DONE (THE EXPORT DIALOG), 2026-08-23
+
+Victor's brief: "trackouts in same export box like ableton, so when you click export the export popup window comes
+up that has all export options". `ExportModal.tsx` is that box — **Rendered Track** as cards (Master Mixdown /
+Trackouts / MPC Project / Ableton Drum Rack) then **File** (format, and the bitrate when it is MP3), then Export.
+Trackouts are a thing you RENDER, beside the master, rather than a separate control elsewhere. The EXPORT section
+is now one button that opens it.
+
+**What renders the audio did NOT change** — the page's `exportArrangement` is still the only thing that knows the
+Beat Finisher arrangement, and it stays the authority. The dialog adds three things around it:
+- **MP3 without a second render path.** The page renders as it always did, then the shell re-encodes the written
+  file: `terminatorExport {verb: 'transcode', from, to, format, mp3Kbps}` reads it with JUCE and writes it through
+  the SAME `writeAudioFile` (so the same app-parity dither) — the MP3 carries the samples the WAV would have. The
+  intermediate WAV is trashed once the MP3 lands, so only the deliverable remains.
+- **A real CANCEL.** `ExportArrangementOpts::shouldCancel` is polled at every progress point and throws
+  `ExportCancelled` **before anything is written** — the same rule the native renderer keeps, so a cancelled export
+  never leaves a partial file. Esc cancels a running export and closes the box otherwise.
+- Progress with the renderer's own stage labels.
+
+**Help updated in the same commit** (house rule): the Exporting topic now describes the box, the cancel behaviour and
+the Esc key, and "WAV or FLAC" became "WAV, FLAC or MP3" with the bitrate note.
+
+**Gates (4.5j):** ui gate (tsc baseline 5) · mac-debug 0 warnings + ctest 284/284 · RTSan 285/285 · universal
+(0 warnings) + ctest 284/284 · probe OK on debug AND universal (`chopperView` true, `errors: []`) · clang-format
+clean. The universal probe also shows the sibling session's work green: `lameBundled: true`, `mp3Ok: true`,
+`mp3Bytes: 90240` — MP3 encodes from the BUNDLED lame.
+
+**NEEDS VICTOR — the dialog has not been LOOKED at.** The page only mounts inside the shell, so it cannot be
+verified in a plain browser; the probe proves it renders without errors, not that it looks right. Open EXPORT and
+check the layout, then try a cancel mid-render. Fast loop for tweaks, no rebuild:
+`cd ui && npm run dev` then launch the app with `TERMINATOR_UI_URL=http://localhost:5173`.
+
+**Still owed on the export:** bit depth and sample rate are not in the box yet — `exportArrangement` hardcodes
+`bitDepth: 16` and renders at the engine's rate, so showing those controls would have meant showing controls that do
+nothing. Wiring them through is the next step. Also: the legacy chopper chain for the single-chop bake.
+
 ## THE DEV-SERVER LOOP — page changes with NO rebuild (fixed 2026-08-23, twelfth session)
 
 `TERMINATOR_UI_URL` points the WebView at the Vite dev server instead of the bundled `Resources/ui`, so **every

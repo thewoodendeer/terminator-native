@@ -313,6 +313,14 @@ export interface ExportArrangementOpts {
    *  stay WAV whatever is asked for. */
   audioFormat?: 'wav' | 'flac';
   onProgress?: (pct: number, label: string) => void;
+  /** CANCEL: polled at every progress point. Returning true aborts with `ExportCancelled` BEFORE any file is
+   *  written, so a cancelled export never leaves a partial file behind — the same rule the native renderer keeps. */
+  shouldCancel?: () => boolean;
+}
+
+/** Thrown when `shouldCancel` asked to stop. Callers should treat it as "nothing happened", not as a failure. */
+export class ExportCancelled extends Error {
+  constructor() { super('Export cancelled'); this.name = 'ExportCancelled'; }
 }
 
 export interface ExportFile { name: string; data: ArrayBuffer | Uint8Array; mime: string }
@@ -333,7 +341,12 @@ export async function buildArrangementFiles(opts: ExportArrangementOpts): Promis
   };
   const ext = flac ? 'flac' : 'wav';
   const audioMime = flac ? 'audio/flac' : 'audio/wav';
-  const progress = opts.onProgress ?? (() => {});
+  const report = opts.onProgress ?? (() => {});
+  // every progress point is also a cancel point — the render stops here, before anything is written
+  const progress = (pct: number, label: string) => {
+    if (opts.shouldCancel?.()) throw new ExportCancelled();
+    report(pct, label);
+  };
   const base = safeName(opts.title || 'beat-finisher');
 
   const beatDur = 60 / Math.max(1, bpm);
@@ -531,7 +544,11 @@ export async function buildArrangementFiles(opts: ExportArrangementOpts): Promis
 
 /** Render + download the arrangement. Returns a short status message. */
 export async function exportArrangement(opts: ExportArrangementOpts): Promise<string> {
-  const progress = opts.onProgress ?? (() => {});
+  const report = opts.onProgress ?? (() => {});
+  const progress = (pct: number, label: string) => {
+    if (opts.shouldCancel?.()) throw new ExportCancelled();
+    report(pct, label);
+  };
   const { files, message } = await buildArrangementFiles(opts);
   progress(0.96, 'Saving…');
   await deliverFiles(files);

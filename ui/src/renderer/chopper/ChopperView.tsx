@@ -51,6 +51,7 @@ import { midiLearn as midiCc } from './midiLearn';
 import { midiMapStore, MidiMapTarget } from './MidiMap';
 import { Timeline } from './Timeline';
 import { EXPORT_FORMATS, ExportFormat } from './exporters/formats';
+import ExportModal from './ExportModal';
 // Static import (not a dynamic import()): bundling the exporters into the main
 // chunk means there's no separate hashed module to fetch at export time. A
 // stale cached shell on mobile Safari can't 404 a deleted chunk → no more
@@ -1534,6 +1535,7 @@ export function ChopperView() {
   }, []);
   const [exportFormat, setExportFormat] = useState<ExportFormat>('wav-stems');
   const [exportBusy, setExportBusy] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<number | null>(null);
   // Web: TAP tempo mode. When armed, pad taps feed the BPM-from-intervals
@@ -5667,95 +5669,43 @@ export function ChopperView() {
           />
           {!collapsedExport && (
             <div className="export-panel chopper-web-export">
-              <select
-                className="ctrl-select export-format-select"
-                value={exportFormat}
-                onChange={e => { setExportFormat(e.target.value as ExportFormat); setExportMsg(null); }}
-                title="Choose export format"
-              >
-                {EXPORT_FORMATS.map(f => (
-                  <option key={f.value} value={f.value} disabled={!f.available}>
-                    {f.label}{f.available ? '' : ' — coming soon'}
-                  </option>
-                ))}
-              </select>
-              {/* WAV / FLAC — same samples either way (FLAC is lossless), about
-                  half the bytes. Only the exports whose audio the USER opens can
-                  take it: an MPC project or a Drum Rack is read by a sampler
-                  that parses WAV headers, so the toggle greys out there rather
-                  than silently doing nothing. */}
-              {(() => { const can = FLAC_CAPABLE.has(exportFormat); return (
-                <span className="export-fmt-toggle" title={can
-                  ? 'WAV or FLAC — identical audio (FLAC is lossless, same 16-bit samples), FLAC just takes about half the space. Every DAW reads both'
-                  : 'This export writes the audio for a sampler that reads WAV headers (MPC project, Drum Rack), so it is always WAV. Pick Master Mixdown or Trackouts to choose FLAC'}>
-                  {(['wav', 'flac'] as const).map(f => (
-                    <button key={f} type="button"
-                      className={`btn-chop-mode${(can ? exportAudioFmt : 'wav') === f ? ' chop-mode-on' : ''}`}
-                      disabled={!can || exportBusy}
-                      onClick={() => { setExportAudioFmt(f); setExportMsg(null); }}
-                    >{f.toUpperCase()}</button>
-                  ))}
-                </span>
-              ); })()}
+              {/* One button, one popup: every option lives in the dialog (Ableton's Export Audio box), so
+                  trackouts are a thing you can RENDER rather than a separate control somewhere else. */}
               <button
                 className="btn btn-export-run"
-                disabled={
-                  exportBusy
-                  || !state.hasBuffer
-                  || !EXPORT_FORMATS.find(f => f.value === exportFormat)?.available
-                }
-                onClick={async () => {
-                  setExportBusy(true);
-                  setExportMsg(null);
-                  setExportProgress(0);
-                  // iOS: persist the session BEFORE the share sheet backgrounds
-                  // the tab, so a WebKit reload-on-return can restore it.
-                  snapshotSessionForExport();
-                  // Yield two frames so React commits the EXPORTING… + disabled
-                  // state and the browser PAINTS it BEFORE the synchronous
-                  // OfflineAudioContext render + encodeWAV block the main thread.
-                  // Without this, clicking EXPORT froze the UI with no feedback.
-                  await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
-                  try {
-                    // Unified export: the main EXPORT section renders the SAME
-                    // Beat Finisher arrangement through the SAME pipeline as
-                    // the modal (mixer FX + sends + master strip baked).
-                    const msg = await runExport(engine, exportFormat, pct => setExportProgress(pct), {
-                      drumEngine,
-                      arrangement: buildFinishArrangement(currentFinishSections()),
-                      bpm: engine.getMasterBpm() || 90,
-                    }, exportAudioFmt);
-                    setExportMsg(msg);
-                  } catch (e: any) {
-                    const err = e?.message ?? String(e);
-                    setExportMsg(err);
-                    flash(`Export failed: ${err}`);
-                  } finally {
-                    setExportBusy(false);
-                    setExportProgress(null);
-                  }
-                }}
+                disabled={exportBusy || !state.hasBuffer}
+                onClick={() => { setExportMsg(null); setShowExportModal(true); }}
+                title="Open the export options"
               >
-                {exportBusy ? 'EXPORTING…' : '⬇ EXPORT'}
+                {exportBusy ? 'EXPORTING…' : '⬇ EXPORT…'}
               </button>
-              {exportProgress !== null && (
-                <div className="export-progress-wrap">
-                  <div className="export-progress-label">Rendering FX… {exportProgress}%</div>
-                  <div className="export-progress-track">
-                    <div className="export-progress-fill" style={{ width: `${exportProgress}%` }} />
-                  </div>
-                </div>
-              )}
               {exportMsg && <span className="export-status">{exportMsg}</span>}
-              <span className="export-hint">
-                {EXPORT_FORMATS.find(f => f.value === exportFormat)?.description}
-              </span>
             </div>
           )}
         </>
       )}
       </div>
       </DraggableSection>{/* /EXPORT */}
+      <ExportModal
+        open={showExportModal}
+        canExport={state.hasBuffer}
+        onClose={() => setShowExportModal(false)}
+        onRun={async (format, audioFormat, onProgress, shouldCancel) => {
+          setExportBusy(true);
+          // iOS: persist the session BEFORE the share sheet backgrounds the tab, so a WebKit reload-on-return
+          // can restore it (the inline button did this too — it must not be lost with the layout change).
+          snapshotSessionForExport();
+          try {
+            return await runExport(engine, format, onProgress, {
+              drumEngine,
+              arrangement: buildFinishArrangement(currentFinishSections()),
+              bpm: engine.getMasterBpm() || 90,
+            }, audioFormat, shouldCancel);
+          } finally {
+            setExportBusy(false);
+          }
+        }}
+      />
       </div>{/* /chopper-col-right */}
 
       {/* ── DAW Mixer (full-width, below the pad/sequencer columns). Desktop

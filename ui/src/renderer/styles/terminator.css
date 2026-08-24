@@ -8500,3 +8500,72 @@ body[data-finish="4k"] .pad.pad-active .pad-key { color: #fff; text-shadow: 0 0 
 .export-fmt-toggle { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; }
 .export-fmt-toggle .btn-chop-mode { padding: 2px 7px; font-size: 10px; }
 .export-fmt-toggle .btn-chop-mode:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── THE EXPORT DIALOG (4.5i) ─────────────────────────────────────────────
+   One popup with every option, Ableton-style: what to render, then how to
+   write it. Colours come from the theme tokens the rest of the app uses, so
+   it follows every theme without a second palette. */
+.export-modal-backdrop {
+  position: fixed; inset: 0; z-index: 1200;
+  background: rgba(0,0,0,0.78);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.export-modal {
+  width: min(680px, 100%); max-height: min(86vh, 780px);
+  display: flex; flex-direction: column;
+  background: var(--panel-bg, #16181c);
+  border: 1px solid var(--panel-border, #2c3037);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+  color: var(--text, #d8dde5);
+}
+.export-modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--panel-border, #2c3037);
+}
+.export-modal-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.18em; }
+.export-modal-x {
+  background: none; border: 0; color: var(--text-dim, #8b93a0);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.export-modal-x:hover:not(:disabled) { color: var(--text, #d8dde5); }
+.export-modal-body { overflow-y: auto; padding: 16px 18px; display: grid; gap: 20px; }
+.export-group h3 {
+  margin: 0 0 10px; font-size: 10px; letter-spacing: 0.16em;
+  color: var(--text-dim, #8b93a0); text-transform: uppercase;
+}
+/* the render targets read as cards, so trackouts sit beside the master rather than hiding in a dropdown */
+.export-targets { display: grid; gap: 8px; }
+.export-target {
+  display: grid; gap: 3px; text-align: left; cursor: pointer;
+  padding: 10px 12px; border-radius: 7px;
+  background: var(--input-bg, #101216);
+  border: 1px solid var(--panel-border, #2c3037);
+  color: inherit;
+}
+.export-target:hover:not(:disabled) { border-color: var(--accent, #d34b2a); }
+.export-target.on { border-color: var(--accent, #d34b2a); background: color-mix(in srgb, var(--accent, #d34b2a) 12%, transparent); }
+.export-target:disabled { opacity: 0.45; cursor: not-allowed; }
+.export-target-label { font-size: 12px; font-weight: 600; }
+.export-target-desc { font-size: 11px; line-height: 1.45; color: var(--text-dim, #8b93a0); }
+.export-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.export-row-label { min-width: 64px; font-size: 11px; color: var(--text-dim, #8b93a0); }
+.export-seg { display: inline-flex; gap: 4px; }
+.export-seg-btn {
+  padding: 5px 14px; font-size: 11px; letter-spacing: 0.06em; cursor: pointer;
+  background: var(--input-bg, #101216); color: inherit;
+  border: 1px solid var(--panel-border, #2c3037); border-radius: 5px;
+}
+.export-seg-btn.on { border-color: var(--accent, #d34b2a); background: color-mix(in srgb, var(--accent, #d34b2a) 18%, transparent); }
+.export-seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.export-note { margin: 2px 0 0; font-size: 11px; color: var(--text-dim, #8b93a0); }
+.export-modal-foot {
+  padding: 14px 18px; border-top: 1px solid var(--panel-border, #2c3037);
+  display: grid; gap: 10px;
+}
+.export-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+@media (max-width: 600px) {
+  .export-modal { max-height: 92vh; }
+  .export-modal-actions { flex-direction: column-reverse; }
+  .export-modal-actions .btn { width: 100%; }
+}

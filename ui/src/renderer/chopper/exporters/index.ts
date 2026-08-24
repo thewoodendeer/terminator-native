@@ -60,6 +60,7 @@ export async function runExport(
   onProgress?: (pct: number) => void,
   ctx?: ExportRunContext,
   audioFormat: 'wav' | 'flac' = 'wav',
+  shouldCancel?: () => boolean,
 ): Promise<string> {
   const state = engine.getState();
   const baseName = safeFileName(state.trackTitle || 'terminator');
@@ -75,6 +76,7 @@ export async function runExport(
       // enforces the same rule, so a stray caller can't hand MPC a FLAC).
       audioFormat: FLAC_CAPABLE.has(format) ? audioFormat : ('wav' as const),
       onProgress: (p: number) => onProgress?.(Math.round(p * 100)),
+      shouldCancel,
     };
     switch (format) {
       case 'master-wav': return exportArrangement({ ...arrOpts, target: 'master' });
