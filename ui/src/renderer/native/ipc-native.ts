@@ -161,7 +161,6 @@ export function installNativeIPC(): void {
     },
     removeRecentProject: async (id: string) => { const next = recents.get().filter(r => r.id !== id); await setSettings({ recentProjects: next }); return next; },
     onLoadRecent: (_h: (id: string) => void): Unsub => () => {},   // native menu: later
-    onOpenFile: (_cb: (p: string) => void): Unsub => () => {},      // .tproj double-click: later (anotherInstanceStarted)
 
     // projects folder + files
     getProjectsDir: async () => { await refreshDirs(); return projectsDirInfo(); },
@@ -267,12 +266,21 @@ export function installNativeIPC(): void {
     // windows
     openPreferences: async () => { const r = await native.window({ verb: 'preferences' }); return { ok: !!r?.ok }; },
 
+    // Open Recent (8.6) rides the contract the page already has for "open this file": the menu carries the PATH.
+    onOpenFile: (handler: (path: string) => void): Unsub =>
+      onNativeEvent('terminator.menu', (p: { key?: string; path?: string }) => {
+        if (p?.key === 'openRecent' && p.path) handler(String(p.path));
+      }),
+
     // system
     revealInFinder: (filePath: string) => { void native.fs({ verb: 'reveal', path: filePath }); },
     openExternal: async (url: string) => { await native.fs({ verb: 'openExternal', url }); },
     clipboardReadText: async () => { const r = await native.fs({ verb: 'clipboardReadText' }); return r?.ok ? String(r.text ?? '') : ''; },
     pathForFile: (_file: File): string => '', // WKWebView/WebView2 drops carry no paths — native drag-in comes via the shell (later)
-    onShortcut: (_key: string, _h: () => void): Unsub => () => {}, // native menu accelerators: later
+    // THE MENU (8.6): File / Transport / View / Help and their key equivalents live in the SHELL's menu bar and
+    // arrive here as `terminator.menu`. The page's own handlers do the work, exactly as they did under Electron.
+    onShortcut: (key: string, handler: () => void): Unsub =>
+      onNativeEvent('terminator.menu', (p: { key?: string }) => { if (p?.key === key) handler(); }),
   };
 
   // the ASSET STORE (<dataDir>/assets, the Electron layout) + the read fallback into the Electron app's store

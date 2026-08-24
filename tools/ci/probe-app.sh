@@ -25,6 +25,8 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   echo "== the React UI is bundled — asserting ChopperView rendered"
   grep -Eq '"chopperView": ?true' "$OUT" || { echo "::error::React UI served but ChopperView did not render (see errors above)"; exit 1; }
   grep -Eq '"errors": ?\[\]' "$OUT" || { echo "::error::the page reported uncaught errors"; exit 1; }
+  # Phase 8.6: the app's MENU reaches the page — the shell fired its HELP item and the page opened its help window
+  grep -Eq '"menuReachedPage": ?true' "$OUT" || { echo "::error::the app menu did not reach the page (see menuReachedPage)"; exit 1; }
   grep -Eq '"prefsWindow": ?true' "$OUT" || { echo "::error::window.terminator.openPreferences() did not open the native Preferences window"; exit 1; }
   grep -Eq '"prefsReady": ?true' "$OUT" || { echo "::error::the Preferences page did not finish loading in its window"; exit 1; }
   # the native-engine shadow (audio through the C++ engine): attached to ChopperView's engine, and its self-test

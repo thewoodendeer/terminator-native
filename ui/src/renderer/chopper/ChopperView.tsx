@@ -141,7 +141,7 @@ const ipc = (window as any).terminator as {
   // Native Edit-menu shortcuts (desktop). The renderer subscribes to these so
   // the menu can drive in-app actions. Optional so older preload bundles / the
   // web build (no bridge) don't break.
-  onShortcut?: (key: 'playStop' | 'savePreset' | 'export' | 'rearrange' | 'resetLayout' | 'new' | 'open' | 'saveAs', handler: () => void) => () => void;
+  onShortcut?: (key: 'playStop' | 'savePreset' | 'export' | 'rearrange' | 'resetLayout' | 'new' | 'open' | 'saveAs' | 'help', handler: () => void) => () => void;
   // Re-arrange layout persistence (Electron only — JSON file in the app data
   // dir). Optional for the same forward/back-compat reason.
   saveLayout?: (layout: Record<string, { x: number; y: number }>) => Promise<{ ok: boolean }>;
@@ -3045,6 +3045,13 @@ export function ChopperView() {
     offs.push(ipc.onShortcut('open', () => openProjectRef.current()));
     offs.push(ipc.onShortcut('saveAs', () => saveAsRef.current()));
     offs.push(ipc.onShortcut('savePreset', () => savePresetRef.current()));
+    // The app's MENU (Terminator 3.0, 8.6) drives the same handlers as the keyboard: EXPORT opens the export
+    // dialog, PLAY/STOP is the transport (the same unified start/stop SPACE uses), HELP opens the help.
+    offs.push(ipc.onShortcut('export', () => { setExportMsg(null); setShowExportModal(true); }));
+    offs.push(ipc.onShortcut('playStop', () => {
+      if (engine.getState().seqPlaying || drumEngine.getState().playing) stopTransport(); else startTransport();
+    }));
+    offs.push(ipc.onShortcut('help', () => setHelpOpen(true)));
     if (ipc.onLoadRecent) offs.push(ipc.onLoadRecent(id => { void loadRecentRef.current(id); }));
     // .tproj double-clicked in Finder/Explorer → load it through the file flow.
     if (ipc.onOpenFile) offs.push(ipc.onOpenFile(filePath => { void openFromPathRef.current(filePath); }));

@@ -1751,6 +1751,26 @@ Now it points at a path inside a real FILE (`<tempfile>/x.wav`) — a directory 
 already sits, on either OS. **The rule: an "impossible" path is a platform assumption. Make the impossibility
 something the filesystem itself guarantees.**
 
+## Phase 8 — 8.6a DONE (THE APP HAS A MENU), 2026-08-24
+
+Terminator 3.0 had no menu bar at all — no ⌘S, no ⌘O, no Open Recent — and `ipc.onShortcut`, the contract the page
+has used for the Electron menu since forever, was a stub that returned an empty unsubscribe.
+
+- `app/src/AppMenu.{h,cpp}`: **File** (New ⌘N · Open ⌘O · Open Recent ▸ · Save ⌘S · Save As ⇧⌘S · Export ⌘E) ·
+  **Transport** (Play / Stop) · **View** (Rearrange · Reset Layout) · **Help** (F1). On macOS it is the app menu
+  (`setMacMainMenu`) with Preferences ⌘, in the Terminator menu; on Windows it is the window's menu bar. The key
+  equivalents come from an `ApplicationCommandManager`, so they are real shortcuts rather than painted ones.
+- **Every item forwards to the PAGE** (`terminator.menu {key}` → `ipc.onShortcut(key)`), because the page owns
+  projects, exports and the layout. That is not just tidiness: on macOS a menu key equivalent is handled BEFORE the
+  WebView sees the keystroke, so an item that did its own thing would quietly take the shortcut away from the page.
+  SPACE deliberately has NO key equivalent — it belongs to the page (and to typing).
+- **Open Recent** reads `app.recentProjects` (the list the page already writes) and arrives as the page's existing
+  `onOpenFile(path)` contract, so a recent project opens exactly as a double-clicked file will.
+- The page gained the three handlers nobody had registered: EXPORT (opens the export dialog), PLAY/STOP (the same
+  unified transport SPACE drives) and HELP.
+- **Gate:** the probe fires the menu's HELP item from the shell and asserts the PAGE opened its help window
+  (`menuReachedPage`) — a menu that renders but reaches nobody is exactly the shape the old stub had.
+
 ## Phase 6 — 6.3 DONE (YOUR SYNTHS PLAY INTO THE MIXER), 2026-08-24
 
 An INSTRUMENT plugin is a SOURCE, like the bass synth: notes in, audio out into a mixer strip.

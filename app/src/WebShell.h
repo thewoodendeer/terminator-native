@@ -43,6 +43,12 @@ class WebShell final : public juce::Component, private juce::Timer
 
     void resized() override;
 
+    /// THE MENU (8.6) — the app's menu bar forwards here, and these forward to the PAGE (it owns projects, exports
+    /// and the layout; the menu is a second way in, never a second implementation).
+    void menuCommand(const juce::String& key);
+    void menuOpenRecent(const juce::String& path);
+    void openPreferencesFromMenu();
+
   private:
     class Browser;
     class PrefsWindow;

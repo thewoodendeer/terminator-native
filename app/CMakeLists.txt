@@ -40,7 +40,9 @@ target_sources(Terminator PRIVATE
     src/PluginHub.h
     src/PluginHub.cpp
     src/PluginRack.h
-    src/PluginRack.cpp)
+    src/PluginRack.cpp
+    src/AppMenu.h
+    src/AppMenu.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1

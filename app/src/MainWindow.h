@@ -10,6 +10,8 @@
 #include "terminator/io/SampleStore.h"
 #include "terminator/io/Settings.h"
 
+#include "AppMenu.h"
+
 namespace terminator::app
 {
 
@@ -32,6 +34,9 @@ class MainWindow final : public juce::DocumentWindow
     SampleStore samples_;
     SampleLoader loader_;
     std::unique_ptr<WebShell> shell_;
+    // THE MENU (8.6): every item forwards to the page, and the command manager owns the key equivalents.
+    juce::ApplicationCommandManager commands_;
+    std::unique_ptr<AppMenu> menu_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
 };

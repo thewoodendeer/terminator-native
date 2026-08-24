@@ -411,6 +411,26 @@ void WebShell::emitToAll(const juce::String& event, const juce::var& payload)
         prefsWindow_->browser().emitEventIfBrowserIsVisible(event, payload);
 }
 
+void WebShell::menuCommand(const juce::String& key)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty("key", key);
+    emitToAll("terminator.menu", juce::var(o));
+}
+
+void WebShell::menuOpenRecent(const juce::String& path)
+{
+    auto* o = new juce::DynamicObject();
+    o->setProperty("key", "openRecent");
+    o->setProperty("path", path);
+    emitToAll("terminator.menu", juce::var(o));
+}
+
+void WebShell::openPreferencesFromMenu()
+{
+    openPreferences();
+}
+
 void WebShell::openPreferences()
 {
     if (prefsWindow_ == nullptr)
@@ -2011,6 +2031,9 @@ void WebShell::runProbeAsyncChecks()
         })();)JS";
         browser_->evaluateJavascript(kAsyncChecks, nullptr);
     }
+    // THE MENU (8.6) end to end: the shell fires the HELP item and the final read looks for the page's help window.
+    // A menu that renders but reaches nobody is exactly the shape the old `onShortcut` stub had.
+    menuCommand("help");
 }
 
 // PROBE (5.1c): the ARM and the MONITOR over the real bridge handler — the engine's own behaviour is gated in
@@ -2155,6 +2178,8 @@ void WebShell::runProbe()
                                 href: String(location.href), secureContext: !!window.isSecureContext,
                                 audioWorklet: (typeof AudioContext !== 'undefined') && ('audioWorklet' in AudioContext.prototype),
                                 errors: window.__terminatorErrors || [], asyncChecks: window.__terminatorProbeAsync || null,
+                                // 8.6: the shell fired the menu's HELP item — the page opened its help window
+                                menuReachedPage: !!document.querySelector('.tt-help-backdrop'),
                                 shadow: (window.__terminatorNativeShadow && window.__terminatorNativeShadow.stats) ? window.__terminatorNativeShadow.stats() : null });
     })())JS";
     browser_->evaluateJavascript(
@@ -2174,6 +2199,7 @@ void WebShell::runProbe()
                     o->setProperty("enginePrepared", static_cast<bool>(engine_.snapshot().prepared));
                     o->setProperty("lastTriggeredPad", engine_.snapshot().lastTriggeredPad);
                     o->setProperty("record51c", probeRecordArm());
+                    o->setProperty("menuInstalled", juce::MenuBarModel::getMacMainMenu() != nullptr);
                     {
                         // 6.1: the plugin list over the real handler (a SCAN is not run — that is minutes of other
                         // people's code; what the probe proves is that the hub loaded and answers).
