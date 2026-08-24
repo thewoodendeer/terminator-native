@@ -1739,6 +1739,77 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 7 — 7.1a/7.1b DONE (STEMS RUN NATIVELY: THE PIPELINE, AND htdemucs IN PROCESS), 2026-08-24 seventeenth session
+
+**The biggest hole in the native app is closed at the engine level: a stem split runs in Terminator's own
+process, with no Node child, no temp file and no IPC — and it produces the SAME stems the shipping app does.**
+
+### 7.1a — the pipeline (`engine/{include,src}/terminator/stems/`)
+- `SplitSession` is the Electron worker's grid, ported: segment 343980 (7.8 s at 44.1k), overlap = segment/4,
+  stride = segment − overlap, chunk i at i·stride, the fade window, the overlap-add accumulators, the
+  ready-range rule (a stretch is ready only when its chunk AND the chunk whose tail covers its head are done),
+  the reported-span subtraction, and the emit with kernel margin either side. **The model is INJECTED**
+  (`InferFn`), so the whole pipeline gates without onnxruntime — and the app can swap in a different engine.
+- `Resampler` is the rate bridge, ported tap for tap (windowed sinc, Blackman, 16 lobes up / 32 down, per-phase
+  table normalised to unity DC, positions from the GLOBAL output index so spans tile).
+  **Measured against the TS kernel on the same input: max difference 1.19e-07 — one float ULP.** That is what
+  makes the stems cache the Electron app wrote still valid.
+- **A focused window now really does jump the queue.** The Electron worker skipped any chunk already queued, so
+  a chop tapped during the sweep waited out the whole sweep; a front enqueue moves it to the head instead.
+- 10 gates (`tests/engine/test_stems_split.cpp`): unity DC gain, global-index tiling, flat to 20 kHz within
+  0.1 dB with 78 dB rejection of what folds into the band, the chunk maths, ready-only-when-covered, spans
+  tiling the track and reported once, seam reconstruction (−33 dB gate with an identity model), the 48k rate
+  bridge, queue priority, cancel, sub-chunk progress ticks.
+
+### 7.1b — the model, in process (`stems/`, `tools/terminator-stems/`)
+- `StemModel` runs htdemucs through the onnxruntime C++ API: FAST = one model, all four rows; FINE = the four
+  specialists, row k from model k. Input/output names are read off the session, never assumed. CPU EP only —
+  the GPU providers are 7.2, behind the SNR self-check.
+- **onnxruntime is dlopen'd, never linked.** Every prebuilt ORT for macOS is built against 13.3+ (checked
+  1.20.1 → 1.23.2), so LINKING it would raise Terminator's own floor from macOS 12 to 13.4. `ORT_API_MANUAL_INIT`
+  + one `dlsym("OrtGetApiBase")` keeps the app's floor where it is, makes a missing runtime an error message
+  instead of a dead launch, and leaves `otool -L` with no onnxruntime line at all. Verified: the dlopen path is
+  bit-identical to the linked one.
+- Pinned in `cmake/Onnxruntime.cmake`: **1.23.2**, the last macOS release shipped as `osx-universal2`
+  (`lipo -info` = x86_64 arm64 — one file for both slices), the same version the Electron app's Intel Macs
+  already run, and `onnxruntime-win-x64` at the same number. SHA-256 verified, cached in
+  `third_party/.ort-cache` (gitignored), CI caches it per job. `-DTERMINATOR_STEMS=OFF` builds without it.
+- `terminator-stems` CLI = the measuring rig: a WAV in, four stems out, the timing printed.
+
+### Measured on this Mac (M1 Max, 30 s of "Nas — The World Is Yours", FAST, CPU EP)
+- **native vs the SHIPPING Electron child, same input, same model: 116–128 dB SNR per stem, max sample
+  difference 6.0e-07.** Two different onnxruntime versions (native 1.23.2 vs the app's node 1.27.0) and the
+  stems are the same audio. The B5 gate asked for ≤ −60 dB; this is −116 dB.
+- Ready ranges identical to the Electron child's, span for span.
+- Speed: 1.95 s per 7.8 s chunk (the Electron app's own estimate for FAST is 2.0 s/chunk) — 2.8x realtime for
+  a whole track, model load 2.2 s. **Parity, as expected: same graph, same CPU EP.**
+- The four stems sum back to the source at 33 dB, with no seam spike in the residual.
+
+### How the parity was measured (repeat it after any onnxruntime bump)
+1. `ffmpeg -i <track> -t 30 -ar 44100 -ac 2 -c:a pcm_f32le src.wav`
+2. native: `terminator-stems src.wav out/ --model <htdemucs_fp16weights.onnx> --sweep --bits 32`
+3. Electron: fork `$HOME/terminator/dist/main/stemsWorkerChild.js` under PLAIN node (never Electron — the V8
+   cage SIGTRAPs onnxruntime) with `serialization:'advanced'`, send `{type:'init', rawPath, frames, srcRate,
+   modelPaths, windows:[], sweep:true, gpu:'off'}` where rawPath is L then R as planar float32, and write the
+   8 planes it sends back.
+4. compare per stem with numpy: SNR and max|diff|. The gate is ≤ −60 dB difference; the measured number is
+   −116 dB or better.
+Also worth re-running: `arch -x86_64` on the universal CLI, which drives the Intel slice of the same universal
+dylib (measured: 121–124 dB against the arm64 slice, so both slices agree).
+
+### Gates
+`mac-debug` 409/409 · `mac-rtsan` 407/407 · zero warnings · `mac-release-universal` builds and
+`lipo -info terminator-stems` = x86_64 arm64 · the model-backed case runs with
+`TERMINATOR_STEMS_MODEL=<htdemucs_fp16weights.onnx>` and skips without it (a 166 MB model is not a fixture).
+
+### Next (7.1c, the session after this)
+The split is not on the bridge yet — the page's `stemsSplit` / `onStemsChunk` still hit the browser shim, so
+the app's STEMS button does nothing native. **The decision to make first: where the stem audio LIVES.** The
+page contract ships 8 planes of floats per span, which is ~8 MB a span through `emitEvent` — not viable. The
+native answer is that the audio never leaves C++: the split writes straight into the engine's stem planes
+(`Command::setPadStems` already takes them), the page gets progress + ready ranges only, and the cache
+(content key, FLAC assets, `stems-cache.json`) is reimplemented natively so a project reopens with its stems.
+
 ## CI RED on `9b24b4d` — my own test, wrong on Windows (fixed 2026-08-24)
 
 Windows/MSVC failed `engine.recorder: a bad path fails cleanly`; mac universal, Intel and RTSan were all green.

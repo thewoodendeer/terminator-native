@@ -22,6 +22,13 @@ documented in `ui/README.md`; CMake bundles `ui/dist` into the app when it exist
   yourself, pass `-DTERMINATOR_ASIO_SDK_DIR=<dir containing common/iasiodrv.h>` — never commit it.
 - Everything third-party is pinned in `cmake/Dependencies.cmake` via FetchContent (JUCE 9.0.1, Catch2
   v3.8.1). Nothing downloaded by hand. Bump = one commit, all presets rebuilt, tests green.
+- **onnxruntime** (stems) is pinned separately in `cmake/Onnxruntime.cmake`: the prebuilt archive, SHA-256
+  verified, into `third_party/.ort-cache` (gitignored, cached per CI job). Version **1.23.2** — the last macOS
+  release shipped as `osx-universal2`, and the version the Electron app's Intel Macs already run. It is fetched
+  only when the app or the CLIs are built; `-DTERMINATOR_STEMS=OFF` skips it entirely.
+  **The runtime is dlopen'd, never linked** (`StemModel::ensureRuntime`): every prebuilt ORT for macOS is built
+  against 13.3+, and linking it would raise the app's own floor from macOS 12 to 13.4. Nothing in the build may
+  add a link-time dependency on it — `otool -L` on the app must have no onnxruntime line.
 - JUCE licence: **Starter (free, ≤ $20k revenue)** until Terminator 3.0 sells; upgrade to Indie at Phase 9.1b.
 
 ## Presets (CMakePresets.json) — `cmake --preset X && cmake --build --preset X && ctest --preset X`

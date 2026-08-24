@@ -50,6 +50,12 @@ add_executable(terminator-tests
     engine/test_export_bass.cpp
     engine/test_export_arrangement.cpp
     engine/test_export_files.cpp)
+# The stem MODEL cases only exist where onnxruntime was provisioned (not in the RTSan/ASan presets, which build
+# neither the app nor the CLIs).
+if(TARGET terminator_stems)
+    target_sources(terminator-tests PRIVATE engine/test_stems_model.cpp)
+    target_link_libraries(terminator-tests PRIVATE terminator::stems)
+endif()
 target_include_directories(terminator-tests PRIVATE support)
 target_compile_definitions(terminator-tests PRIVATE
     TERMINATOR_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
