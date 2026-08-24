@@ -49,6 +49,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"export": ?\{[^}]*"bytes": ?[1-9]' "$OUT" || { echo "::error::export self-test: the WAV it reported writing has no bytes"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"peak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::export self-test: the render is SILENT (peak 0) — a file full of nothing is a failed export"; exit 1; }
   grep -Eq '"export": ?\{[^}]*"flacSmaller": ?true' "$OUT" || { echo "::error::export self-test: the FLAC is missing, empty, or not smaller than the WAV"; exit 1; }
+  grep -Eq '"export": ?\{[^}]*"progressReports": ?[1-9]' "$OUT" || { echo "::error::export self-test: the render reported no progress (the bar would never move)"; exit 1; }
+  grep -Eq '"export": ?\{[^}]*"cancelled": ?true' "$OUT" || { echo "::error::export self-test: cancelling a render did not stop it"; exit 1; }
+  grep -Eq '"export": ?\{[^}]*"cancelWroteNothing": ?true' "$OUT" || { echo "::error::export self-test: a CANCELLED export still reported files"; exit 1; }
+  grep -Eq '"export": ?\{[^}]*"cancelLeftNoFile": ?true' "$OUT" || { echo "::error::export self-test: a CANCELLED export left a half-written file on disk"; exit 1; }
   grep -Eq '"systemOk": ?true' "$OUT" || { echo "::error::library self-test: the library tree did not load (system folders missing)"; exit 1; }
   grep -Eq '"outsideRootBlocked": ?true' "$OUT" || { echo "::error::library self-test: /lib/b64/ served a path OUTSIDE the registered roots"; exit 1; }
   if grep -Eq '"ytdlpBundled": ?true' "$OUT"; then

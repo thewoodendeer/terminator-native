@@ -6,7 +6,7 @@
  * engine, mixer, sequencers and devices that are playing, then writes the WAVs. Nothing is rendered in Web Audio,
  * so "export == what you hear" is true by construction rather than by two implementations agreeing.
  */
-import { isNative, native } from './juceBridge';
+import { isNative, native, onNativeEvent } from './juceBridge';
 
 type AnyRecord = Record<string, unknown>;
 
@@ -38,10 +38,14 @@ export interface NativeExportRequest {
   limiter?: boolean;
   /** Channel names to write as trackouts, one stereo file each. */
   stems?: string[];
+  /** Job id — needed to report progress and to cancel. One is generated if you leave it out. */
+  id?: string;
 }
 
 export interface NativeExportResult {
   ok: boolean;
+  /** True when the render was cancelled: NO files were written, not even partial ones. */
+  cancelled?: boolean;
   error?: string;
   files?: string[];
   seconds?: number;
@@ -52,9 +56,26 @@ export interface NativeExportResult {
   peak?: number;
 }
 
-/** Render + write. Rejects outside the shell. */
-export function exportProjectNative(req: NativeExportRequest): Promise<NativeExportResult> {
-  return native.exportProject(req as unknown as AnyRecord) as Promise<NativeExportResult>;
+let jobSeq = 0;
+
+/** Render + write. Rejects outside the shell.
+ *
+ *  `onProgress` is called with 0..100 as the render advances. Call the returned `cancel()` to stop it: the render
+ *  aborts at its next progress report and NOTHING is written — a cancelled export never leaves a half file behind.
+ */
+export function exportProjectNative(
+  req: NativeExportRequest,
+  onProgress?: (pct: number) => void,
+): { done: Promise<NativeExportResult>; cancel: () => void; id: string } {
+  const id = req.id ?? `export-${++jobSeq}`;
+  const off = onProgress
+    ? onNativeEvent('terminator.exportProgress', (e: { id?: string; pct?: number }) => {
+        if (e?.id === id) onProgress(Number(e.pct ?? 0));
+      })
+    : () => {};
+  const done = (native.exportProject({ ...req, id } as unknown as AnyRecord) as Promise<NativeExportResult>)
+    .finally(off);
+  return { done, cancel: () => { void native.exportProject({ verb: 'cancel', id }); }, id };
 }
 
 declare global {
@@ -94,9 +115,13 @@ export function installExportProbe(deps: { tempDir: () => string; sep: () => str
           chopVolume: 1,
         };
         const run = async (format: 'wav' | 'flac') => {
-          const res = await exportProjectNative({
-            project, sources: { probe: key }, path, format, bitDepth: 16, sampleRate: sr, tail: 0.2,
-          });
+          const seen: number[] = [];
+          const job = exportProjectNative(
+            { project, sources: { probe: key }, path, format, bitDepth: 16, sampleRate: sr, tail: 0.2 },
+            (pct) => seen.push(pct),
+          );
+          const res = await job.done;
+          if (format === 'wav') r.progressReports = seen.length;
           let bytes = 0;
           // it must be a REAL file with real bytes, not just a promise that resolved
           if (res?.files?.length) {
@@ -109,6 +134,21 @@ export function installExportProbe(deps: { tempDir: () => string; sep: () => str
         };
         const wav = await run('wav');
         const flac = await run('flac');
+
+        // CANCEL: a long render (many loops) stopped as soon as it reports progress must write NOTHING
+        {
+          const cancelPath = `${deps.tempDir()}${deps.sep()}terminator-export-cancel.wav`;
+          const job = exportProjectNative(
+            { project, sources: { probe: key }, path: cancelPath, bitDepth: 16, sampleRate: sr, loops: 64, tail: 0.2 },
+            () => job.cancel(),
+          );
+          const res = await job.done;
+          r.cancelled = res?.cancelled === true;
+          r.cancelWroteNothing = (res?.files?.length ?? 0) === 0;
+          const stat = await native.fs({ verb: 'stat', path: cancelPath });
+          r.cancelLeftNoFile = !stat?.ok || Number(stat?.size ?? 0) === 0;
+          if (stat?.ok) await native.fs({ verb: 'trash', path: cancelPath });
+        }
         r.ok = wav.ok && flac.ok;
         r.files = wav.files;
         r.seconds = wav.seconds;

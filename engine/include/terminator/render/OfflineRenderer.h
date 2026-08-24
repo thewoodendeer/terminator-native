@@ -16,6 +16,7 @@
 // }
 // File paths are resolved relative to the project file's directory (parseRenderSpecFromFile) or the CWD.
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -168,12 +169,24 @@ struct RenderSpec
     std::int64_t totalSamples() const noexcept { return static_cast<std::int64_t>(lengthSeconds * sampleRate + 0.5); }
 };
 
+/// PROGRESS + CANCEL (Phase 4.5g). `onProgress(0..1)` is called from the render thread every so often and returns
+/// FALSE to abort — a long bounce has to be interruptible, and the caller is the only one who knows when the user
+/// pressed cancel. Both fields may be empty.
+struct RenderCallbacks
+{
+    std::function<bool(double)> onProgress;
+    /// How often to call it, in blocks. 0 = the default (~every 1% of a typical render).
+    int everyBlocks = 0;
+};
+
 struct RenderResult
 {
     juce::AudioBuffer<float> buffer; // numChannels × totalSamples
     std::uint64_t blocksProcessed = 0;
     double sampleRate = 0.0;
     std::uint32_t voiceSteals = 0;
+    /// True when `onProgress` asked to stop: the buffer holds only what had been rendered, so DO NOT write it.
+    bool cancelled = false;
     /// Phase 4.5: how many samples were dropped off each output pair's head to align them (0 with no mixer / no
     /// latency / trimLatency off). Index = hardware pair.
     std::vector<int> pairLatency;
@@ -191,7 +204,7 @@ bool loadRenderSamples(RenderSpec& spec, juce::String& error);
 
 /// Drives an Engine through prepare → process×N → release and returns the rendered audio. Events are placed
 /// sample-accurately (triggerPadAtSample). Pads without a loaded sample are silent.
-RenderResult renderOffline(const RenderSpec& spec);
+RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callbacks = nullptr);
 
 /// Writes a PCM WAV (bitDepth 16/24/32; 32 = float). Returns false and fills `error` on failure.
 bool writeWav(const juce::File& file, const juce::AudioBuffer<float>& buffer, double sampleRate, int bitDepth,

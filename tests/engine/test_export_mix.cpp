@@ -265,3 +265,66 @@ TEST_CASE("export: CONSOLE prints into the exported bytes", "[export]")
     REQUIRE(diff > 0.0);  // the desk stage is really in the render…
     REQUIRE(diff < 10.0); // …and it is a character stage, not a level change
 }
+
+TEST_CASE("export: a render reports progress that rises to the end", "[export]")
+{
+    RenderSpec spec = baseSpec(2, 1.0);
+    auto a = channel(1);
+    spec.mixer.strips = {a};
+    addPad(spec, 0, 1, 0.5f);
+
+    std::vector<double> seen;
+    RenderCallbacks cb;
+    cb.everyBlocks = 4;
+    cb.onProgress = [&seen](double p)
+    {
+        seen.push_back(p);
+        return true;
+    };
+    const auto r = renderOffline(spec, &cb);
+    REQUIRE(!r.cancelled);
+    REQUIRE(seen.size() > 4);
+    REQUIRE(seen.front() > 0.0);
+    REQUIRE(seen.back() == Approx(1.0).margin(0.02)); // it really gets to the end
+    for (std::size_t i = 1; i < seen.size(); ++i)
+        REQUIRE(seen[i] >= seen[i - 1]); // never goes backwards
+    REQUIRE(r.buffer.getNumSamples() == static_cast<int>(1.0 * kSr));
+}
+
+TEST_CASE("export: returning false from onProgress stops the render and marks it cancelled", "[export]")
+{
+    RenderSpec spec = baseSpec(2, 5.0); // long enough that stopping early is unmistakable
+    auto a = channel(1);
+    spec.mixer.strips = {a};
+    addPad(spec, 0, 1, 0.5f);
+
+    int calls = 0;
+    RenderCallbacks cb;
+    cb.everyBlocks = 1;
+    cb.onProgress = [&calls](double)
+    {
+        ++calls;
+        return calls < 3; // stop on the third report
+    };
+    const auto r = renderOffline(spec, &cb);
+    REQUIRE(r.cancelled);
+    REQUIRE(calls == 3);
+    // it stopped where it was told: nowhere near the 5 seconds it was asked for
+    REQUIRE(r.blocksProcessed < static_cast<std::uint64_t>(5.0 * kSr / 64.0) / 2);
+}
+
+TEST_CASE("export: with no callbacks a render behaves exactly as before", "[export]")
+{
+    RenderSpec spec = baseSpec(2, 0.05);
+    auto a = channel(1);
+    spec.mixer.strips = {a};
+    addPad(spec, 0, 1, 0.5f);
+    const auto with = renderOffline(spec, nullptr);
+    RenderCallbacks empty;
+    const auto without = renderOffline(spec, &empty); // callbacks present but no function set
+    REQUIRE(!with.cancelled);
+    REQUIRE(!without.cancelled);
+    REQUIRE(with.buffer.getNumSamples() == without.buffer.getNumSamples());
+    for (int i = 0; i < with.buffer.getNumSamples(); ++i)
+        REQUIRE(with.buffer.getSample(0, i) == without.buffer.getSample(0, i));
+}

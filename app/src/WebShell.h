@@ -12,6 +12,7 @@
 // evaluates JS inside the WebView, writes what the page rendered (bridge/engine/device/snapshot lines) as
 // JSON to that file and quits. Proves WebView + bridge + engine end-to-end without a screenshot.
 #include <atomic>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -83,6 +84,9 @@ class WebShell final : public juce::Component, private juce::Timer
     Settings& settings_;
     ShellServices services_; // terminatorFs / terminatorSettings — the window.terminator shim's backend
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true); // export threads outlive us
+    /// Cancel flags for exports in flight, by the page's job id. Message thread only; the render thread reads its
+    /// own shared_ptr, so a job can be cancelled after the map entry is gone.
+    std::map<juce::String, std::shared_ptr<std::atomic<bool>>> exportCancels_;
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
     ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
     juce::String audioError_;

@@ -660,8 +660,9 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
     return spec;
 }
 
-RenderResult renderProject(const juce::ValueTree& project, const SampleBank& bank, const ProjectRenderOptions& opts)
+RenderResult renderProject(const juce::ValueTree& project, const SampleBank& bank, const ProjectRenderOptions& opts,
+                           const RenderCallbacks* callbacks)
 {
-    return renderOffline(buildProjectRenderSpec(project, bank, opts));
+    return renderOffline(buildProjectRenderSpec(project, bank, opts), callbacks);
 }
 } // namespace terminator::render

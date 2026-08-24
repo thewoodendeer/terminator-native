@@ -116,5 +116,6 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
                                   const ProjectRenderOptions& opts);
 
 /// Convenience: build + renderOffline.
-RenderResult renderProject(const juce::ValueTree& project, const SampleBank& bank, const ProjectRenderOptions& opts);
+RenderResult renderProject(const juce::ValueTree& project, const SampleBank& bank, const ProjectRenderOptions& opts,
+                           const RenderCallbacks* callbacks = nullptr);
 } // namespace terminator::render

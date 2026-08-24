@@ -270,7 +270,7 @@ bool loadRenderSamples(RenderSpec& spec, juce::String& error)
     return true;
 }
 
-RenderResult renderOffline(const RenderSpec& spec)
+RenderResult renderOffline(const RenderSpec& spec, const RenderCallbacks* callbacks)
 {
     RenderResult result;
     result.sampleRate = spec.sampleRate;
@@ -414,6 +414,10 @@ RenderResult renderOffline(const RenderSpec& spec)
     const int renderTo = total + headroom;
 
     std::vector<float*> ptrs(static_cast<std::size_t>(spec.numChannels));
+    const int reportEvery = callbacks != nullptr && callbacks->everyBlocks > 0
+                                ? callbacks->everyBlocks
+                                : std::max(1, renderTo / std::max(1, spec.blockSize) / 100);
+    int blocksSinceReport = 0;
     int pos = 0;
     while (pos < renderTo)
     {
@@ -445,9 +449,24 @@ RenderResult renderOffline(const RenderSpec& spec)
             ptrs[static_cast<std::size_t>(ch)] = work.getWritePointer(ch, pos);
         engine.process(ptrs.data(), spec.numChannels, n);
         pos += n;
+        // progress + cancel: told often enough to feel live, rarely enough that the callback is not the cost
+        if (callbacks != nullptr && callbacks->onProgress && ++blocksSinceReport >= reportEvery)
+        {
+            blocksSinceReport = 0;
+            if (!callbacks->onProgress(static_cast<double>(pos) / static_cast<double>(renderTo)))
+            {
+                result.cancelled = true;
+                break;
+            }
+        }
     }
     result.blocksProcessed = engine.snapshot().blocksProcessed;
     result.voiceSteals = engine.snapshot().voiceStealing;
+    if (result.cancelled)
+    {
+        engine.release();
+        return result; // the buffer is a partial render — the caller must not write it
+    }
 
     // which strip feeds each hardware pair: the master its mainOut, a stem strip its tap
     const int numPairs = (spec.numChannels + 1) / 2;

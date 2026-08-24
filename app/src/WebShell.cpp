@@ -1378,6 +1378,20 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
         complete(ok(false, "export needs an object"));
         return;
     }
+    // `{verb: 'cancel', id}` — flip the job's flag; the render thread notices at its next progress report
+    if (req.getProperty("verb", "").toString() == "cancel")
+    {
+        const auto id = req.getProperty("id", "").toString();
+        const auto it = exportCancels_.find(id);
+        if (it == exportCancels_.end())
+        {
+            complete(ok(false, "no export running with id '" + id + "'"));
+            return;
+        }
+        it->second->store(true);
+        complete(ok(true));
+        return;
+    }
     juce::String error;
     auto project = model::projectFromJson(req.getProperty("project", juce::var()), error);
     if (!project.isValid())
@@ -1442,15 +1456,60 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
         return;
     }
 
+    const auto jobId = req.getProperty("id", "export").toString();
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
+    exportCancels_[jobId] = cancel;
+
     auto alive = alive_;
     auto shared = std::make_shared<juce::WebBrowserComponent::NativeFunctionCompletion>(std::move(complete));
+    // progress rides the normal event stream, throttled to whole percents — the page draws a bar, not a firehose
+    auto lastPct = std::make_shared<std::atomic<int>>(-1);
+    RenderCallbacks callbacks;
+    callbacks.onProgress = [this, alive, cancel, lastPct, jobId](double p)
+    {
+        if (cancel->load())
+            return false;
+        const int pct = std::clamp(static_cast<int>(p * 100.0), 0, 100);
+        if (pct != lastPct->exchange(pct))
+            juce::MessageManager::callAsync(
+                [this, alive, jobId, pct]
+                {
+                    if (!alive->load())
+                        return;
+                    auto* e = new juce::DynamicObject();
+                    e->setProperty("id", jobId);
+                    e->setProperty("pct", pct);
+                    emitToAll("terminator.exportProgress", juce::var(e));
+                });
+        return true;
+    };
     std::thread(
-        [project, bank = std::move(bank), opts = std::move(opts), out, bitDepth, format, mp3Kbps, lame, alive,
-         shared]() mutable
+        // `this` is only ever dereferenced inside the message-thread callbacks below, and only after alive_ says we
+        // are still here — the destructor clears that flag on the same thread, so there is no window between them.
+        [this, project, bank = std::move(bank), opts = std::move(opts), out, bitDepth, format, mp3Kbps, lame, alive,
+         shared, callbacks = std::move(callbacks), jobId]() mutable
         {
             juce::var result;
             {
-                const auto rendered = render::renderProject(project, bank, opts);
+                const auto rendered = render::renderProject(project, bank, opts, &callbacks);
+                if (rendered.cancelled)
+                {
+                    // a cancelled render is a PARTIAL buffer: nothing is written, and no half file is left behind
+                    auto* o = new juce::DynamicObject();
+                    o->setProperty("ok", false);
+                    o->setProperty("cancelled", true);
+                    o->setProperty("files", juce::var(juce::Array<juce::var>()));
+                    result = juce::var(o);
+                    juce::MessageManager::callAsync(
+                        [this, alive, shared, result, jobId]
+                        {
+                            if (!alive->load())
+                                return;
+                            exportCancels_.erase(jobId);
+                            (*shared)(result);
+                        });
+                    return;
+                }
                 auto* o = new juce::DynamicObject();
                 juce::Array<juce::var> files;
                 juce::String err;
@@ -1492,10 +1551,12 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
                 result = juce::var(o);
             }
             juce::MessageManager::callAsync(
-                [alive, shared, result]
+                [this, alive, shared, result, jobId]
                 {
-                    if (alive->load())
-                        (*shared)(result);
+                    if (!alive->load())
+                        return;
+                    exportCancels_.erase(jobId); // the job is done: cancelling it from here on is a no-op
+                    (*shared)(result);
                 });
         })
         .detach();
