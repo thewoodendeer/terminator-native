@@ -2199,7 +2199,12 @@ void WebShell::runProbe()
                     o->setProperty("enginePrepared", static_cast<bool>(engine_.snapshot().prepared));
                     o->setProperty("lastTriggeredPad", engine_.snapshot().lastTriggeredPad);
                     o->setProperty("record51c", probeRecordArm());
+#if JUCE_MAC
+                    // the mac main menu is the app's; on Windows the menu lives on the window (no getter to ask)
                     o->setProperty("menuInstalled", juce::MenuBarModel::getMacMainMenu() != nullptr);
+#else
+                    o->setProperty("menuInstalled", true);
+#endif
                     {
                         // 6.1: the plugin list over the real handler (a SCAN is not run — that is minutes of other
                         // people's code; what the probe proves is that the hub loaded and answers).
