@@ -73,6 +73,9 @@ export interface MixerNativeSink {
   fxAdd(name: ChannelName | 'master', index: number, id: FxId, params: Record<string, number | string>): void;
   fxRemove(name: ChannelName | 'master', index: number): void;
   fxBypass(name: ChannelName | 'master', index: number, on: boolean): void;
+  /** M/S everywhere (4.7a): what part of the image this SLOT's device works on. The engine owns the split, so
+   *  this is a slot property rather than a device param — every device gets it at once. */
+  fxRoute?(name: ChannelName | 'master', index: number, route: FxRoute): void;
   fxParam(name: ChannelName | 'master', index: number, id: FxId, key: string, value: number | string): void;
   fxReorder(name: ChannelName | 'master', from: number, to: number): void;
   fxClear(name: ChannelName | 'master'): void;
@@ -107,7 +110,19 @@ export const DEFAULT_REGULAR_CHANNELS: ChannelName[] = ['sample', 'kick', 'snare
 export const REGULAR_CHANNELS: ChannelName[] = [...DEFAULT_REGULAR_CHANNELS];
 export const SEND_CHANNELS: ChannelName[] = ['send1', 'send2', 'send3', 'send4'];
 
-export interface FxPreset { id: FxId; bypassed: boolean; params: Record<string, number | string>; }
+/** M/S everywhere (4.7a): what part of the image a SLOT's device works on. The ENGINE does the split, so this is
+ *  a property of the slot rather than of the device — all 25 of them get it at once. STEREO is bit-exact. */
+export type FxRoute = 'STEREO' | 'MID' | 'SIDE' | 'LEFT' | 'RIGHT';
+export const FX_ROUTES: FxRoute[] = ['STEREO', 'MID', 'SIDE', 'LEFT', 'RIGHT'];
+export const FX_ROUTE_HELP: Record<FxRoute, string> = {
+  STEREO: 'STEREO — the device works on the whole signal. The default, and bit-exact.',
+  MID: 'MID — only the CENTRE of the image (vocal, kick, snare, bass). Compress or EQ the middle without touching the width around it.',
+  SIDE: 'SIDE — only what is NOT the centre. Brighten or widen the sides while the centre stays put.',
+  LEFT: 'LEFT — the left channel only.',
+  RIGHT: 'RIGHT — the right channel only.',
+};
+
+export interface FxPreset { id: FxId; bypassed: boolean; params: Record<string, number | string>; route?: FxRoute; }
 export interface ChannelPreset {
   fader: number; pan: number; mute: boolean; solo: boolean;
   sends: number[]; fx: FxPreset[];
@@ -237,6 +252,9 @@ class ChannelStrip {
   fx: MixerFX[] = [];
   fxIds: FxId[] = [];
   fxBypassed: boolean[] = [];
+  /** M/S everywhere (4.7a): the per-slot route. The ENGINE does the split — the page tracks it for the UI and
+   *  for the project. */
+  fxRoutes: FxRoute[] = [];
 
   /** CONSOLE stage between `input` and the insert chain — present only while
    *  the mixer's CONSOLE is on (off = the node is not in the graph at all, so
@@ -388,7 +406,7 @@ class ChannelStrip {
     // Aux/send returns are 100% wet by convention — lock any dry/wet param.
     if (this.isSend) for (const k of Object.keys(fx.params)) if (WET_PARAM_KEYS.has(k)) fx.setParam(k, 100);
     this.tearDownEdges();
-    this.fx.push(fx); this.fxIds.push(id); this.fxBypassed.push(false);
+    this.fx.push(fx); this.fxIds.push(id); this.fxBypassed.push(false); this.fxRoutes.push('STEREO');
     this.rebuildChain();
     this.onChainChanged?.();
     nativeSink?.fxAdd(this.name, this.fx.length - 1, id, { ...fx.params });
@@ -402,6 +420,7 @@ class ChannelStrip {
     const [rm] = this.fx.splice(i, 1);
     this.fxIds.splice(i, 1);
     this.fxBypassed.splice(i, 1);
+    this.fxRoutes.splice(i, 1);
     this.rebuildChain();
     rm.dispose();
     this.onChainChanged?.();
@@ -414,6 +433,12 @@ class ChannelStrip {
     this.onChainChanged?.();
     nativeSink?.fxBypass(this.name, i, this.fxBypassed[i]);
   }
+  setFxRoute(i: number, route: FxRoute): void {
+    if (i < 0 || i >= this.fx.length) return;
+    this.fxRoutes[i] = route;
+    this.onChainChanged?.();
+    nativeSink?.fxRoute?.(this.name, i, route);
+  }
   setFxParam(i: number, key: string, value: number | string): void {
     if (i < 0 || i >= this.fx.length) return;
     this.fx[i].setParam(key, value);
@@ -423,7 +448,7 @@ class ChannelStrip {
   private clearFx(): void {
     this.tearDownEdges();
     for (const f of this.fx) f.dispose();
-    this.fx = []; this.fxIds = []; this.fxBypassed = [];
+    this.fx = []; this.fxIds = []; this.fxBypassed = []; this.fxRoutes = [];
     this.rebuildChain();
     this.onChainChanged?.();
     nativeSink?.fxClear(this.name);
@@ -708,6 +733,9 @@ class MasterStrip {
   fx: MixerFX[] = [];
   fxIds: FxId[] = [];
   fxBypassed: boolean[] = [];
+  /** M/S everywhere (4.7a): the per-slot route. The ENGINE does the split — the page tracks it for the UI and
+   *  for the project. */
+  fxRoutes: FxRoute[] = [];
   faderDb = 0;
   /** CONSOLE bus stage (summing glue) between `input` and the insert chain. */
   private console: ConsoleStage | null = null;
@@ -795,7 +823,7 @@ class MasterStrip {
     if (!FX_REGISTRY[id]) return -1;   // skip removed/unknown ids (e.g. a legacy preset's GATE/BIT)
     const fx = createFx(id, this.ctx);
     this.tearDownEdges();
-    this.fx.push(fx); this.fxIds.push(id); this.fxBypassed.push(false);
+    this.fx.push(fx); this.fxIds.push(id); this.fxBypassed.push(false); this.fxRoutes.push('STEREO');
     this.rebuildChain();
     this.onChainChanged?.();
     nativeSink?.fxAdd('master', this.fx.length - 1, id, { ...fx.params });
@@ -818,6 +846,12 @@ class MasterStrip {
     this.onChainChanged?.();
     nativeSink?.fxBypass('master', i, this.fxBypassed[i]);
   }
+  setFxRoute(i: number, route: FxRoute): void {
+    if (i < 0 || i >= this.fx.length) return;
+    this.fxRoutes[i] = route;
+    this.onChainChanged?.();
+    nativeSink?.fxRoute?.('master', i, route);
+  }
   setFxParam(i: number, key: string, value: number | string): void {
     if (i >= 0 && i < this.fx.length) this.fx[i].setParam(key, value);
     if (key === 'SOURCE') this.onChainChanged?.();
@@ -826,7 +860,7 @@ class MasterStrip {
   private clearFx(): void {
     this.tearDownEdges();
     for (const f of this.fx) f.dispose();
-    this.fx = []; this.fxIds = []; this.fxBypassed = [];
+    this.fx = []; this.fxIds = []; this.fxBypassed = []; this.fxRoutes = [];
     this.rebuildChain();
     this.onChainChanged?.();
   }

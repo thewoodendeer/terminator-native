@@ -120,6 +120,7 @@ enum class CommandType : std::uint32_t
                       // not ported → snapshot mixerFxRejected++)
     mixerRemoveFx,    // fx.strip + fx.index
     mixerSetFxBypass, // fx.strip + fx.index + fx.flag
+    mixerSetFxRoute,  // fx.strip + fx.index + fx.param = FxRoute (M/S everywhere, 4.7a)
     mixerSetFxParam,  // fx.strip + fx.index + fx.param (the type's param index) + fx.value (enum: the option index) +
                       // fx.flag = immediate (no glide — a restore / the first set)
     mixerReorderFx,   // fx.strip + fx.index (from) + fx.to
@@ -917,6 +918,12 @@ struct Command
     {
         Command c = fxCmd(CommandType::mixerSetFxBypass, strip, index);
         c.payload.fx.flag = on ? 1 : 0;
+        return c;
+    }
+    static Command mixerSetFxRoute(int strip, int index, std::uint8_t route) noexcept
+    {
+        Command c = fxCmd(CommandType::mixerSetFxRoute, strip, index);
+        c.payload.fx.param = route;
         return c;
     }
     static Command mixerSetFxParam(int strip, int index, int param, float value, bool immediate = false) noexcept

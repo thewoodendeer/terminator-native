@@ -439,6 +439,10 @@ void Engine::apply(const Command& c, int numSamples) noexcept TERMINATOR_NONBLOC
     case CommandType::mixerSetFxBypass:
         mixer_->setFxBypass(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.flag != 0);
         break;
+    case CommandType::mixerSetFxRoute:
+        mixer_->setFxRoute(c.payload.fx.strip, c.payload.fx.index,
+                           static_cast<FxRoute>(c.payload.fx.param > 4 ? 0 : c.payload.fx.param));
+        break;
     case CommandType::mixerSetFxParam:
         mixer_->setFxParam(c.payload.fx.strip, c.payload.fx.index, c.payload.fx.param, c.payload.fx.value,
                            c.payload.fx.flag != 0);

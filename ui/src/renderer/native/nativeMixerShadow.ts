@@ -83,6 +83,9 @@ export class NativeMixerShadow {
       fxAdd: (name, index, id, params) => this.fxAdd(name, index, id, params),
       fxRemove: (name, index) => this.queue({ type: 'mixerRemoveFx', strip: this.idxOf(name), index }),
       fxBypass: (name, index, on) => this.queue({ type: 'mixerSetFxBypass', strip: this.idxOf(name), index, on }),
+      // M/S everywhere (4.7a): the SLOT's route. The engine owns the split (and the delay that keeps the untouched
+      // half aligned when the device has latency), so only the choice crosses.
+      fxRoute: (name, index, route) => this.queue({ type: 'mixerSetFxRoute', strip: this.idxOf(name), index, route }),
       fxParam: (name, index, id, key, value) => this.queue({ type: 'mixerSetFxParam', strip: this.idxOf(name), index, fx: id, key, value: this.fxValue(id, key, value) }),
       fxReorder: (name, from, to) => this.queue({ type: 'mixerReorderFx', strip: this.idxOf(name), from, to }),
       fxClear: (name) => this.queue({ type: 'mixerClearFx', strip: this.idxOf(name) }),
@@ -219,6 +222,8 @@ export class NativeMixerShadow {
     this.queue({ type: 'mixerClearFx', strip: idx });
     for (let i = 0; i < strip.fx.length; i++) {
       this.fxAdd(name, i, strip.fxIds[i], strip.fx[i].params);
+      if (strip.fxRoutes[i] && strip.fxRoutes[i] !== 'STEREO')
+        this.queue({ type: 'mixerSetFxRoute', strip: this.idxOf(name), index: i, route: strip.fxRoutes[i] });
       if (strip.fxBypassed[i]) this.queue({ type: 'mixerSetFxBypass', strip: idx, index: i, on: true });
     }
   }

@@ -4,7 +4,7 @@ import { useKeepOnScreen } from '../renderer/hooks/useKeepOnScreen';
 const STRIP_W_LS = 'terminator.mixer.stripWidths.v1';
 import {
   MixerEngine, ChannelName, REGULAR_CHANNELS, SEND_CHANNELS,
-  FADER_MIN_DB, FADER_MAX_DB, SEND_MIN_DB, CONSOLE_FLAVOURS, CONSOLE_FLAVOUR_HELP,
+  FADER_MIN_DB, FADER_MAX_DB, SEND_MIN_DB, CONSOLE_FLAVOURS, CONSOLE_FLAVOUR_HELP, FX_ROUTES, FX_ROUTE_HELP, type FxRoute,
 } from './MixerEngine';
 import { FX_REGISTRY, FX_ORDER, FxId, ParamSpec, WET_PARAM_KEYS } from './fx';
 import { MidiMapTarget } from '../renderer/chopper/MidiMap';
@@ -1203,6 +1203,13 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
               <div className="mx-device-head">
                 <span className="mx-device-title" style={{ color: chColor }}>{def.name}</span>
                 <span className="mx-device-sub">{chLabel}</span>
+                {/* M/S everywhere (4.7a): the SLOT's route. Engine-side, so it applies to every device. */}
+                <select className="mx-device-route" value={strip?.fxRoutes?.[idx] ?? 'STEREO'}
+                  title={FX_ROUTE_HELP[(strip?.fxRoutes?.[idx] ?? 'STEREO') as FxRoute]}
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => { strip?.setFxRoute(idx, e.target.value as FxRoute); force(); }}>
+                  {FX_ROUTES.map(rt => <option key={rt} value={rt} title={FX_ROUTE_HELP[rt]}>{rt}</option>)}
+                </select>
                 <button className="mx-device-close" title="Close"
                   onClick={e => { e.stopPropagation(); togglePanel(key); }}>✕</button>
               </div>

@@ -610,7 +610,18 @@
 }
 .mx-device-title { font-size: 10px; font-weight: 700; color: var(--hw-accent, #e7a977); letter-spacing: 1px; }
 .mx-device-sub { font-size: 8px; color: var(--hw-muted, #6c7a8c); }
-.mx-device-close { margin-left: auto; border: none; background: none; color: var(--hw-muted, #8899aa); cursor: pointer; font-size: 10px; }
+/* M/S everywhere (4.7a): the slot's route, sitting with the device's name rather than among its params — it is
+   not one of the device's controls, it decides what the device is pointed at. */
+.mx-device-route {
+  margin-left: auto; font-size: 8px; letter-spacing: 0.5px;
+  background: var(--hw-panel, #0e1626); color: var(--hw-muted, #8899aa);
+  border: 1px solid var(--hw-border, #1d2942); border-radius: 3px;
+  padding: 1px 2px; cursor: pointer;
+}
+.mx-device-route:hover { color: var(--hw-text, #cfe0f5); }
+/* a slot that is NOT on STEREO says so at a glance — otherwise a mid-only compressor is invisible */
+.mx-device-route:not([value="STEREO"]) { color: var(--hw-accent, #e7a977); border-color: var(--hw-accent, #e7a977); }
+.mx-device-close { margin-left: 4px; border: none; background: none; color: var(--hw-muted, #8899aa); cursor: pointer; font-size: 10px; }
 .mx-device-close:hover { color: #ff7766; }
 .mx-device-body {
   display: flex; flex-wrap: wrap; gap: 8px 10px;

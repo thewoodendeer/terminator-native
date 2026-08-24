@@ -32,7 +32,25 @@ namespace terminator
 // kMaxStrips lives in StateSnapshot.h (the snapshot carries per-strip meters): 0 = master, 1..63 = channels / sends /
 // buses (the page names them)
 inline constexpr int kMasterStrip = 0;
-inline constexpr int kMaxInserts = 8;        // the TS: ≤ 8 inserts per strip (Phase 4.2)
+inline constexpr int kMaxInserts = 8; // the TS: ≤ 8 inserts per strip (Phase 4.2)
+
+/// WHAT PART OF THE STEREO IMAGE an insert works on (Phase 4.7a — B4's "mid/side everywhere"). This is a property
+/// of the SLOT, not of the device: it applies to all 25 of them at once, which is the only way "everywhere" is
+/// maintainable. STEREO is the default and is bit-exact — nothing below runs unless the slot asks for it.
+enum class FxRoute : std::uint8_t
+{
+    stereo = 0,
+    mid,  // (L+R)/2 — the centre: vocals, kick, snare, bass
+    side, // (L−R)/2 — everything that is not the centre
+    left,
+    right
+};
+
+/// How many slots can route a device that HAS latency. A routed device delays only the part it processes, so the
+/// part it does not has to be delayed to match or the two comb-filter when they are put back together; that needs
+/// a delay line per such slot, and this is how many are kept ready. Slots past this fall back to STEREO rather
+/// than to a quietly wrong sound.
+inline constexpr int kMaxRoutedLatencySlots = 8;
 inline constexpr int kMaxSends = 4;          // the TS: 4 post-fader sends per regular strip
 inline constexpr float kFaderMinDb = -60.0f; // at/below = −∞ (gain 0) — FADER_MIN_DB / SEND_MIN_DB
 inline constexpr float kFaderMaxDb = 6.0f;
@@ -172,6 +190,12 @@ class Mixer
     bool addFx(int strip, FxType type) noexcept TERMINATOR_NONBLOCKING;
     bool removeFx(int strip, int index) noexcept TERMINATOR_NONBLOCKING;
     void setFxBypass(int strip, int index, bool on) noexcept TERMINATOR_NONBLOCKING;
+    /// M/S (4.7a): what part of the image this slot's device works on. A device with LATENCY also takes one of the
+    /// `kMaxRoutedLatencySlots` compensation delays so the untouched part stays aligned with the processed part;
+    /// when none is free the slot stays STEREO (and `routeRejected()` counts it) rather than comb-filtering.
+    void setFxRoute(int strip, int index, FxRoute route) noexcept TERMINATOR_NONBLOCKING;
+    FxRoute fxRoute(int strip, int index) const noexcept;
+    std::uint32_t routeRejected() const noexcept { return routeRejected_; }
     /// `immediate` = no glide (a restore / the page's first set).
     void setFxParam(int strip, int index, int param, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING;
     bool reorderFx(int strip, int from, int to) noexcept TERMINATOR_NONBLOCKING;
@@ -248,6 +272,8 @@ class Mixer
         StripMeter meter;
         // the insert chain (4.2)
         Effect* fx[kMaxInserts] = {};
+        FxRoute fxRoute[kMaxInserts] = {};
+        int fxCompDelay[kMaxInserts] = {-1, -1, -1, -1, -1, -1, -1, -1}; // index into compDelays_, −1 = none
         bool fxBypass[kMaxInserts] = {};
         int fxCount = 0;
         // the desk stage (4.2c): between the pre meter and the inserts
@@ -309,8 +335,17 @@ class Mixer
     std::vector<double*> inputPtrs_;  // 2 × kMaxStrips
     std::vector<double> outL_, outR_; // the strip being processed
     std::vector<double> wetL_, wetR_; // an insert's wet path when it crossfades (WET < 100)
-    std::vector<double> keys_;        // kMaxStrips × 2 × maxBlock: the sidechain keys (pre-insert inputs)
-    std::vector<double> silence_;     // maxBlock zeros (a key with no live source)
+    std::vector<double> msA_, msB_;   // M/S (4.7a): the component a routed device works on
+    /// The compensation delays for routed devices that have latency (see kMaxRoutedLatencySlots).
+    struct CompDelay
+    {
+        IntDelay a, b;
+        bool used = false;
+    };
+    std::vector<CompDelay> compDelays_;
+    std::uint32_t routeRejected_ = 0;
+    std::vector<double> keys_;    // kMaxStrips × 2 × maxBlock: the sidechain keys (pre-insert inputs)
+    std::vector<double> silence_; // maxBlock zeros (a key with no live source)
 };
 
 } // namespace terminator

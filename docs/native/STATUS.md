@@ -1739,6 +1739,35 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 4 — 4.7a DONE (M/S EVERYWHERE: A ROUTE ON EVERY INSERT SLOT), 2026-08-24
+
+B4's "mid/side everywhere", built the only way it stays maintainable: as a property of the SLOT, not of each
+device. `FxRoute { stereo, mid, side, left, right }` on the insert chain, so **all 25 devices** — the 17 parity
+ports and the 8 premium ones — get it at once, and a device added tomorrow gets it for free.
+
+- **STEREO is bit-exact and costs nothing:** the chain still calls `process(inL, inR, n)` in place with no copy
+  unless the slot asks for a route (or the device has a WET blend). Gated on a unity UTILITY through the whole
+  strip at 1e-9.
+- The component is extracted, given to the device in BOTH channels (so a stereo device behaves), and put back.
+  Gated the way it should be: a MID-routed attenuator flattens a dead-centre signal and leaves a pure-side signal
+  **untouched to 2 %**, and vice versa.
+
+**THE PART THAT MAKES IT REAL — a routed device with LATENCY.** It delays only the half it processes, so the other
+half comb-filters against it when they are recombined. That sounds like a broken plugin and is close to
+undiagnosable by ear. So a routed slot whose device reports latency takes one of **8 compensation delay pairs**
+(`kMaxRoutedLatencySlots`) and the untouched half is delayed by exactly the device's own `latencySamples()`.
+Gated: a pure-SIDE signal through a MID-routed LIMITER with 5 ms of look-ahead comes back at full level with L and
+R still exactly opposite (a comb would notch it). **When the pool is exhausted the slot stays STEREO and
+`routeRejected()` counts it** — refusing is better than sounding subtly wrong, and that is gated too.
+
+**Gates (4.7a):** a new `test_fx_route.cpp`, 5 cases (STEREO transparent · MID/SIDE isolation · LEFT/RIGHT · the
+latency alignment · the pool running out). **mac-debug ctest 353/353 · RTSan 354/354 · app probe PROBE OK ·
+ui typecheck 5 = baseline · vite clean · format clean.**
+
+Page side: `FxRoute` + `FX_ROUTES` + `FX_ROUTE_HELP` in MixerEngine, `fxRoutes[]` per strip (both ChannelStrip and
+MasterStrip), `setFxRoute`, the `mixerSetFxRoute` bridge verb (re-sent with the chain on attach), a ROUTE selector
+in each device panel's header that turns accent-coloured when it is not STEREO, and a Help section.
+
 ## Phase 4 — 4.6i DONE (THE PREMIUM CONSOLE RE-MODELS — AND A REAL EXPORT BUG THEY UNCOVERED), 2026-08-24
 
 The last item on B4's premium list that fits the current param model. `ConsoleFlavour` gains **SSL+ / NEVE+ / API+**

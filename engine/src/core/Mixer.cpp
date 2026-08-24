@@ -121,6 +121,15 @@ void Mixer::prepare(double sampleRate, int maxBlockSize, bool keepState)
     outL_.assign(n, 0.0);
     outR_.assign(n, 0.0);
     wetL_.assign(n, 0.0);
+    msA_.assign(n, 0.0);
+    msB_.assign(n, 0.0);
+    compDelays_.resize(static_cast<std::size_t>(kMaxRoutedLatencySlots));
+    for (auto& c : compDelays_)
+    {
+        c.a.prepare(kMaxPdcSamples, maxBlockSize);
+        c.b.prepare(kMaxPdcSamples, maxBlockSize);
+        c.used = false;
+    }
     keys_.assign(static_cast<std::size_t>(kMaxStrips) * 2 * n, 0.0);
     silence_.assign(n, 0.0);
     wetR_.assign(n, 0.0);
@@ -549,6 +558,50 @@ void Mixer::setFxBypass(int strip, int index, bool on) noexcept TERMINATOR_NONBL
     rebuildPdc(); // a bypassed device contributes no latency — the plan moves
 }
 
+void Mixer::setFxRoute(int strip, int index, FxRoute route) noexcept TERMINATOR_NONBLOCKING
+{
+    if (strip < 0 || strip >= kMaxStrips)
+        return;
+    auto& s = strips_[strip];
+    if (index < 0 || index >= s.fxCount || s.fx[index] == nullptr)
+        return;
+    // hand back whatever this slot was holding before deciding what it needs now
+    if (s.fxCompDelay[index] >= 0)
+    {
+        compDelays_[static_cast<std::size_t>(s.fxCompDelay[index])].used = false;
+        s.fxCompDelay[index] = -1;
+    }
+    if (route != FxRoute::stereo && s.fx[index]->latencySamples() > 0)
+    {
+        int slot = -1;
+        for (int i = 0; i < static_cast<int>(compDelays_.size()); ++i)
+            if (!compDelays_[static_cast<std::size_t>(i)].used)
+            {
+                slot = i;
+                break;
+            }
+        if (slot < 0)
+        {
+            // No line free. Routing anyway would comb-filter the two halves against each other, which sounds like
+            // a broken plugin and is impossible to diagnose by ear — so the slot stays STEREO and says so.
+            s.fxRoute[index] = FxRoute::stereo;
+            ++routeRejected_;
+            return;
+        }
+        compDelays_[static_cast<std::size_t>(slot)].used = true;
+        compDelays_[static_cast<std::size_t>(slot)].a.reset();
+        compDelays_[static_cast<std::size_t>(slot)].b.reset();
+        s.fxCompDelay[index] = slot;
+    }
+    s.fxRoute[index] = route;
+}
+
+FxRoute Mixer::fxRoute(int strip, int index) const noexcept
+{
+    const auto& s = strips_[clampIdx(strip)];
+    return (index >= 0 && index < s.fxCount) ? s.fxRoute[index] : FxRoute::stereo;
+}
+
 void Mixer::setFxParam(int strip, int index, int param, float value, bool immediate) noexcept TERMINATOR_NONBLOCKING
 {
     if (strip < 0 || strip >= kMaxStrips)
@@ -609,6 +662,12 @@ void Mixer::clearFx(int strip) noexcept TERMINATOR_NONBLOCKING
             pool_->release(s.fx[k]);
         s.fx[k] = nullptr;
         s.fxBypass[k] = false;
+        s.fxRoute[k] = FxRoute::stereo;
+        if (s.fxCompDelay[k] >= 0)
+        {
+            compDelays_[static_cast<std::size_t>(s.fxCompDelay[k])].used = false;
+            s.fxCompDelay[k] = -1;
+        }
     }
     s.fxCount = 0;
     rebuildKeyMask();
@@ -911,16 +970,72 @@ void Mixer::processStrip(int idx, float* const* outputs, int numOut, int n) noex
             e->setSidechainKey(kl, kr);
         }
         const float mix = e->wetMix();
-        if (mix >= 1.0f)
+        const FxRoute route = s.fxRoute[k];
+        if (route == FxRoute::stereo && mix >= 1.0f)
         {
-            e->process(inL, inR, n);
+            e->process(inL, inR, n); // the common path, untouched: in place, no copy
             continue;
         }
         double* wl = wetL_.data();
         double* wr = wetR_.data();
         std::copy_n(inL, n, wl);
         std::copy_n(inR, n, wr);
-        e->process(wl, wr, n);
+        if (route == FxRoute::stereo)
+            e->process(wl, wr, n);
+        else
+        {
+            // M/S (4.7a): pull out the part this slot is aimed at, run the device on it ALONE (both channels the
+            // same, so a stereo device behaves), then put it back.
+            double* ca = msA_.data();
+            double* cb = msB_.data();
+            for (int i = 0; i < n; ++i)
+            {
+                const double v = route == FxRoute::mid    ? 0.5 * (wl[i] + wr[i])
+                                 : route == FxRoute::side ? 0.5 * (wl[i] - wr[i])
+                                 : route == FxRoute::left ? wl[i]
+                                                          : wr[i];
+                ca[i] = v;
+                cb[i] = v;
+            }
+            e->process(ca, cb, n);
+            // The part we did NOT process has to be delayed by whatever the device cost, or the two halves comb
+            // against each other when they are recombined. This is why a routed device with latency holds one of
+            // the compensation lines.
+            const int comp = s.fxCompDelay[k];
+            if (comp >= 0)
+            {
+                const int lat = std::min(e->latencySamples(), Mixer::kMaxPdcSamples);
+                auto& cd = compDelays_[static_cast<std::size_t>(comp)];
+                cd.a.process(wl, n, lat);
+                cd.b.process(wr, n, lat);
+            }
+            for (int i = 0; i < n; ++i)
+            {
+                const double p = ca[i];
+                if (route == FxRoute::mid)
+                {
+                    const double sd = 0.5 * (wl[i] - wr[i]);
+                    wl[i] = p + sd;
+                    wr[i] = p - sd;
+                }
+                else if (route == FxRoute::side)
+                {
+                    const double md = 0.5 * (wl[i] + wr[i]);
+                    wl[i] = md + p;
+                    wr[i] = md - p;
+                }
+                else if (route == FxRoute::left)
+                    wl[i] = p;
+                else
+                    wr[i] = p;
+            }
+        }
+        if (mix >= 1.0f)
+        {
+            std::copy_n(wl, n, inL);
+            std::copy_n(wr, n, inR);
+            continue;
+        }
         const double m = static_cast<double>(mix), d = 1.0 - m;
         for (int i = 0; i < n; ++i)
         {

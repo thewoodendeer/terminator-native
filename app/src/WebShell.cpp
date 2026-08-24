@@ -1027,6 +1027,14 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
     }
     else if (type == "mixerRemoveFx")
         c = Command::mixerRemoveFx(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7));
+    else if (type == "mixerSetFxRoute")
+    {
+        // M/S everywhere (4.7a): the SLOT's route, not a device param — 'STEREO' | 'MID' | 'SIDE' | 'LEFT' | 'RIGHT'
+        const auto rt = json.getProperty("route", "STEREO").toString().toUpperCase();
+        const std::uint8_t route = rt == "MID" ? 1 : rt == "SIDE" ? 2 : rt == "LEFT" ? 3 : rt == "RIGHT" ? 4 : 0;
+        c = Command::mixerSetFxRoute(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7),
+                                     route);
+    }
     else if (type == "mixerSetFxBypass")
         c = Command::mixerSetFxBypass(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7),
                                       static_cast<bool>(json.getProperty("on", false)));
