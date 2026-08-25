@@ -22,8 +22,9 @@
  * Electron app's store, bundle bytes via readBinary/writeBinary) and YouTube pulls (the bundled yt-dlp).
  * plus STEMS (stemsNative.ts — htdemucs in process; the split takes the store key, a ready span's PCM comes
  * back through /blob/<token>, and the cache is the same stems-cache.json shape).
- * NOT yet native (browser-shim or undefined): drums, menu shortcuts / Recent submenu / open-with-file
- * events, drag-out, licence, cloud presets.
+ * plus DRUMS (drumsNative.ts — the KCC library shipped inside the app and served at /drums/<id>.<ext>, and
+ * the user's own <Sample Library>/Drums folder behind the MY DRUMS tab + Preferences → FOLDERS).
+ * NOT yet native (browser-shim or undefined): menu open-with-file events, drag-out, licence, cloud presets.
  */
 import { installBrowserIPC } from '../ipc-browser';
 import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
@@ -31,6 +32,7 @@ import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
 import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } from './assetsNative';
 import { installExportProbe } from './exportNative';
 import { applyModelsDirSetting, buildStemsOverlay, installStemsProbe } from './stemsNative';
+import { buildDrumsOverlay, installDrumsProbe } from './drumsNative';
 import { nativeEngineShadow } from './nativeEngineShadow';
 
 type AnyRecord = Record<string, any>;
@@ -318,6 +320,11 @@ export function installNativeIPC(): void {
     const r = await native.fs({ verb: 'du', path }).catch(() => null);
     return { bytes: Number(r?.bytes) || 0, approx: !!r?.approx };
   };
+  // DRUMS: the bundled KCC library + the user's own folder (it lives inside the library, so it moves with it)
+  const drums = buildDrumsOverlay({ libraryRoot: () => library.core.libraryRoot() });
+  Object.assign(overlay, drums.keys);
+  installDrumsProbe(drums);
+
   Object.assign(overlay, {
     getCacheDirInfo: async () => ({ path: youtubeDir(), isDefault: true }),
     setCacheDir: async () => ({ cancelled: true }), // it moves with the library, like the shipping app
@@ -330,9 +337,14 @@ export function installNativeIPC(): void {
     },
     getFolderSizes: async () => {
       // Only the folders the native app actually HAS: a key that is missing leaves its chip off, which is
-      // honest — a 0 B chip would read as "empty" (drums are not native yet).
-      const [projects, libraryDir, cache] = await Promise.all([du(projectsDir()), du(library.core.libraryRoot()), du(youtubeDir())]);
-      return { projects, library: libraryDir, cache };
+      // honest — a 0 B chip would read as "empty". A build with no bundled drum library reports no
+      // `drumsBundled` for exactly that reason.
+      const bundled = drums.bundledDir();
+      const [projects, libraryDir, cache, userDrums, drumsBundled] = await Promise.all([
+        du(projectsDir()), du(library.core.libraryRoot()), du(youtubeDir()), du(drums.userDrumsDir()),
+        bundled ? du(bundled) : Promise.resolve(null),
+      ]);
+      return { projects, library: libraryDir, cache, drums: userDrums, ...(drumsBundled ? { drumsBundled } : {}) };
     },
   });
   installLibraryProbe(library.core, library.keys, library.yt);

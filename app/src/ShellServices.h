@@ -56,6 +56,12 @@ class ShellServices
     /// (the Electron terminator-settings.json keys, verbatim — Phase 8 imports that file here).
     juce::var handleSettings(const juce::var& req);
 
+    /// The drum library shipped INSIDE the app (macOS Resources/drums-flac, Windows <exe dir>/drums-flac —
+    /// opaque ids, no filenames anywhere), or an empty File when this build carries none: the page then falls
+    /// back to R2 exactly as the web build does. `TERMINATOR_DRUMS_DIR` overrides it (the probe fills a folder
+    /// of its own, so the gate tests the ROUTE and not this machine's library).
+    static juce::File bundledDrumsDir();
+
     /// The app data dir (<userApplicationData>/Terminator3) and the projects dir (settings app.projectsDir or
     /// <dataDir>/projects).
     juce::File dataDir() const;

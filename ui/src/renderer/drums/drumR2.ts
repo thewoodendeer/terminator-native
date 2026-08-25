@@ -15,15 +15,28 @@
  *
  * The local scheme is tried only outside the WEB build; a failed fetch
  * (unknown scheme in a plain browser, or a 404) falls straight through.
+ *
+ * In the NATIVE shell (Terminator 3.0) there is no custom scheme: `setNativeDrumUrls` swaps in the two URLs the
+ * JUCE shell serves on its own origin. The bundled one keeps the `/drums/<id>.<ext>` shape on purpose, so
+ * `drumIdFromUrl` below still recovers the id from a project saved there.
  */
 
 const DRUM_R2_BASE = 'https://pub-17b3d7f0dae24aa8b32405d12d43a870.r2.dev';
 const IS_WEB = (import.meta as any).env?.MODE === 'web';
 const LOCAL_SCHEME = 'terminator-drums://';
 
+/** NATIVE (Terminator 3.0, drumsNative.ts): the JUCE shell has no custom URL SCHEME — it serves the same two
+ *  things on its own origin (`/drums/<id>.<ext>` for the bundled library, the library's `/lib/b64/` route for a
+ *  file in the user's drums folder). Null in Electron and on the web, where the scheme above is the answer. */
+let nativeUrls: { sample(id: string): string; user(rel: string): string } | null = null;
+export function setNativeDrumUrls(u: { sample(id: string): string; user(rel: string): string } | null): void {
+  nativeUrls = u;
+}
+
 /** Every place a sample might live, best first. */
 export function drumSampleUrls(id: string): string[] {
   const remote = [`${DRUM_R2_BASE}/drums-flac/${id}.flac`, `${DRUM_R2_BASE}/drums/${id}.mp3`];
+  if (nativeUrls) return [nativeUrls.sample(id), ...remote];
   return IS_WEB ? remote : [`${LOCAL_SCHEME}sample/${id}.flac`, ...remote];
 }
 
@@ -43,5 +56,6 @@ export function drumIdFromUrl(url: string): string | null {
 /** A file from the user's own drums folder (<Sample Library>/Drums), served
  *  by the desktop app's terminator-drums://user/<relative path> route. */
 export function userDrumUrl(relPath: string): string {
+  if (nativeUrls) return nativeUrls.user(relPath);
   return `${LOCAL_SCHEME}user/${relPath.split('/').map(encodeURIComponent).join('/')}`;
 }

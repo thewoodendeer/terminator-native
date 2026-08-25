@@ -91,6 +91,25 @@ add_custom_target(TerminatorBundleUi ALL
     VERBATIM)
 add_dependencies(TerminatorBundleUi Terminator)
 
+# The KCC drum library inside the app (macOS Resources/drums-flac, Windows <exe dir>/drums-flac) so drums need
+# no network — the shell serves it at /drums/<id>.<ext>. `drums-flac/` is gitignored; provision it with
+# `node tools/fetch-drums.mjs`. Absent = the app reads drums from R2 like the web build (CI builds this way).
+# -DTERMINATOR_BUNDLE_DRUMS=OFF skips the copy even when the folder is there.
+option(TERMINATOR_BUNDLE_DRUMS "Bundle the drum library (drums-flac/) into the app" ON)
+if(TERMINATOR_BUNDLE_DRUMS)
+    if(APPLE)
+        set(_terminator_drums_dest "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Resources/drums-flac")
+    else()
+        set(_terminator_drums_dest "$<TARGET_FILE_DIR:Terminator>/drums-flac")
+    endif()
+    add_custom_target(TerminatorBundleDrums ALL
+        COMMAND "${CMAKE_COMMAND}" -DSRC=${PROJECT_SOURCE_DIR}/drums-flac -DDST=${_terminator_drums_dest}
+                -P "${PROJECT_SOURCE_DIR}/cmake/BundleDrums.cmake"
+        COMMENT "Bundling the drum library from drums-flac (if provisioned)"
+        VERBATIM)
+    add_dependencies(TerminatorBundleDrums Terminator)
+endif()
+
 # yt-dlp (pinned onedir nightly) + quickjs-ng qjs for YouTube import, and `lame` for MP3 export —
 # cmake/ProvisionTools.cmake downloads the pinned, SHA-256-verified assets once into third_party/.tools-cache and
 # lays them into the bundle: macOS Resources/bin/{ytdlp,qjs,lame}, Windows <exe dir>/bin/{ytdlp,qjs,lame.exe}.

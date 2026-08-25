@@ -68,6 +68,15 @@ for `mac-rtsan`.
   projects + reference WAVs rendered by the Electron engine; tolerance rules in the plan §Testing).
 - Commit style: lowercase imperative subject, bullet body (house rule).
 
+## The bundled drum library (8.2)
+`drums-flac/` (1,182 opaque-id one-shots, ~80 MB) is GITIGNORED and provisioned with `node tools/fetch-drums.mjs`
+(ids come from the committed `ui/src/renderer/drums/samples.json`; a missing id fails the script rather than
+shipping a thin kit). `cmake/BundleDrums.cmake` lays it into the app — macOS `Resources/drums-flac`, Windows
+beside the exe — and the shell serves it at `/drums/<id>.<ext>`. `-DTERMINATOR_BUNDLE_DRUMS=OFF` skips it.
+**Without it the app still runs** and reads drums off R2 like the web build (that is how CI builds), so the
+SHIPPING build must be made on a machine where the folder is provisioned — check
+`ls Terminator.app/Contents/Resources/drums-flac | wc -l` before packaging.
+
 ## Release (Phase 9 — see RELEASE-CYCLES-NATIVE.md)
 Sparkle (Mac) + WinSparkle (Win) feeds under R2 prefix `terminator-native/`. Binaries first, feed last,
 never reuse a live version. Mac: hardened runtime + notarisation via the Keychain profile. Windows: OV/EV

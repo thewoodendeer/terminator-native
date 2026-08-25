@@ -7,6 +7,20 @@ set -euo pipefail
 BIN="${1:?usage: probe-app.sh <Terminator binary> [out.json]}"
 OUT="${2:-build/probe.json}"
 rm -f "$OUT"
+# DRUMS (8.2): the app serves the KCC library it ships at /drums/<id>.<ext>. `drums-flac/` is gitignored, so a
+# CI build has none — point the app at a FIXTURE folder then, so the route is gated on every machine instead of
+# only on one with the 80 MB library provisioned (a gate must assert the feature, not the machine).
+BUNDLED_DRUMS="$(cd "$(dirname "$BIN")" && pwd)/../Resources/drums-flac"
+[ -d "$BUNDLED_DRUMS" ] || BUNDLED_DRUMS="$(cd "$(dirname "$BIN")" && pwd)/drums-flac"
+if [ ! -d "$BUNDLED_DRUMS" ]; then
+  FIXTURE_DRUMS="$(mktemp -d)/drums-flac"
+  mkdir -p "$FIXTURE_DRUMS"
+  printf 'fLaC-probe-fixture' > "$FIXTURE_DRUMS/00112233445566aa.flac"
+  export TERMINATOR_DRUMS_DIR="$FIXTURE_DRUMS"
+  echo "== no drum library in this build — probing the route against a fixture ($FIXTURE_DRUMS)"
+else
+  echo "== drum library bundled: $(ls "$BUNDLED_DRUMS" | wc -l | tr -d ' ') file(s)"
+fi
 TERMINATOR_PROBE_FILE="$OUT" "$BIN" &
 PID=$!
 # 150 s: the React probe's self-test runs the sequencers in real time (≈ 25 s on a Mac, 60+ s on a starved CI runner —
@@ -84,6 +98,19 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   else
     echo "::warning::the real stems split did not run (set TERMINATOR_PROBE_STEMS=1 with htdemucs on the machine)"
   fi
+  # DRUMS (8.2): the library shipped inside the app is served byte-complete at /drums/<id>.<ext>, a path that is
+  # not a bare 16-hex id is refused, and MY DRUMS walks a folder the self-test fills in temp (audio only).
+  grep -Eq '"drums": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::drums self-test failed (see the drums object above)"; exit 1; }
+  grep -Eq '"bundledServed": ?true' "$OUT" || { echo "::error::drums self-test: the bundled drum library was not served byte-complete at /drums/<id>.<ext>"; exit 1; }
+  grep -Eq '"bundledBogusRefused": ?true' "$OUT" || { echo "::error::drums self-test: /drums/ served something that is not a bare 16-hex id"; exit 1; }
+  # Only a REAL library can be decoded — the CI fixture is a few bytes of text, so this is asserted only when the
+  # build actually ships the drums. A FLAC the WebView cannot decode would be silent drums with healthy fetches.
+  if [ -z "${TERMINATOR_DRUMS_DIR:-}" ]; then
+    grep -Eq '"bundledDecoded": ?true' "$OUT" || { echo "::error::drums self-test: the bundled FLAC did not decode in the WebView — drums would be silent"; exit 1; }
+  fi
+  grep -Eq '"userWalked": ?true' "$OUT" || { echo "::error::drums self-test: the MY DRUMS walk did not find a file in a folder it filled itself"; exit 1; }
+  grep -Eq '"userDirInLibrary": ?true' "$OUT" || { echo "::error::drums self-test: the user drums folder is not the Drums folder inside the sample library"; exit 1; }
+  echo "drums OK: $(grep -Eo '"drums": ?\{[^}]*\}' "$OUT")"
   # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and
   # when the library already holds a file the shell served it byte-complete
   # the offline exporter (4.5e): the project rendered through the real engine + mixer and a real WAV landed on disk

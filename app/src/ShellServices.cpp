@@ -36,6 +36,31 @@ juce::File ShellServices::fileFromVar(const juce::var& v)
     return juce::File(s);
 }
 
+juce::File ShellServices::bundledDrumsDir()
+{
+    // An explicit override first — the app probe points this at a folder it fills itself, and it is the escape
+    // hatch for a build whose drums were not provisioned. `std::getenv` is a build error under MSVC (/WX).
+    const auto env = juce::SystemStats::getEnvironmentVariable("TERMINATOR_DRUMS_DIR", {});
+    if (env.isNotEmpty())
+    {
+        const juce::File d(juce::File::isAbsolutePath(env)
+                               ? juce::File(env)
+                               : juce::File::getCurrentWorkingDirectory().getChildFile(env));
+        return d.isDirectory() ? d : juce::File();
+    }
+#if JUCE_MAC
+    const auto d = juce::File::getSpecialLocation(juce::File::currentApplicationFile)
+                       .getChildFile("Contents")
+                       .getChildFile("Resources")
+                       .getChildFile("drums-flac");
+#else
+    const auto d = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
+                       .getParentDirectory()
+                       .getChildFile("drums-flac");
+#endif
+    return d.isDirectory() ? d : juce::File();
+}
+
 juce::File ShellServices::dataDir() const
 {
     return settings_.file().getParentDirectory();
@@ -73,6 +98,9 @@ juce::var ShellServices::dirsVar() const
     put(o, "music", juce::File::getSpecialLocation(juce::File::userMusicDirectory).getFullPathName());
     put(o, "temp", juce::File::getSpecialLocation(juce::File::tempDirectory).getFullPathName());
     put(o, "sep", juce::String(juce::File::getSeparatorString()));
+    // The bundled drum library — an empty string when this build ships none (the page then reads drums off R2,
+    // and Preferences leaves the chip off rather than showing a dishonest 0 B).
+    put(o, "drumsBundledDir", bundledDrumsDir().getFullPathName());
     return o;
 }
 

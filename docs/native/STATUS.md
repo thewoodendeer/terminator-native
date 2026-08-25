@@ -1739,6 +1739,47 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 8 — 8.2a DONE (THE DRUM LIBRARY IS IN THE APP, AND MY DRUMS IS REAL), 2026-08-25 nineteenth session
+
+Drums were the last thing in the native app still reaching over the NETWORK: `terminator-drums://` is an Electron
+custom scheme, the JUCE shell has none, so every fetch fell through to R2 and MY DRUMS was simply absent (the tab
+is gated on `drumsUserList`, which nothing provided). Both halves are native now.
+
+- **The KCC library ships INSIDE the app.** `drums-flac/` (1,182 opaque-id one-shots, 80 MB) rides in
+  `Contents/Resources/drums-flac` (Windows: beside the exe) and the shell serves it at **`/drums/<id>.<ext>`** —
+  `WebShell::provideResource`, id validated as a bare 16-hex token and nothing else, so there is no path handling
+  to get wrong. The URL SHAPE is deliberate: `drumIdFromUrl` already reads an id out of `/drums/<id>.<ext>`, so a
+  project saved in the native app still resolves its drums (and their R2 fallbacks) in the Electron app and on
+  the web. `drums-flac/` is gitignored — `node tools/fetch-drums.mjs` provisions it (ported from the Electron
+  repo's fetch script: same ids off the committed samples.json, same bucket, same flac→mp3 fallback), and
+  `cmake/BundleDrums.cmake` lays it into the bundle with a count+bytes stamp so it costs one copy per build dir.
+  **A build without it is normal** (CI has none): the app reads drums off R2 exactly like the web build.
+- **MY DRUMS + Preferences → FOLDERS → Drums.** `ui/src/renderer/native/drumsNative.ts` ports the Electron
+  main-process module `userDrums.ts` over `terminatorFs`: `drumsUserList` (the folder as a tree of RELATIVE paths
+  — the page never sees an absolute — audio only, bounded at 50k files / depth 16), `drumsUserDir`,
+  `drumsUserReveal`, `drumsUserEmpty` (Trash, never unlink; a refusal stops and says so). The folder is
+  `<Sample Library>/Drums`, so it moves with the library, and its files PLAY through the library's own
+  `/lib/b64/` route — the library root is already a registered serve root, so nothing new is exposed.
+- **The page needed one hook, not a fork.** `drumR2.setNativeDrumUrls({sample, user})` swaps the two URL builders
+  when the shell is there; Electron and the web keep the custom scheme. Same pattern as `voiceSink`.
+- **The FOLDERS chips are honest again**: `getFolderSizes` now answers `drums` (the user's folder) and
+  `drumsBundled` (81 MB) — and OMITS `drumsBundled` when the build ships no library, because a 0 B chip would
+  read as "empty" rather than "not in this build".
+- **Gates** (`window.__terminatorNativeDrums.selfTest`, asserted in tools/ci/probe-app.sh): the bundled route
+  serves a real id **byte-complete** (size compared against the directory listing), a path that is not a bare
+  16-hex id is refused (`/drums/..%2F..%2Fetc%2Fhosts.flac`), and the MY DRUMS walk finds a `.wav` and skips a
+  `.txt` in a folder **the probe fills in temp** — never the user's own drums folder, which is legitimately empty
+  on a fresh machine. A build with no bundled library still gates the route: probe-app.sh points
+  `TERMINATOR_DRUMS_DIR` at a one-file fixture, so the feature is asserted on every machine, not just this one.
+- Local evidence (M1 Max): `drums: {bundledDir: true, bundledCount: 1182, bundledServed: true,
+  bundledBogusRefused: true, userWalked: true, userSkipsNonAudio: true, userDirInLibrary: true, ok: true}`,
+  folderSizes `drumsBundled 81,468,994 B`. ctest **419/419**, ui gate green (tsc at its 5 baseline).
+- **Still on the shim after this:** nothing about drums — but the DRUM BROWSER's organiser features Victor asked
+  for on 2026-08-21 (cut/copy/paste/duplicate/delete, Cmd-drag copy, new folders in BOTH browsers) are a separate
+  build, in both repos.
+- At release: `Resources/drums-flac` is DATA — nothing to sign — but the shipping build must be made on a machine
+  where `drums-flac/` is provisioned, or the DMG quietly ships an app that needs the network for drums.
+
 ## SOUND: A CHOP PITCHED UP DOES NOT ALIAS ANY MORE, 2026-08-25 eighteenth session
 
 **What was wrong.** Reading a sample faster than it was recorded — every pad with PITCH up — puts its top

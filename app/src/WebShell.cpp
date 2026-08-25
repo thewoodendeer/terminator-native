@@ -561,6 +561,33 @@ std::optional<juce::WebBrowserComponent::Resource> WebShell::provideResource(con
         r.mimeType = mimeForExtension(f.getFileExtension());
         return r;
     }
+    // 0c. the drum library shipped inside the app: /drums/<id>.<flac|mp3> — the native twin of the Electron
+    // app's terminator-drums://sample/<id>.<ext>, same rule. The id is a fixed-width hex token and nothing else,
+    // so there is no path handling to get wrong; a miss is a plain 404 and the page falls through to R2. The
+    // shape is deliberate: `drumIdFromUrl` (drumR2.ts) already reads an id out of a `/drums/<id>.<ext>` URL, so
+    // a project saved with one still resolves to its id — and to the R2 fallbacks — anywhere else.
+    if (url.startsWith("/drums/"))
+    {
+        const auto name = url.fromFirstOccurrenceOf("/drums/", false, false)
+                              .upToFirstOccurrenceOf("?", false, false)
+                              .upToFirstOccurrenceOf("#", false, false);
+        const auto id = name.upToLastOccurrenceOf(".", false, false);
+        const auto ext = name.fromLastOccurrenceOf(".", false, false);
+        if (id.length() != 16 || !id.containsOnly("0123456789abcdef") || (ext != "flac" && ext != "mp3"))
+            return std::nullopt;
+        const auto dir = ShellServices::bundledDrumsDir();
+        if (dir == juce::File())
+            return std::nullopt;
+        const auto f = dir.getChildFile(id + "." + ext);
+        juce::MemoryBlock mb;
+        if (!f.existsAsFile() || !f.loadFileAsData(mb))
+            return std::nullopt;
+        juce::WebBrowserComponent::Resource r;
+        r.data.assign(static_cast<const std::byte*>(mb.getData()),
+                      static_cast<const std::byte*>(mb.getData()) + mb.getSize());
+        r.mimeType = mimeForExtension(f.getFileExtension());
+        return r;
+    }
     // 1. the built React UI from disk (ui/dist) — when present it owns "/" and everything under it
     if (uiDir_ != juce::File())
     {
@@ -2115,6 +2142,10 @@ void WebShell::runProbeAsyncChecks()
                     // TERMINATOR_PROBE_STEMS=1 (and a model on the machine) a real split runs end to end
                     const st = window.__terminatorNativeStems;
                     r.stems = st && st.selfTest ? await st.selfTest() : { error: 'no stems' };
+                    // DRUMS (8.2): the library bundled inside the app is served at /drums/<id>.<ext> and a bogus
+                    // path is refused; the MY DRUMS walk runs over a folder the probe fills in temp
+                    const dr = window.__terminatorNativeDrums;
+                    r.drums = dr && dr.selfTest ? await dr.selfTest() : { error: 'no drums' };
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();

@@ -25,6 +25,8 @@ const backend = (): JuceBackend | undefined => (typeof window !== 'undefined' ? 
 
 export interface NativeDirs {
   dataDir: string; projectsDir: string; projectsIsDefault: boolean; settingsFile: string; home: string; music: string; temp?: string; sep: string;
+  /** The drum library bundled inside the app (Resources/drums-flac), or '' when this build ships none. */
+  drumsBundledDir?: string;
 }
 
 /** True when the page runs inside the Terminator 3.0 JUCE shell (WKWebView / WebView2). */

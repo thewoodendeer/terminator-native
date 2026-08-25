@@ -194,6 +194,13 @@ linked folders after every load/save; nothing is servable before). `list` entrie
 file's bytes + MIME, ONLY if it sits under a registered root and exists (else 404 — the probe asserts `/etc/hosts`
 is refused); WebKit's `<audio>` preview streams it (probe `audioCanPlay: true`). `/blob/<token>` → a LARGE native-
 function reply (see below) or a `readBinary` file stash, one-shot, 60 s expiry.
+`/drums/<id>.<flac|mp3>` (8.2) → a one-shot from the KCC drum library shipped inside the app (macOS
+`Resources/drums-flac`, Windows `<exe dir>/drums-flac`; `TERMINATOR_DRUMS_DIR` overrides for the probe). The id is
+a bare 16-hex token and nothing else — anything else is refused, so there is no path handling to get wrong — and a
+miss is a 404 the page answers by falling through to R2 (`drumSampleUrls`). A build with no bundled library is
+normal (`drums-flac/` is gitignored; `node tools/fetch-drums.mjs` provisions it) and simply reads drums off R2,
+exactly like the web build. The `dirs` reply carries `drumsBundledDir` ('' when there is none), which is what
+Preferences → FOLDERS measures for its chip.
 
 **LARGE REPLIES (gotcha, found 2026-08-22):** JUCE's `emitEvent` escapes every C++→JS payload into a JS string
 literal with `String::replace("\\", …)` — QUADRATIC in the payload; a 230 KB `readText` (library.json) stalled the
