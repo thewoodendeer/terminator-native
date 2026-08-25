@@ -171,6 +171,61 @@ TEST_CASE("render: a main-track chop plays its region of the main buffer", "[ren
     CHECK(rmsWindow(r.buffer, sr, 0.0, 0.15) > 0.05);
 }
 
+TEST_CASE("render: a pad override plays THAT audio whole, past its chop's own length", "[render][gate]")
+{
+    // The page's time-stretched slice is audio the renderer cannot make (SoundTouch lives in the page), so it
+    // is handed over per pad. The override IS the region: a 0.4 s slice must sound for 0.4 s even though the
+    // chop it came from is 0.2 s, and the chop's own audio must not be what plays.
+    const double sr = 48000.0;
+    auto p = model::createEmptyProject();
+    p.setProperty(ids::videoId, "song", nullptr);
+    auto chops = p.getChildWithName(ids::Chops);
+    juce::ValueTree c(ids::Chop);
+    c.setProperty(ids::id, 1, nullptr);
+    c.setProperty(ids::start, 1.0, nullptr);
+    c.setProperty(ids::end, 1.2, nullptr);
+    chops.appendChild(c, nullptr);
+    juce::ValueTree pad(ids::Pad);
+    pad.setProperty(ids::index, 0, nullptr);
+    pad.setProperty(ids::chopId, 1, nullptr);
+    pad.setProperty(ids::mode, "oneshot", nullptr);
+    p.getChildWithName(ids::Pads).appendChild(pad, nullptr);
+    auto seq = p.getChildWithName(ids::Sequences).getChild(0);
+    seq.setProperty(ids::resolution, 16, nullptr);
+    seq.setProperty(ids::viewResolution, 16, nullptr);
+    seq.setProperty(ids::bars, 1, nullptr);
+    juce::Array<juce::var> grid;
+    for (int s = 0; s < 16; ++s)
+    {
+        juce::Array<juce::var> row;
+        if (s == 0)
+            row.add(0);
+        grid.add(juce::var(row));
+    }
+    seq.setProperty(ids::grid, juce::var(grid), nullptr);
+    p.setProperty(ids::metronomeBpm, 120, nullptr);
+
+    // the main track is SILENT in the chop's region — anything we hear can only be the override
+    auto main = std::make_shared<SampleBuffer>();
+    main->allocate(1, static_cast<std::int64_t>(sr * 3), sr);
+    auto slice = std::make_shared<SampleBuffer>(); // 0.4 s of tone: the "stretched" chop
+    slice->allocate(1, static_cast<std::int64_t>(sr * 0.4), sr);
+    for (std::int64_t i = 0; i < slice->numFrames; ++i)
+        slice->channel(0)[i] = 0.8f * static_cast<float>(std::sin(2.0 * M_PI * 300.0 * static_cast<double>(i) / sr));
+
+    SampleBank bank;
+    bank.mainBuffer = main;
+    ProjectRenderOptions opts;
+    opts.sampleRate = sr;
+    CHECK(rmsWindow(renderProject(p, bank, opts).buffer, sr, 0.0, 0.35) < 1.0e-4); // silent without it
+
+    bank.padOverrides[0] = slice;
+    const auto r = renderProject(p, bank, opts);
+    CHECK(rmsWindow(r.buffer, sr, 0.0, 0.15) > 0.05);    // it plays
+    CHECK(rmsWindow(r.buffer, sr, 0.25, 0.38) > 0.05);   // and it is still playing past the chop's 0.2 s
+    CHECK(rmsWindow(r.buffer, sr, 0.45, 0.49) < 1.0e-3); // and stops at its own end
+}
+
 // ── voice-engine tail parity (startVoice: per-source NORM, fadeIn → attack, RELEASE, loop render, stems) ──
 namespace
 {

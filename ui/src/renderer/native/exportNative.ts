@@ -19,6 +19,8 @@ export interface NativeExportRequest {
   main?: string;
   /** videoId → store key, for pad-source pads. */
   sources?: Record<string, string>;
+  /** Pad index → store key: the page's time-stretched slice for that pad (see NativeSampleKeys.padSamples). */
+  padSamples?: Record<string, string>;
   /** drum lane key ('kick', …) → store key. */
   drumLanes?: Record<string, string>;
   /** Absolute output path for the master WAV; trackouts land beside it as "<name> - <channel>.wav". */

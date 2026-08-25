@@ -7137,6 +7137,17 @@ export class ChopperEngine {
       srcBuf = this.reversedOf(psrc.buffer);
       startSec = psrc.buffer.duration - chop.end;
     }
+    // TIME STRETCH: a bounce has to be what the pads play. The hot path can only take a cache HIT (a miss
+    // plays dry and warms) — a render is offline, so it waits for the slice instead. `nativeStretchSlice`
+    // resolves it exactly as a hit would, reverse included, so the slice is played whole and forward.
+    const stretched = this.nativeStretchSlice(e.padIdx)?.buffer ?? null;
+    let bufDurPlayed = bufDur, realDurPlayed = realDur;
+    if (stretched) {
+      srcBuf = stretched;
+      startSec = 0;
+      bufDurPlayed = Math.min(stretched.duration, e.maxDur * rate);
+      realDurPlayed = bufDurPlayed / rate;
+    }
     const src = off.createBufferSource();
     src.buffer = srcBuf;
     src.detune.value = (pad.pitch + this.pitchFor(e.padIdx)) * 100;
@@ -7144,16 +7155,16 @@ export class ChopperEngine {
     const FADE = 0.005;
     // ATTACK from the waveform bar — same envelope as live pads + the sequencer
     // (was a fixed 5 ms here: exports ignored the knob).
-    const atk = Math.min(Math.max(this.attackFor(e.padIdx), 0.0005), Math.max(0.0005, realDur - FADE));
+    const atk = Math.min(Math.max(this.attackFor(e.padIdx), 0.0005), Math.max(0.0005, realDurPlayed - FADE));
     const vel = clampVel(e.velocity ?? 1);
     g.gain.setValueAtTime(0, e.time);
     g.gain.linearRampToValueAtTime(vel, e.time + atk);
-    if (realDur > FADE + atk) {
-      g.gain.setValueAtTime(vel, e.time + realDur - FADE);
-      g.gain.linearRampToValueAtTime(0.0001, e.time + realDur);
+    if (realDurPlayed > FADE + atk) {
+      g.gain.setValueAtTime(vel, e.time + realDurPlayed - FADE);
+      g.gain.linearRampToValueAtTime(0.0001, e.time + realDurPlayed);
     }
     src.connect(g); g.connect(dest);
-    src.start(e.time, startSec, bufDur);
+    src.start(e.time, startSec, bufDurPlayed);
     return true;
   }
 

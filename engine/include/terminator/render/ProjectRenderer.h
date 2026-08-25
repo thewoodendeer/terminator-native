@@ -34,6 +34,12 @@ struct SampleBank
     /// The renderer never resolves the drum CATALOG itself (sampleIndex + genre → a bundled/R2 file is the shell's
     /// job) — the caller decodes and hands the buffers in, exactly as it does for pad sources.
     std::map<juce::String, std::shared_ptr<SampleBuffer>> drumLanes;
+    /// PER-PAD AUDIO the render must use INSTEAD of resolving the pad itself (pad index → the whole buffer).
+    /// It exists for audio the PAGE derives and the renderer cannot: today the TIME-STRETCHED slice a hit plays
+    /// (SoundTouch lives in the page). The buffer IS the region — start 0 to its end — and it already carries
+    /// whatever the pad's stem mask and REVERSE asked for, so both are skipped for that pad. Anything the
+    /// renderer can resolve on its own stays out of here.
+    std::map<int, std::shared_ptr<SampleBuffer>> padOverrides;
 };
 
 struct ProjectRenderOptions

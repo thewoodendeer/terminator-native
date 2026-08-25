@@ -1724,6 +1724,16 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
     readMap(req.getProperty("drumLanes", juce::var()),
             [&bank](const juce::String& lane, std::shared_ptr<SampleBuffer> b)
             { bank.drumLanes[lane] = std::move(b); });
+    // `padSamples: {"<pad>": "<store key>"}` — audio the PAGE derived for one pad and the renderer cannot make
+    // itself: the TIME-STRETCHED slice (SoundTouch lives in the page). Without it a bounce plays the dry chop
+    // while the pads play the stretched one — the export would not be what he just heard.
+    readMap(req.getProperty("padSamples", juce::var()),
+            [&bank](const juce::String& pad, std::shared_ptr<SampleBuffer> b)
+            {
+                const int idx = pad.getIntValue();
+                if (idx >= 0 && idx < 256)
+                    bank.padOverrides[idx] = std::move(b);
+            });
 
     render::ProjectRenderOptions opts;
     opts.sampleRate = static_cast<double>(req.getProperty("sampleRate", 48000.0));

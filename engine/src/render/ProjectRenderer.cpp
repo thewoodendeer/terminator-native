@@ -552,6 +552,19 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
                 ready = mainReady;
             }
         }
+        // PER-PAD OVERRIDE (the page's time-stretched slice): audio the renderer cannot make for itself. It IS
+        // the region, and the mask + REVERSE are already baked into it — a second pass of either would be the
+        // effect applied twice.
+        bool overridden = false;
+        if (const auto ov = bank.padOverrides.find(idx); ov != bank.padOverrides.end() && ov->second != nullptr)
+        {
+            buffer = ov->second;
+            regStartSec = 0.0;
+            regEndSec = buffer->sampleRate > 0.0 ? static_cast<double>(buffer->numFrames) / buffer->sampleRate : 0.0;
+            planes = nullptr;
+            ready.clear();
+            overridden = true;
+        }
         if (buffer == nullptr)
             continue;
 
@@ -566,7 +579,8 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         const auto mask = stems::normalizeMask(
             padN.hasProperty(ids::stems) ? static_cast<long long>(static_cast<int>(padN.getProperty(ids::stems))) : 15);
         const double regionEndSec = regEndSec > 0.0 ? regEndSec : static_cast<double>(buffer->numFrames) / rate;
-        const bool useStems = planes != nullptr && stemsApply(*planes, mask, *buffer, ready, regStartSec, regionEndSec);
+        const bool useStems =
+            !overridden && planes != nullptr && stemsApply(*planes, mask, *buffer, ready, regStartSec, regionEndSec);
         if (useStems)
         {
             for (std::size_t k = 0; k < 4; ++k)
@@ -604,7 +618,7 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         const double totalSemis = static_cast<double>(padN.getProperty(ids::pitch, 0)) + srcPitch + srcFine / 100.0;
         p.params.pitchSemitones = static_cast<float>(totalSemis);
         const bool looping = padN.getProperty(ids::mode).toString() == "loop";
-        const bool reversed = planner.reversedFor(idx);
+        const bool reversed = !overridden && planner.reversedFor(idx);
         // the pad's own fades (BUFFER seconds inside the region): LOOP renders them into the loop buffer; a
         // one-shot plays the fade-in as its envelope — it lengthens the source ATTACK (context seconds → ÷ rate)
         const double playDur = static_cast<double>(p.endFrame - p.startFrame) / rate;

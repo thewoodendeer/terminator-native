@@ -1775,8 +1775,15 @@ the shipping app has the same bug, and it is a web-bundle + desktop-release chan
 **Probe**: pad 62 bound at 0.25 s dry; STRETCH on at 120 → 90 re-binds it to a slice of **0.333 s** (1.33x =
 1/0.75) with `reverse` false, and turning stretch off puts the dry key back. All three are asserted.
 
-**Still dry**: the EXPORT (the native renderer takes source keys, not per-pad stretched audio) — the same gap
-the Electron export has, since it renders from `resolvePadSource` too. **The native SEQUENCER now plays
+**The BOUNCE carries it too** (same session, second commit): `SampleBank.padOverrides` (pad index → the whole
+buffer) is audio the renderer cannot make for itself, because SoundTouch lives in the page. The override IS the
+region, and the pad's stem mask and REVERSE are already baked into it, so both are skipped for that pad —
+applying either twice would be the bug this fixes. It rides the export request as `padSamples {pad: key}`, and
+`nativeSampleKeys` fills it: an export can afford to WAIT for a slice the hot path would have skipped, so it
+renders the stretch instead of dropping it. The page's own offline bounce (`scheduleOfflineChop` — the MPC and
+Drum Rack bakes, `exportSeq`) takes the same slice. Gate: `render: a pad override plays THAT audio whole, past
+its chop's own length` — silent without the override, sounding past the chop's 0.2 s with it, stopping at its
+own end. **The native SEQUENCER now plays
 stretched** (it plays the pad's bound sample), which is a deliberate improvement over the Electron app, where
 the sequencer takes `resolvePadSource` and plays dry while the pad plays stretched. His stems precedent
 ("it's not the same sound as when I hit the pad") says the sequencer should match the pad.

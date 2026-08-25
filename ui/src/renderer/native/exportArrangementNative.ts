@@ -115,6 +115,7 @@ export async function exportArrangementNative(opts: NativeArrangementExportOpts)
       project: opts.project,
       main: keys.main,
       sources: keys.sources,
+      padSamples: keys.padSamples,
       drumLanes: keys.drumLanes,
       path,
       format: opts.audioFormat,

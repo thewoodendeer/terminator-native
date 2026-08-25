@@ -74,8 +74,10 @@ export const native = {
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),
   /** Phase 4.5e: render the project OFFLINE through the same engine + mixer and write WAVs. The page owns the
    *  project so it sends the JSON; the audio is already in the store so it sends KEY MAPS, not bytes.
-   *  `{project, main?, sources?{videoId: key}, drumLanes?{lane: key}, path, bitDepth?, sampleRate?, loops?, tail?,
-   *   mixer?, drums?, bass?, limiter?, stems?[channel]}` → `{ok, files[], seconds, sampleRate, bitDepth}`. */
+   *  `{project, main?, sources?{videoId: key}, padSamples?{pad: key}, drumLanes?{lane: key}, path, bitDepth?, sampleRate?, loops?, tail?,
+   *   mixer?, drums?, bass?, limiter?, stems?[channel]}` → `{ok, files[], seconds, sampleRate, bitDepth}`.
+   *  `padSamples` is audio only the PAGE can make for one pad — today the TIME-STRETCHED slice: the renderer
+   *  plays it whole, with the pad's stem mask and REVERSE already baked in, so a bounce is what the pads played. */
   exportProject: lazy<AnyRecord, AnyRecord>('terminatorExport'),
   /** Phase 5.1a/b/c: RECORD from the interface's own inputs, in the ENGINE — what RECORD SAMPLE uses in the shell
    *  for a real input (Terminator's own output and system audio stay on the page's getUserMedia path).

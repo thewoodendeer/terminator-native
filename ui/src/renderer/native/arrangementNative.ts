@@ -70,6 +70,10 @@ export interface NativeSampleKeys {
   main?: string;
   sources: Record<string, string>;
   drumLanes: Record<string, string>;
+  /** Pad index → the store key of audio only the PAGE can make for that pad: the TIME-STRETCHED slice. The
+   *  renderer plays it whole, with the mask and REVERSE already baked in. Without it a bounce plays the dry
+   *  chop while the pads play the stretched one. */
+  padSamples?: Record<string, string>;
 }
 
 const MAX_PADS = 64;
@@ -167,6 +171,19 @@ export async function nativeSampleKeys(
   const waits: Array<Promise<boolean>> = [];
   const state = engine.getState();
   for (let i = 0; i < MAX_PADS; i++) {
+    // TIME STRETCH: what the pad PLAYS, so the bounce is what he just heard. A slice that is not warm yet is
+    // rendered by the page here and then uploaded — an export can afford the compute a hit cannot.
+    let stretched: AudioBuffer | null = null;
+    try {
+      const r = engine.nativeStretchSlice(i);
+      if (r?.warming) { await r.warming; stretched = engine.nativeStretchSlice(i)?.buffer ?? null; }
+      else stretched = r?.buffer ?? null;
+    } catch { stretched = null; }
+    if (stretched) {
+      const rec = shadow.ensure(stretched, 'stretch');
+      (out.padSamples ??= {})[String(i)] = rec.key;
+      waits.push(rec.ready);
+    }
     let src: PadSource | null = null;
     try { src = engine.resolvePadSource(i); } catch { src = null; }
     if (!src?.buffer) continue;
