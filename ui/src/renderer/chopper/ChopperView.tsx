@@ -1836,14 +1836,19 @@ export function ChopperView() {
     return ipc.onMpcStatus(setMpcExportDir);
   }, []);
 
-  // Refresh cache status whenever the selected playlist changes
+  // Refresh cache status whenever the selected playlist changes.
+  // TERMINATOR 3.0: the curated-playlist CACHE is not native (the shell has no downloadPlaylist), and the web
+  // shim underneath answers a flat 0 of 0 — so asking would only put a wrong number on screen. Nothing here
+  // runs in the shell; the DL PLAYLIST button is hidden there for the same reason (his call, 2026-08-25).
   useEffect(() => {
+    if (isNative()) return;
     if (!ipc?.getCacheStatus || !selectedPlaylist) return;
     ipc.getCacheStatus(selectedPlaylist).then(setCacheStatus);
   }, [selectedPlaylist]);
 
   // Listen for batch-download progress events
   useEffect(() => {
+    if (isNative()) return;
     if (!ipc?.onCacheProgress) return;
     return ipc.onCacheProgress(p => {
       if (p.playlistName !== selectedPlaylist) return;
@@ -4974,8 +4979,10 @@ export function ChopperView() {
           )}
           {/* DL PLAYLIST is a desktop-only feature (yt-dlp). Hide it in the
               web build — the equivalent on web will be pre-caching Drive
-              tracks into IndexedDB, which we'll add later. */}
-          {import.meta.env.MODE !== 'web' && (
+              tracks into IndexedDB, which we'll add later.
+              TERMINATOR 3.0 hides it too: the JUCE shell has no playlist cache, so the button could only
+              report 0 of 0 and do nothing. It comes back when the cache is native. */}
+          {import.meta.env.MODE !== 'web' && !isNative() && (
             <button
               className={`btn btn-cache-dl ${dlProgress ? 'cache-dl-active' : ''}`}
               onClick={handleDownloadPlaylist}

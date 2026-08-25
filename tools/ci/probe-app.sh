@@ -115,6 +115,8 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"userWalked": ?true' "$OUT" || { echo "::error::drums self-test: the MY DRUMS walk did not find a file in a folder it filled itself"; exit 1; }
   grep -Eq '"userDirInLibrary": ?true' "$OUT" || { echo "::error::drums self-test: the user drums folder is not the Drums folder inside the sample library"; exit 1; }
   echo "drums OK: $(grep -Eo '"drums": ?\{[^}]*\}' "$OUT")"
+  # The curated-playlist cache is not native (8.3): its controls must not be on screen in this build.
+  grep -Eq '"playlistCacheHidden": ?true' "$OUT" || { echo "::error::the DL PLAYLIST / DEL cache buttons are showing in the native app, where the cache does not exist"; exit 1; }
   # THE LICENCE (8.5): the bridge is installed, a callback the PAGE forges is refused, and — through the fake
   # seam — the whole round trip: locked at rest → a wrong nonce changes nothing → the nonce is single-use → a
   # matching callback stores the token in the OS store and unlocks → SIGN OUT removes it again.

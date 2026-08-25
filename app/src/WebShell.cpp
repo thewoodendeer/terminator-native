@@ -2167,6 +2167,9 @@ void WebShell::runProbeAsyncChecks()
                     r.drums = dr && dr.selfTest ? await dr.selfTest() : { error: 'no drums' };
                     // THE LICENCE (8.5): the bridge is there and a forged callback is refused; with the fake
                     // seam armed (TERMINATOR_LICENSE_FAKE) the whole sign-in round trip runs too
+                    // 8.3: the curated-playlist CACHE is not native, so its controls must not be ON SCREEN in
+                    // this build — a DL PLAYLIST button that can only answer 0 of 0 is worse than no button.
+                    r.playlistCacheHidden = !document.querySelector('.btn-cache-dl') && !document.querySelector('.btn-cache-del');
                     const lic = window.__terminatorNativeLicense;
                     r.license = lic && lic.selfTest ? await lic.selfTest() : { error: 'no license' };
                     if (lic && lic.seamTest && window.__terminatorProbeLicense) r.licenseSeam = await lic.seamTest();

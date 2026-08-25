@@ -153,6 +153,13 @@ interface Topic {
   body: Block[];
 }
 
+/** Terminator 3.0 (the JUCE shell) has no curated-playlist CACHE, so DL PLAYLIST is not in that build — and a
+ *  manual that documents a button the reader cannot see is worse than one that stays quiet. Checked here rather
+ *  than imported so this file keeps having no dependencies. */
+const inNativeShell = (): boolean => {
+  try { return !!(window as any).__JUCE__?.backend; } catch { return false; }
+};
+
 export const TOPICS: Topic[] = [
   {
     id: 'start',
@@ -225,7 +232,7 @@ export const TOPICS: Topic[] = [
           ['⊞ BROWSE', 'the whole library — preview tracks on the waveform before you commit to one'],
           ['📁 LOAD FILE', 'your own audio off this device: mp3, wav, aif, flac, ogg, m4a'],
           ['● RECORD SAMPLE', 'record straight off a mic, an audio interface, a virtual device (Loopback, BlackHole — they list under MIC / INTERFACE like any input), Terminator\'s own output (🔁 under TERMINATOR — resample what you play), or your system audio (desktop app, Windows). In this app the take is made by the ENGINE, straight off the interface at 24-bit — it does not go through the browser on the way to the file, and if the disk ever fails to keep up you are TOLD how much was lost rather than handed a take with an invisible splice in it. The input is taken RAW — no echo cancelling, noise gate or automatic gain (the phone-call processing a browser switches on by default, which is what made interface takes sound thin and pumpy), in stereo when the device has it, at the engine\'s rate — and saved as 24-bit WAV into RECORDINGS; the line under the button says what the input delivered (48 kHz · stereo · raw). The first open asks for the mic once so the inputs show their real names; plugging something in while the panel is open re-lists. In this app the INPUT list is your INTERFACE\'S OWN CHANNELS — pairs for a stereo take, each channel on its own for a mono one (Preferences \u2192 AUDIO picks the device and which channels are enabled) \u2014 because the take is made by the engine, straight off those channels. COUNT-IN counts you in: pick 2, 4 or 8 beats and the clicks play, then recording starts EXACTLY on the downbeat after them — the first frame of the file IS that beat, so a take you played in time needs no trimming (the button says COUNTING IN, and pressing it again cancels: nothing is saved). MONITOR opens the input through Terminator so you can hear yourself while you set the level — headphones, because with the speakers up that is a feedback loop; it closes when the panel does. The take lands on the NEXT EMPTY PAD as its own sample (right-click a pad → RECORD INTO to aim it at that pad instead) and is kept with the project; on the web it loads into the waveform. On a phone it is the ● REC button on the LOAD screen: one tap records off the mic or a plugged-in input — raw, the same way — (the button fills with the level and counts), one tap stops and the take lands on the NEXT EMPTY PAD (a pad\'s □ menu → RECORD INTO PAD aims it); once mic permission has been granted an INPUT picker under it chooses between the built-in mic and a connected audio interface\'s inputs'],
-          ['⬇ DL PLAYLIST', 'pull a whole playlist onto your computer so it loads instantly forever (desktop app). The songs show up in the sample browser under TERMINATOR SAMPLES → DOWNLOADED PLAYLISTS → that playlist\'s own folder, so your YouTube folder stays what you pulled by hand; DL it again later and only the songs you are missing download'],
+          ...(inNativeShell() ? [] : [['⬇ DL PLAYLIST', 'pull a whole playlist onto your computer so it loads instantly forever (desktop app). The songs show up in the sample browser under TERMINATOR SAMPLES → DOWNLOADED PLAYLISTS → that playlist\'s own folder, so your YouTube folder stays what you pulled by hand; DL it again later and only the songs you are missing download'] as [string, string]]),
         ],
       },
       { p: 'You can also drag an audio file onto the window — or onto one single pad, which loads it to that pad alone and leaves the rest of your kit where it is.' },

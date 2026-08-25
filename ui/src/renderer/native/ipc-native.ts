@@ -337,6 +337,9 @@ export function installNativeIPC(): void {
 
   Object.assign(overlay, {
     getCacheDirInfo: async () => ({ path: youtubeDir(), isDefault: true }),
+    // The YOUTUBE FOLDER button puts this in its tooltip. The browser shim answers 'browser:indexeddb', which
+    // is simply untrue in the shell — the pulls are real files in the library.
+    getCacheDir: async () => youtubeDir(),
     setCacheDir: async () => ({ cancelled: true }), // it moves with the library, like the shipping app
     resetCacheDir: async () => ({ ok: true, path: youtubeDir(), isDefault: true }),
     revealCacheDir: async () => {
