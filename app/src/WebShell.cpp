@@ -504,14 +504,25 @@ void WebShell::openPreferences()
         prefsReady_ = false;
         prefsWindow_ = std::make_unique<PrefsWindow>(makeOptions(), startUrlFor("preferences/preferences.html"),
                                                      [this](const juce::String&) { prefsReady_ = true; });
-        prefsWindow_->onClosed = [this] { closePreferences(); };
+        prefsWindow_->onClosed = [this]
+        {
+            prefsLastClose_ = "titleBar";
+            closePreferences();
+        };
     }
+    ++prefsOpens_;
     prefsWindow_->setVisible(true);
     prefsWindow_->toFront(true);
 }
 
 void WebShell::closePreferences()
 {
+    if (prefsWindow_ != nullptr && prefsWindow_->isVisible())
+    {
+        ++prefsCloses_;
+        if (prefsLastClose_.isEmpty())
+            prefsLastClose_ = "page";
+    }
     if (prefsWindow_ != nullptr)
         prefsWindow_->setVisible(false);
     if (browser_ == nullptr)
@@ -2388,6 +2399,9 @@ void WebShell::runProbe()
                     o->setProperty("perf", juce::var(pf));
                     o->setProperty("prefsWindow", prefsWindow_ != nullptr && prefsWindow_->isVisible());
                     o->setProperty("prefsReady", prefsReady_);
+                    o->setProperty("prefsOpens", prefsOpens_);
+                    o->setProperty("prefsCloses", prefsCloses_);
+                    o->setProperty("prefsLastClose", prefsLastClose_);
                     o->setProperty("registryKeys", static_cast<int>(registry_.keyCount()));
                     o->setProperty("enginePrepared", static_cast<bool>(engine_.snapshot().prepared));
                     o->setProperty("lastTriggeredPad", engine_.snapshot().lastTriggeredPad);

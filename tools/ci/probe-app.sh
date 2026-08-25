@@ -56,8 +56,15 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"errors": ?\[\]' "$OUT" || { echo "::error::the page reported uncaught errors"; exit 1; }
   # Phase 8.6: the app's MENU reaches the page — the shell fired its HELP item and the page opened its help window
   grep -Eq '"menuReachedPage": ?true' "$OUT" || { echo "::error::the app menu did not reach the page (see menuReachedPage)"; exit 1; }
-  grep -Eq '"prefsWindow": ?true' "$OUT" || { echo "::error::window.terminator.openPreferences() did not open the native Preferences window"; exit 1; }
+  # PREFERENCES: the FEATURE is "openPreferences() opened the window and its page ran". It used to assert
+  # `prefsWindow` — the window's VISIBILITY at the final read — which measures the machine's focus, not the app:
+  # the Preferences window is always-on-top, so macOS orders it out whenever Terminator is not frontmost, and a
+  # probe running while somebody else uses the Mac failed for a reason that has nothing to do with the build.
+  # (Diagnostics — prefsWindow / prefsCloses / prefsLastClose — are still reported below.)
+  grep -Eq '"prefsOpens": ?[1-9]' "$OUT" || { echo "::error::window.terminator.openPreferences() never opened the native Preferences window"; exit 1; }
   grep -Eq '"prefsReady": ?true' "$OUT" || { echo "::error::the Preferences page did not finish loading in its window"; exit 1; }
+  grep -Eq '"prefsCloses": ?0' "$OUT" || { echo "::error::something CLOSED the Preferences window during the run (see prefsLastClose)"; exit 1; }
+  echo "preferences: opened + page ready (visible at the read: $(grep -Eo '"prefsWindow": ?(true|false)' "$OUT") )"
   # the native-engine shadow (audio through the C++ engine): attached to ChopperView's engine, and its self-test
   # pushed a synthetic buffer through terminatorSamples, bound + triggered pad 63 and released it
   grep -Eq '"attached": ?true' "$OUT" || { echo "::error::the native engine shadow did not attach to the ChopperEngine"; exit 1; }

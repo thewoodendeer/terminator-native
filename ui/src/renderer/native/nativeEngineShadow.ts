@@ -1299,8 +1299,21 @@ class NativeEngineShadow {
         const stripPdcOf = (i: number) => Number(((mixerOf()?.pdcPlan as Record<string, number> | undefined) ?? {})[String(i)] ?? 0);
         const kickIdx = ms.stripFor('kick');
         const pdcWas = mx.pdcOn;
+        // PDC has to be ON for a plan to be published at all — and it is a SAVED setting, so a machine with it
+        // switched off measured a plan of 0 and called it a failure for weeks. (CI never caught it either: with
+        // no audio device the whole mixer block is skipped there.) Turned on for the measurement, put back at
+        // the end of the block like everything else here.
+        if (!pdcWas) mx.setPdc(true);
         const pdcSlot = ch.addFx('comp');
-        mark('p8m'); r.mixerPdcPlan = pdcSlot >= 0 && (await wait(() => planOf() > 0 && stripPdcOf(kickIdx) === planOf() && stripPdcOf(sampleIdx) === 0));
+        // …and the plan is not just "some number": a COMP looks ahead 6 ms (kCompPreDelay), so at the engine's
+        // rate that is exactly what every other channel must be delayed by. A gate that only asks for > 0 would
+        // pass on a plan that is quietly wrong.
+        const compLatency = Math.round(0.006 * (this.clock.sampleRate || 44100));
+        mark('p8m'); r.mixerPdcPlan = pdcSlot >= 0 && (await wait(() => planOf() > 0 && stripPdcOf(kickIdx) === planOf() && stripPdcOf(sampleIdx) === 0))
+          && Math.abs(planOf() - compLatency) <= 1;
+        // The NUMBERS behind that bool. It has been failing on one real machine and is SKIPPED on CI (no audio
+        // device there, so the whole mixer block is), which is exactly the shape of a check nobody can read.
+        r.mixerPdcNums = { slot: pdcSlot, plan: planOf(), expected: compLatency, kick: stripPdcOf(kickIdx), sample: stripPdcOf(sampleIdx), kickIdx, sampleIdx };
         mx.setPdc(false);
         mark('p8n'); r.mixerPdcOff = await wait(() => mixerOf()?.pdc === false && planOf() === 0 && stripPdcOf(kickIdx) === 0);
         mx.setPdc(true);

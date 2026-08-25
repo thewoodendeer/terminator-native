@@ -1739,6 +1739,40 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## THE TWO "KNOWN LOCAL PROBE FAILURES" WERE BAD GATES, NOT A BAD MACHINE (2026-08-25 nineteenth session)
+
+`prefsWindow` and `mixerPdcPlan` had been carried for days as "fails on this Mac, green in CI — cross-check CI".
+Both of those excuses were wrong, and one of them was hiding the fact that **the whole mixer half of the probe
+has never passed on a real machine**.
+
+- **`mixerPdcPlan`: the check turned nothing on.** It added a COMP to `sample` and asserted a PDC plan appeared —
+  but **PDC is a saved setting**, and this machine's is OFF, so the plan was legitimately 0. The engine was right
+  the whole time. It now switches PDC on for the measurement (and puts it back, like everything else in that
+  block), and asserts the plan is **the COMP's real look-ahead** — 6 ms, 264 samples at 44.1 kHz, ±1 — instead of
+  merely "> 0", which would pass on a plan that is quietly wrong.
+- **And CI never covered it.** The mixer block only runs when the engine is prepared, and CI runners have no
+  audio device — so "green in CI" meant SKIPPED in CI. `mixerPageOk` (and with it every mixer assertion) has
+  been vacuous on CI and failing everywhere else.
+- **`prefsWindow`: the check measured FOCUS.** It read the Preferences window's visibility at the final read.
+  That window is always-on-top, so macOS orders it out whenever Terminator is not frontmost — a probe running
+  while somebody else uses the Mac failed for a reason that has nothing to do with the build. It now asserts the
+  FEATURE (the window was opened, its page loaded, and nothing closed it) and reports visibility as a
+  diagnostic. The shell counts opens/closes and records where a close came from (`prefsLastClose`) — which is
+  what identified this in the first place.
+- **`tools/ci/probe-app.sh` now runs to the end on this Mac: PROBE OK.** Everything after the Preferences check
+  had never executed here, so those assertions were only ever exercised by CI.
+
+## CI — THE RETRY THAT COULD NOT RETRY, AND THE CACHE THAT WAS MISSING (2026-08-25)
+
+The Windows job went red twice in one afternoon on `rarewares.org` timing out while serving `lame`.
+- The retry added earlier **never ran**: `file(DOWNLOAD ... EXPECTED_HASH ...)` raises its own FATAL error the
+  moment a transfer fails ("cannot compute hash on failed download"), so the loop around it was unreachable.
+  `fetch_pinned` now downloads, then verifies with `file(SHA256)` — the hash stays absolute (a server that
+  answers with the WRONG file still fails on the spot, unretried), but a timeout is retried three times.
+  Verified end to end locally: the SourceForge lame tarball failed on attempt 1 and came down on attempt 2.
+- **`third_party/.tools-cache` was not cached in CI at all**, so every run re-fetched ~30 MB from three
+  third-party hosts. It is cached now, keyed on `cmake/ProvisionTools.cmake`, in all four jobs.
+
 ## Phase 8 — 8.1b DONE (CLOUD PRESETS RIDE THE DEVICE TOKEN), 2026-08-25 nineteenth session
 
 The projects saved to a KCC account were the last thing the licence work left dangling: the token existed, the

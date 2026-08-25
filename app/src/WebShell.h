@@ -146,6 +146,12 @@ class WebShell final : public juce::Component, private juce::Timer
     double calibrationResultSamples_ = -1.0;
     double calibrationResultMs_ = -1.0;
     int calibrationReportedSamples_ = 0;
+    // PROBE DIAGNOSTICS for the Preferences window: `prefsWindow` has been failing on one machine while
+    // `prefsReady` passes (the page loaded in its own window), which means something CLOSED it rather than it
+    // never opening. Counting both, and where a close came from, turns that into an answer.
+    int prefsOpens_ = 0;
+    int prefsCloses_ = 0;
+    juce::String prefsLastClose_;
     /// A project the OS handed us before the page was ready (cold-start double-click) — flushed by pageLoaded.
     juce::String pendingOpenFile_;
     juce::File probeFile_;
