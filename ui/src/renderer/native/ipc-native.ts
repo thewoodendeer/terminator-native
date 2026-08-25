@@ -300,6 +300,30 @@ export function installNativeIPC(): void {
   // the Sample Library (~/Music/Terminator) — libraryCore over terminatorFs, files served at /lib/b64/
   const library = buildLibraryOverlay({ getSettings, setSettings, settingsSync: () => settingsCache });
   Object.assign(overlay, library.keys);
+  // Preferences → FOLDERS: the YouTube folder lives INSIDE the sample library (same rule as the Electron app,
+  // where setCacheDir was retired), and the size chips are one bounded walk each in the shell.
+  const youtubeDir = () => library.core.systemDir('youtube');
+  const du = async (path: string): Promise<{ bytes: number; approx: boolean }> => {
+    const r = await native.fs({ verb: 'du', path }).catch(() => null);
+    return { bytes: Number(r?.bytes) || 0, approx: !!r?.approx };
+  };
+  Object.assign(overlay, {
+    getCacheDirInfo: async () => ({ path: youtubeDir(), isDefault: true }),
+    setCacheDir: async () => ({ cancelled: true }), // it moves with the library, like the shipping app
+    resetCacheDir: async () => ({ ok: true, path: youtubeDir(), isDefault: true }),
+    revealCacheDir: async () => {
+      const dir = youtubeDir();
+      await native.fs({ verb: 'mkdir', path: dir });
+      const r = await native.fs({ verb: 'openPath', path: dir });
+      return r?.ok ? { ok: true } : { error: r?.error ?? 'could not open' };
+    },
+    getFolderSizes: async () => {
+      // Only the folders the native app actually HAS: a key that is missing leaves its chip off, which is
+      // honest — a 0 B chip would read as "empty" (drums are not native yet).
+      const [projects, libraryDir, cache] = await Promise.all([du(projectsDir()), du(library.core.libraryRoot()), du(youtubeDir())]);
+      return { projects, library: libraryDir, cache };
+    },
+  });
   installLibraryProbe(library.core, library.keys, library.yt);
 
   // STEMS (7.1c): the split runs in the shell; the renderer's stems layer keeps its contract (stemsNative.ts)

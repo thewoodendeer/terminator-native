@@ -1790,8 +1790,18 @@ in CI and fail on a clean HEAD build too.)
   a probe that left a reset behind would have hidden the adopted models from the split check below).
   ctest **416/416**, 0 new warnings, `ui` gate green.
 
-**Still open in 7.4:** the FOLDERS tab's size chips (`getFolderSizes`), the cache-folder row and the drums-folder
-rows are still unanswered natively (drums are not native yet at all), so those chips stay blank.
+### 7.4 (part 3) — THE FOLDERS TAB TELLS THE TRUTH
+- **`terminatorFs {verb:'du', path}`** → `{ok, bytes, approx}`: the Electron `dirSizeBytes` rule in the shell —
+  symlinks skipped (a library pointing at itself cannot loop) and a 200 000-entry cap that reports `approx`
+  instead of hanging the call. One walk per chip, in C++, not thousands of `list` round trips.
+- **`getFolderSizes`** answers only the folders the native app HAS (projects · library · YouTube). A key it
+  leaves out hides its chip, which is honest — a `0 B` chip would read as "empty", and drums are not native yet.
+- **The YouTube row works**: `getCacheDirInfo` / `revealCacheDir` point at `<library>/YouTube`, the same rule as
+  the shipping app (where `setCacheDir` was retired — the folder moves WITH the library, so CHANGE is a no-op
+  that reports `cancelled`).
+- Probe: `folderSizes.projects.bytes > 0` (a zero means the walk never ran) and `cacheDir.path` is set.
+
+**Still open in Preferences:** the drums rows (drums are not native at all yet) and their `drumsBundled` size.
 
 ## Phase 7 — 7.1a/7.1b DONE (STEMS RUN NATIVELY: THE PIPELINE, AND htdemucs IN PROCESS), 2026-08-24 seventeenth session
 

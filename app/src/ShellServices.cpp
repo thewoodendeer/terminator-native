@@ -240,6 +240,35 @@ void ShellServices::handleFs(const juce::var& req, Completion complete)
         complete(maybeLarge(o));
         return;
     }
+    if (verb == "du") // what a folder COSTS (Preferences → FOLDERS size chips) — the Electron dirSizeBytes rule
+    {
+        // Bounded and symlink-safe: a runaway tree stops counting and says so (`approx`) instead of hanging the
+        // call. Follows no links, so a library pointing back at itself cannot loop.
+        const auto d = fileFromVar(req.getProperty("path", juce::var()));
+        std::int64_t bytes = 0;
+        int seen = 0;
+        bool approx = false;
+        if (d.isDirectory())
+        {
+            for (const auto& e : juce::RangedDirectoryIterator(d, true, "*", juce::File::findFiles))
+            {
+                if (++seen > 200000)
+                {
+                    approx = true;
+                    break;
+                }
+                const auto f = e.getFile();
+                if (f.isSymbolicLink())
+                    continue;
+                bytes += f.getSize();
+            }
+        }
+        auto o = ok(true);
+        put(o, "bytes", static_cast<juce::int64>(bytes));
+        put(o, "approx", approx);
+        complete(o);
+        return;
+    }
     if (verb == "mkdir")
     {
         const auto d = fileFromVar(req.getProperty("path", juce::var()));

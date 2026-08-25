@@ -171,6 +171,7 @@ session autosave). `req.verb`:
 | `exists` | `path` | `{ ok, exists, isDir }` |
 | `list` | `dir`, `exts?` (`[".tproj"]`) | `{ ok, entries: [{ name, fileName, path, isDir, size, modifiedAt(ms) }] }` (dot-files skipped) |
 | `mkdir` | `path` | `{ ok }` |
+| `du` | `path` | `{ ok, bytes, approx }` — what a folder costs (Preferences → FOLDERS chips). Recursive, symlinks skipped, capped at 200 000 entries (`approx: true` when the cap bit) |
 | `trash` | `path` | moves to the Trash (never unlinks) → `{ ok }` |
 | `reveal` | `path` | Finder / Explorer reveal |
 | `openExternal` | `url` (http(s)/mailto only) | default browser |

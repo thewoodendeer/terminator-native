@@ -2060,6 +2060,10 @@ void WebShell::runProbeAsyncChecks()
                     r.projectFiles = t.listProjectFiles ? (await t.listProjectFiles()).length : -1;
                     r.layout = t.loadLayout ? await t.loadLayout() : undefined;
                     r.openPreferences = t.openPreferences ? await t.openPreferences() : null;
+                    // Preferences -> FOLDERS (7.4): the size chips and the YouTube row. The projects folder
+                    // holds at least the file listed above, so a zero there means the walk never ran.
+                    r.folderSizes = t.getFolderSizes ? await t.getFolderSizes() : null;
+                    r.cacheDir = t.getCacheDirInfo ? await t.getCacheDirInfo() : null;
                     // the native-engine shadow (ui/src/renderer/native/nativeEngineShadow.ts): upload a synthetic
                     // buffer through terminatorSamples, bind + trigger a pad, read the engine back
                     const sh = window.__terminatorNativeShadow;
