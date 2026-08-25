@@ -469,9 +469,7 @@ function FoldersPane() {
               <span title="EXPERIMENTAL. Normally Terminator mixes a pad's chosen stems into a new piece of audio and hands it to the engine — one for every different combination. With this on, the engine keeps the four layers itself and sums the lit ones as the pad plays: much less memory on a long song, and switching layers is instant. Split a song again after turning it on. Turn it off and everything works exactly as before.">
                 Play stems from the engine (experimental)
               </span>
-              <button style={btnSm} title={stemPlanes ? 'Back to the normal path' : 'Let the engine hold the layers'} onClick={() => void toggleStemPlanes()}>
-                {stemPlanes ? 'ON' : 'OFF'}
-              </button>
+              <Toggle on={stemPlanes} onChange={() => void toggleStemPlanes()} />
             </div>
           )}
           <div style={btnRow}>
