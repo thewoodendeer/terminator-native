@@ -72,6 +72,9 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"prefsOpens": ?[1-9]' "$OUT" || { echo "::error::window.terminator.openPreferences() never opened the native Preferences window"; exit 1; }
   grep -Eq '"prefsReady": ?true' "$OUT" || { echo "::error::the Preferences page did not finish loading in its window"; exit 1; }
   grep -Eq '"prefsCloses": ?0' "$OUT" || { echo "::error::something CLOSED the Preferences window during the run (see prefsLastClose)"; exit 1; }
+  # …and it RENDERED: the tab strip is how every native-only pane is reached (audio · midi · plugins · folders ·
+  # account, the last being the only way to sign in while the licence gate is off).
+  grep -Eq '"prefsPage": ?\{[^}]*"tabs": ?\[[^]]*"account"' "$OUT" || { echo "::error::the Preferences page did not render its tab strip (see prefsPage)"; exit 1; }
   echo "preferences: opened + page ready (visible at the read: $(grep -Eo '"prefsWindow": ?(true|false)' "$OUT") )"
   # the native-engine shadow (audio through the C++ engine): attached to ChopperView's engine, and its self-test
   # pushed a synthetic buffer through terminatorSamples, bound + triggered pad 63 and released it

@@ -489,8 +489,74 @@ function FoldersPane() {
   );
 }
 
+// ── ACCOUNT tab (native only, Phase 8.5) ─────────────────────────────────────
+// Sign-in lives HERE and not behind a lock screen. The licence is wired up (browser sign-in, a device token in
+// the OS keychain, re-validation every launch) but the GATE is deliberately still off while 3.0 is in alpha —
+// so without this pane the whole flow would be unreachable and untestable. It also gives the cloud-preset tab
+// somewhere honest to point when it says "signed out".
+function AccountPane() {
+  const bridge = (window as any).terminator as {
+    checkLicense?: () => Promise<{ unlocked: boolean; email: string }>;
+    startBrowserSignIn?: () => Promise<void>;
+    signOut?: () => Promise<void>;
+    openBuyPage?: () => Promise<void>;
+    onAuthSignedIn?: (h: (info: { email: string }) => void) => () => void;
+  } | undefined;
+  const [state, setState] = useState<{ unlocked: boolean; email: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => {
+    setBusy(true);
+    try { setState((await bridge?.checkLicense?.()) ?? { unlocked: false, email: '' }); }
+    catch { setState({ unlocked: false, email: '' }); }
+    setBusy(false);
+  };
+  useEffect(() => { void refresh(); }, []);
+  // The shell fires this when the browser hands the one-time code back — re-read rather than assume.
+  useEffect(() => bridge?.onAuthSignedIn?.(() => { void refresh(); }), []);
+
+  const signedIn = state?.unlocked === true;
+  return (
+    <>
+      <div style={card}>
+        <label style={label}>
+          Account
+          <span style={{ float: 'right', color: signedIn ? 'var(--neon)' : 'var(--text-dim)', textTransform: 'none', letterSpacing: 0 }}>
+            {state === null ? '…' : signedIn ? 'SIGNED IN' : 'SIGNED OUT'}
+          </span>
+        </label>
+        <div style={hint}>
+          Signing in is done in your own browser — there is no password box in here, and the app never sees one.
+          What it keeps afterwards is a device token in your Mac's Keychain (Windows: DPAPI), which it re-checks
+          with killaviccheatcodes.app on every launch; a week offline is fine, so a plane or a studio with no
+          Wi-Fi changes nothing.
+        </div>
+        <div style={{ ...pathStyle, marginTop: 8 }}>{state === null ? '…' : (state.email || 'no account on this machine')}</div>
+        <div style={btnRow}>
+          {!signedIn && (
+            <button style={btnSm} disabled={busy}
+              title="Opens killaviccheatcodes.app in your browser. Sign in there and it hands this app a one-time code back."
+              onClick={() => { void bridge?.startBrowserSignIn?.(); }}>SIGN IN VIA BROWSER</button>
+          )}
+          {signedIn && (
+            <button style={btnSm} disabled={busy}
+              title="Forget the device token on this machine. Your projects and samples are untouched."
+              onClick={() => { void bridge?.signOut?.().then(refresh); }}>SIGN OUT</button>
+          )}
+          <button style={btnSm} disabled={busy} title="Check with the server again right now" onClick={() => void refresh()}>RE-CHECK</button>
+          <button style={btnSm} title="Open the Terminator page in your browser" onClick={() => { void bridge?.openBuyPage?.(); }}>BUY / MY ACCOUNT</button>
+        </div>
+        <div style={{ ...hint, marginTop: 8 }}>
+          Terminator 3 is in alpha and runs UNLOCKED whether you sign in or not — nothing here can lock you out
+          of the app. Signing in is what the CLOUD tab of the OPEN dialog needs to find the projects saved to
+          your account.
+        </div>
+      </div>
+    </>
+  );
+}
+
 function PreferencesApp() {
-  const [tab, setTab] = useState<'audio' | 'midi' | 'plugins' | 'folders'>('audio');
+  const [tab, setTab] = useState<'audio' | 'midi' | 'plugins' | 'folders' | 'account'>('audio');
   const [audio, setAudio] = useState<AudioPrefs>(DEFAULT_AUDIO);
   const [midi, setMidi] = useState<MidiPrefs>(DEFAULT_MIDI);
   const [outputs, setOutputs] = useState<MediaDeviceInfo[]>([]);
@@ -585,7 +651,7 @@ function PreferencesApp() {
       {/* Title bar / tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', background: 'var(--bg2)' }}>
         {(isNative()
-          ? (['audio', 'midi', 'plugins', 'folders'] as const)
+          ? (['audio', 'midi', 'plugins', 'folders', 'account'] as const)
           : (['audio', 'midi', 'folders'] as const)
         ).map(t => (
           <button
@@ -745,6 +811,7 @@ function PreferencesApp() {
         )}
 
         {tab === 'folders' && <FoldersPane />}
+        {tab === 'account' && isNative() && <AccountPane />}
       </div>
     </div>
   );

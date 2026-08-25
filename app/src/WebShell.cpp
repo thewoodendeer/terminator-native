@@ -2494,6 +2494,34 @@ void WebShell::runProbe()
             }
             else if (const auto* e = result.getError())
                 out = "{\"error\":" + juce::JSON::toString(e->message) + "}";
+            // The PREFERENCES window is a second page, and until now the probe only knew whether it LOADED.
+            // Read what it rendered too — its tab strip is the one place several native-only panes are reachable
+            // from (audio, midi, plugins, folders, account), and a pane that stopped rendering would otherwise
+            // be found by a person, later.
+            if (prefsWindow_ != nullptr && prefsReady_)
+            {
+                static const char* kPrefsScript = R"JS((function(){
+                    const tabs = Array.from(document.querySelectorAll('button'))
+                        .map(b => (b.textContent || '').trim().toLowerCase())
+                        .filter(t => ['audio','midi','plugins','folders','account'].includes(t));
+                    return JSON.stringify({ tabs, cards: document.querySelectorAll('div').length,
+                                            error: (window.__terminatorErrors || []).length });
+                })())JS";
+                prefsWindow_->browser().evaluateJavascript(
+                    kPrefsScript,
+                    [this, out](juce::WebBrowserComponent::EvaluationResult prefsResult)
+                    {
+                        auto merged = juce::JSON::parse(out);
+                        if (auto* mo = merged.getDynamicObject())
+                            mo->setProperty("prefsPage", prefsResult.getResult() != nullptr
+                                                             ? juce::JSON::parse(prefsResult.getResult()->toString())
+                                                             : juce::var());
+                        probeFile_.deleteFile();
+                        probeFile_.replaceWithText(juce::JSON::toString(merged, true) + "\n");
+                        juce::JUCEApplication::getInstance()->systemRequestedQuit();
+                    });
+                return;
+            }
             probeFile_.deleteFile();
             probeFile_.replaceWithText(out + "\n");
             juce::JUCEApplication::getInstance()->systemRequestedQuit();

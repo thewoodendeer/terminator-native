@@ -1766,6 +1766,23 @@ device" from a warning that skipped half the gate into an error.
   all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
   itself at a second rate.
 
+## Phase 8 — 8.5b: SIGN-IN IS REACHABLE (Preferences → ACCOUNT), 2026-08-25 nineteenth session
+
+The licence flow landed with nothing to press: the sign-in screen only appears when the GATE is on, and the gate
+is deliberately off while 3.0 is in alpha — so the whole thing was unreachable and untestable. Preferences now
+has an **ACCOUNT** tab (native-only; the Electron/web build's tab strip is unchanged).
+
+- SIGNED IN / SIGNED OUT with the account's email, **SIGN IN VIA BROWSER**, SIGN OUT, RE-CHECK, and BUY / MY
+  ACCOUNT. It listens for `terminator.authSignedIn`, so the moment the browser hands the code back the pane
+  re-reads rather than assuming.
+- It says plainly what it does and does not do: no password box in the app, the token lives in the Keychain
+  (DPAPI on Windows), a week offline is fine, and **nothing here can lock you out** — signing in is what the
+  OPEN dialog's CLOUD tab needs, nothing more, while 3.0 is in alpha.
+- **New gate:** the probe now reads the PREFERENCES WINDOW's own DOM (a second page it previously only knew had
+  LOADED) and asserts the tab strip rendered, `account` included. A pane that stopped rendering would otherwise
+  be found by a person, later. Measured: `prefsPage {tabs:[audio,midi,plugins,folders,account], cards:27,
+  error:0}`.
+
 ## Phase 9 — 9.3b: THE SOAK (does it leak while you play?), 2026-08-25 nineteenth session
 
 Startup and idle memory were measured; what nobody had looked at is the number that actually matters — what
