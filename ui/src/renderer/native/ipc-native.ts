@@ -303,7 +303,7 @@ export function installNativeIPC(): void {
   installLibraryProbe(library.core, library.keys, library.yt);
 
   // STEMS (7.1c): the split runs in the shell; the renderer's stems layer keeps its contract (stemsNative.ts)
-  Object.assign(overlay, buildStemsOverlay({ presetsDir, readJson, writeJson, join }));
+  Object.assign(overlay, buildStemsOverlay({ presetsDir, assetsDir: assets.assetsDir, readJson, writeJson, join }));
   installStemsProbe();
 
   (window as any).terminator = { ...base, ...overlay };

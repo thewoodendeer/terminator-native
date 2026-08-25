@@ -1739,6 +1739,43 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 7 — 7.4 (part 1) DONE (PREFERENCES → STEMS: THE ENGINES AND THE SAVED STEM AUDIO), 2026-08-25 eighteenth session
+
+The Preferences page has carried the whole Stems card since it was copied from the Electron renderer — the
+engines with their sizes, DOWNLOAD / DELETE, the per-song stem audio with its own DELETE, CLEAR ALL, and the two
+OPEN buttons. It rendered nothing natively because the card is gated on `bridge.stemsUsage`, and the shell
+answered none of that surface. It does now, ported call for call from the Electron handlers
+(`main.ts stems:usage / clearAudio / deleteSongStems / revealAudio / revealModels` + `diskUsage.ts`).
+
+- **`stemsUsage()`** — the engines come off `terminatorStems {verb:'status'}` (bytes / expectedBytes / ready,
+  plus a `downloading` flag the TS side keeps from the progress events), the folder is the hub's own
+  `modelsDir`, and the stem AUDIO is a scan of the native asset store (`<dataDir>/assets`): a `<hash>.json`
+  sidecar whose `name` ends `.stems.flac` (or the older `.stems.wav`) is a stem file, and the song it belongs
+  to is that name minus the ` — DRUMS.stems.flac` stamp `finalize()` writes. Same filter, same rollup, same
+  em-dash rule as `diskUsage.ts` — a title containing " — " itself survives.
+- **DELETE takes the shortcut with it.** A song's stems and their sidecars go to the TRASH (the shell has no
+  hard delete, and the drums EMPTY sets the precedent), and every `stems-cache.json` entry pointing at one of
+  the deleted hashes is dropped — a shortcut left behind would "find" stems whose files are gone. CLEAR ALL
+  empties the index outright. Both refuse while a split is running, like the Electron handlers.
+- **DOWNLOAD awaits the download.** The shell answers the verb at once and finishes on
+  `terminator.stemsModels`; the Electron pane awaited `ensureModels`, so the shim resolves on that event
+  instead (and on a refused verb) — otherwise the pane would say "downloaded" the instant it was asked.
+- **The progress event now says WHICH engine** (`terminator.stemsProgress {..., quality}`): Preferences keys its
+  FAST / FINE row by quality, and a download the SPLIT started has to light the same row as one the pane
+  started. Both windows get the event (`emitToAll`), so the chopper's bar and the pane's row agree.
+- OPEN ENGINES / OPEN STEM AUDIO = `mkdir` then `openPath` (the folder can legitimately not exist yet).
+
+**Evidence.** `mac-debug` 0 new warnings · ctest **416/416** · `ui` gate green (tsc at the 5 baseline) · the app
+probe drives the pane's whole contract without a click: `usageModelsDir` · `usageSeesSong` (a fake
+`probe stems song — DRUMS.stems.flac` written into the store with a real cache shortcut shows up as a SONG) ·
+`deleteOk` · `deleteRemovedSong` · `deleteDroppedCache`. The probe script asserts all five.
+(The two local probe failures on this Mac are the known ones — `prefsWindow` and `mixerPdcPlan`; both are green
+in CI and fail on a clean HEAD build too.)
+
+**Still open in 7.4:** the FOLDERS tab's size chips (`getFolderSizes`) and the drums-folder rows are still
+unanswered natively, and the models folder can only be relocated from the bridge (`{verb:'modelsDir', path}`),
+not from the pane.
+
 ## Phase 7 — 7.1a/7.1b DONE (STEMS RUN NATIVELY: THE PIPELINE, AND htdemucs IN PROCESS), 2026-08-24 seventeenth session
 
 **The biggest hole in the native app is closed at the engine level: a stem split runs in Terminator's own

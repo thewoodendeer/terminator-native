@@ -361,7 +361,9 @@ the page fetches it binary and gets the eight planes end to end, float32, in the
 other L,R · vocals L,R — the same array `onStemsChunk` has always handed the renderer. The shim fetches spans in
 order and holds `done` until the last one is in (finalizing while a span was still in flight wrote assets that
 were missing it — the Electron path's ORDER TRAP).
-### `terminator.stemsProgress` {phase:"models"|"load"|"split", pct, total?} — the download, the session load, the run
+### `terminator.stemsProgress` {phase:"models"|"load"|"split", pct, total?, quality} — the download, the session load, the run
+`quality` ("fast"|"fine") is which ENGINE the phase is about — Preferences → Stems keys its FAST / FINE row by it, so a
+download the split started lights the same row as one the pane started (7.4).
 ### `terminator.stemsReady` / `terminator.stemsDone` {key, ranges, cancelled?} — ready ranges in SECONDS, merged
 ### `terminator.stemsError` {message} · `terminator.stemsModels` {quality, ready, error?}
 ### `terminator.midiClock` {bpm, port} — the clock-IN follower settled on a new tempo (3.5)

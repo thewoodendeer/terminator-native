@@ -217,11 +217,12 @@ juce::var StemHub::handle(const juce::var& req)
                 std::string error;
                 const auto result = models_.ensure(
                     quality, error,
-                    [this](int pct)
+                    [this, quality](int pct)
                     {
                         auto* p = new juce::DynamicObject();
                         p->setProperty("phase", "models");
                         p->setProperty("pct", pct);
+                        p->setProperty("quality", qualityName(quality));
                         post("terminator.stemsProgress", juce::var(p));
                     },
                     &cancelDownload_);
@@ -327,13 +328,16 @@ void StemHub::runSplit(std::shared_ptr<SampleBuffer> source, juce::String key, s
         post("terminator.stemsError", juce::var(o));
         running_.store(false, std::memory_order_relaxed);
     };
-    const auto progress = [this](const char* phase, int pct, int total)
+    const auto progress = [this, quality](const char* phase, int pct, int total)
     {
         auto* p = new juce::DynamicObject();
         p->setProperty("phase", phase);
         p->setProperty("pct", pct);
         if (total > 0)
             p->setProperty("total", total);
+        // WHICH engine: Preferences keys its FAST / FINE row by this, and a download started by the split has
+        // to light the same row as one started by the pane.
+        p->setProperty("quality", qualityName(quality));
         post("terminator.stemsProgress", juce::var(p));
     };
 

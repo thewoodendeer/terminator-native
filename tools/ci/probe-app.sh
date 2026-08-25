@@ -52,6 +52,14 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"bridgeOk": ?true' "$OUT" || { echo "::error::stems self-test: window.terminator has no stemsSplit/onStemsChunk (the native overlay did not install)"; exit 1; }
   grep -Eq '"refusesUnknownKey": ?true' "$OUT" || { echo "::error::stems self-test: a split with an unknown sample key was NOT refused"; exit 1; }
   grep -Eq '"cacheRoundTrip": ?true' "$OUT" || { echo "::error::stems self-test: the stems cache index did not round-trip"; exit 1; }
+  # PREFERENCES -> STEMS (7.4): usage reports the engines folder, sees a stem asset in the store as a SONG, and
+  # the per-song DELETE takes the files AND the cache shortcut with it (a shortcut left behind would "find"
+  # stems whose files are gone).
+  grep -Eq '"usageModelsDir": ?true' "$OUT" || { echo "::error::stems self-test: stemsUsage did not report the models folder"; exit 1; }
+  grep -Eq '"usageSeesSong": ?true' "$OUT" || { echo "::error::stems self-test: a stem asset in the store was not listed as a song by stemsUsage"; exit 1; }
+  grep -Eq '"deleteOk": ?true' "$OUT" || { echo "::error::stems self-test: stemsDeleteSongStems deleted nothing"; exit 1; }
+  grep -Eq '"deleteRemovedSong": ?true' "$OUT" || { echo "::error::stems self-test: the song was still listed after its stems were deleted"; exit 1; }
+  grep -Eq '"deleteDroppedCache": ?true' "$OUT" || { echo "::error::stems self-test: deleting a song's stems left its cache shortcut behind"; exit 1; }
   if grep -Eq '"splitRan": ?true' "$OUT"; then
     grep -Eq '"splitOk": ?true' "$OUT" || { echo "::error::stems self-test: the split failed (see stems.splitError)"; exit 1; }
     grep -Eq '"spanPeak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::stems self-test: the span that came back is SILENT — the blob fetch or the model gave nothing"; exit 1; }
