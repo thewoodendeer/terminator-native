@@ -42,12 +42,16 @@ std::string sha256Of(const juce::File& file)
 }
 } // namespace
 
-StemModels::StemModels(const juce::File& dataDir) : dir_(dataDir.getChildFile("stems").getChildFile("models")) {}
+StemModels::StemModels(const juce::File& dataDir)
+    : dir_(dataDir.getChildFile("stems").getChildFile("models")), defaultDir_(dir_)
+{
+}
 
 void StemModels::setDirectory(const juce::File& dir)
 {
-    if (dir != juce::File())
-        dir_ = dir;
+    // An empty File is the RESET the header promises (Preferences → USE DEFAULT): it used to be ignored, which
+    // left the button doing nothing at all.
+    dir_ = dir == juce::File() ? defaultDir_ : dir;
 }
 
 const std::vector<ModelFile>& StemModels::manifest(Quality q)

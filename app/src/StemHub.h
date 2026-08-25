@@ -72,11 +72,18 @@ class StemHub : private juce::Timer
                   std::vector<stems::Span> windows, bool sweep, bool keepPlanes);
     void stopWorker();
     juce::var rangesVar(const juce::String& key) const;
+    /// If our own folder is empty and the Electron app's on this machine is not, THAT is our folder (same
+    /// files, same SHA-256s). Runs at startup and again whenever the folder is reset to the default.
+    void adoptElectronModels();
 
     Engine& engine_;
     SampleRegistry& registry_;
+    juce::File dataDir_;
     std::function<juce::String(std::vector<std::byte>)> stashBytes_;
     stems::StemModels models_;
+    /// Did the USER pick this folder (Preferences → CHANGE…)? The auto-adopted Electron folder does not count —
+    /// USE DEFAULT is about undoing a choice, and re-adopting is what "default" means on such a machine.
+    bool modelsDirChosen_ = false;
     stems::StemModel model_;
     bool modelLoaded_ = false;
     stems::Quality loadedQuality_ = stems::Quality::fast;

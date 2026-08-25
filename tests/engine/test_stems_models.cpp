@@ -166,4 +166,12 @@ TEST_CASE("Stem models: cancel leaves nothing half-written, and the folder can m
     REQUIRE(models.ensure(Quality::fast, error, {}, &cancel) == ModelError::none);
     REQUIRE(models.ready(Quality::fast));
     REQUIRE(moved.getChildFile("cancelled.onnx").existsAsFile());
+    REQUIRE_FALSE(models.isDefaultDirectory());
+
+    // USE DEFAULT: an empty File is the reset the header promises. It used to be IGNORED, so the button would
+    // have moved nothing and the pane would have kept showing the relocated folder.
+    models.setDirectory(juce::File());
+    REQUIRE(models.isDefaultDirectory());
+    REQUIRE(models.directory() == fx.data.getChildFile("stems").getChildFile("models"));
+    REQUIRE_FALSE(models.ready(Quality::fast)); // the default folder is empty again - the move really happened
 }

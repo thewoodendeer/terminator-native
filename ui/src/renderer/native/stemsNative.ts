@@ -44,6 +44,9 @@ export interface StemsNativeDeps {
   presetsDir: () => string;
   /** <dataDir>/assets — where finalize() writes the four `<title> — DRUMS.stems.flac` assets. */
   assetsDir: () => string;
+  /** The app settings, for the ONE thing the shell cannot remember for itself: a relocated models folder. */
+  getSettings: () => Promise<AnyRecord>;
+  setSettings: (patch: AnyRecord) => Promise<AnyRecord>;
   readJson: <T>(path: string) => Promise<T | null>;
   writeJson: (path: string, value: unknown) => Promise<{ ok: boolean; error?: string }>;
   join: (dir: string, name: string) => string;
@@ -249,6 +252,19 @@ export function buildStemsOverlay(deps: StemsNativeDeps): AnyRecord {
     await dropCacheFor(title === null ? null : gone).catch(() => { /* the index rebuilds itself */ });
     return { ok: true, deleted, bytes };
   };
+  /** Where the engines live. The shell adopts the Electron app's folder at startup when ours is empty, but a
+   *  folder the USER picked has to survive a relaunch — the shell has no settings of its own, so it is stored
+   *  here and re-applied on boot (`applyModelsDirSetting`). */
+  const modelsDirInfo = async (): Promise<{ path: string; isDefault: boolean }> => {
+    const status = await native.stems({ verb: 'status' }).catch(() => null);
+    return { path: String(status?.modelsDir ?? ''), isDefault: status?.modelsDirIsDefault !== false };
+  };
+  const setModelsDir = async (path: string | null): Promise<{ path: string; isDefault: boolean; ok: boolean; error?: string }> => {
+    const r = await native.stems({ verb: 'modelsDir', path: path ?? '' });
+    await deps.setSettings({ stemsModelsDir: path ?? null }).catch(() => ({}));
+    return { ok: !!r?.ok || r?.modelsDir !== undefined, path: String(r?.modelsDir ?? ''), isDefault: r?.modelsDirIsDefault !== false };
+  };
+
   const revealDir = async (dir: string): Promise<{ ok: boolean; error?: string }> => {
     if (!dir) return { ok: false, error: 'no folder' };
     await native.fs({ verb: 'mkdir', path: dir });
@@ -313,6 +329,16 @@ export function buildStemsOverlay(deps: StemsNativeDeps): AnyRecord {
       return revealDir(String(status?.modelsDir ?? ''));
     },
     stemsRevealAudio: () => revealDir(deps.assetsDir()),
+    stemsModelsDir: () => modelsDirInfo(),
+    stemsChooseModelsDir: async () => {
+      const cur = await modelsDirInfo();
+      const r = await native.fs({ verb: 'openDialog', mode: 'dir', title: 'Keep the split engines in…', dir: cur.path });
+      if (!r?.ok || !r.path) return { ...cur, cancelled: true };
+      // An already-filled folder is ADOPTED as it stands (that is how a machine holding the Electron app's
+      // models skips the 166 MB download) — nothing is copied or moved.
+      return setModelsDir(String(r.path));
+    },
+    stemsResetModelsDir: () => setModelsDir(null),
 
     onStemsChunk: (cb: (c: { startFrame: number; endFrame: number; stems: Float32Array[] }) => void): Unsub => {
       chunkCb = cb; return () => { if (chunkCb === cb) chunkCb = null; };
@@ -344,6 +370,16 @@ export function buildStemsOverlay(deps: StemsNativeDeps): AnyRecord {
       return { ok: true };
     },
   };
+}
+
+/** Re-apply a models folder the user picked in Preferences (the shell starts on its default / the adopted
+ *  Electron folder every launch). Call once at install, before anything can start a split. */
+export async function applyModelsDirSetting(getSettings: () => Promise<AnyRecord>): Promise<void> {
+  if (!isNative()) return;
+  try {
+    const saved = (await getSettings())?.stemsModelsDir;
+    if (typeof saved === 'string' && saved) await native.stems({ verb: 'modelsDir', path: saved });
+  } catch { /* a bad saved path just leaves the default in place */ }
 }
 
 declare global {
@@ -397,6 +433,25 @@ export function installStemsProbe(): void {
         r.deleteRemovedSong = !(after?.songs ?? []).some((x: AnyRecord) => x.title === probeTitle);
         r.deleteDroppedCache = (await t.stemsCacheGet('probe-usage-key', 'fast')) === null;
         await t.stemsCacheDrop('probe-usage-key');
+
+        // THE ENGINES FOLDER (7.4): it can move, and USE DEFAULT really goes back. The probe drives the verb
+        // (the pane's button opens a folder dialog) and then puts the ORIGINAL folder back — on a machine that
+        // adopted the Electron app's models, a reset left in place would hide them from the split below.
+        const before = await t.stemsModelsDir();
+        const savedDirSetting = (await t.getSettings())?.stemsModelsDir ?? null; // the probe puts it back
+        const dirsR = await native.fs({ verb: 'dirs' });
+        const sep = String(dirsR?.sep ?? '/');
+        const elsewhere = `${String(dirsR?.temp ?? '/tmp')}${sep}terminator-probe-models`;
+        await native.stems({ verb: 'modelsDir', path: elsewhere });
+        const moved = await t.stemsModelsDir();
+        r.modelsDirMoved = moved?.path === elsewhere && moved?.isDefault === false;
+        const back = await t.stemsResetModelsDir();
+        // A reset re-adopts the Electron app's folder when there is one, so the path back is not necessarily
+        // the app's own — what matters is that the chosen folder is gone and nothing is marked as chosen.
+        r.modelsDirReset = back?.isDefault === true && back?.path !== elsewhere;
+        if (back?.path !== before.path) await native.stems({ verb: 'modelsDir', path: before.path });
+        r.modelsDirRestored = (await t.stemsModelsDir())?.path === before.path;
+        await t.setSettings({ stemsModelsDir: savedDirSetting });
 
         const wantSplit = !!(window as any).__terminatorProbeStems;
         const fastReady = (status?.models ?? []).some((m: AnyRecord) => m.quality === 'fast' && m.ready);

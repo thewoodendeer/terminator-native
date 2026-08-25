@@ -1772,9 +1772,26 @@ probe drives the pane's whole contract without a click: `usageModelsDir` · `usa
 (The two local probe failures on this Mac are the known ones — `prefsWindow` and `mixerPdcPlan`; both are green
 in CI and fail on a clean HEAD build too.)
 
-**Still open in 7.4:** the FOLDERS tab's size chips (`getFolderSizes`) and the drums-folder rows are still
-unanswered natively, and the models folder can only be relocated from the bridge (`{verb:'modelsDir', path}`),
-not from the pane.
+### 7.4 (part 2) — THE ENGINES FOLDER MOVES, AND USE DEFAULT REALLY GOES BACK
+- **Two bugs in the folder itself, found by writing the button.** `StemModels::setDirectory` documented "an
+  empty File = back to the default" and then IGNORED an empty File — USE DEFAULT would have done nothing at
+  all. It now remembers `defaultDir_` and resets to it (`isDefaultDirectory()`; the models test asserts the
+  round trip, including that the default folder really is empty again after a move). And a relocated folder
+  did not survive a relaunch: the shell keeps no settings, so the page stores `stemsModelsDir` and re-applies
+  it at install (`applyModelsDirSetting`), before anything can start a split.
+- **A reset RE-ADOPTS.** On his machine the folder in use is the Electron app's (adoption at startup). A plain
+  "back to `<dataDir>/stems/models`" would have pointed the app at an empty folder and offered to download
+  166 MB he already has, so the adoption rule now runs again on reset. Which also fixes what "default" means:
+  `modelsDirIsDefault` is false only when the USER picked the folder, so USE DEFAULT is greyed out until there
+  is a choice to undo.
+- Preferences: CHANGE… / USE DEFAULT under the engines path, with the tooltip that says what actually happens
+  (a folder that already holds htdemucs is USED as it stands — nothing is copied or moved).
+- Probe: `modelsDirMoved` · `modelsDirReset` · `modelsDirRestored` (it puts the folder AND the setting back —
+  a probe that left a reset behind would have hidden the adopted models from the split check below).
+  ctest **416/416**, 0 new warnings, `ui` gate green.
+
+**Still open in 7.4:** the FOLDERS tab's size chips (`getFolderSizes`), the cache-folder row and the drums-folder
+rows are still unanswered natively (drums are not native yet at all), so those chips stay blank.
 
 ## Phase 7 — 7.1a/7.1b DONE (STEMS RUN NATIVELY: THE PIPELINE, AND htdemucs IN PROCESS), 2026-08-24 seventeenth session
 

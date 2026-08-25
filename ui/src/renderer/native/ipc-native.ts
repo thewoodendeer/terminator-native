@@ -30,7 +30,7 @@ import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
 import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
 import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } from './assetsNative';
 import { installExportProbe } from './exportNative';
-import { buildStemsOverlay, installStemsProbe } from './stemsNative';
+import { applyModelsDirSetting, buildStemsOverlay, installStemsProbe } from './stemsNative';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -303,7 +303,8 @@ export function installNativeIPC(): void {
   installLibraryProbe(library.core, library.keys, library.yt);
 
   // STEMS (7.1c): the split runs in the shell; the renderer's stems layer keeps its contract (stemsNative.ts)
-  Object.assign(overlay, buildStemsOverlay({ presetsDir, assetsDir: assets.assetsDir, readJson, writeJson, join }));
+  Object.assign(overlay, buildStemsOverlay({ presetsDir, assetsDir: assets.assetsDir, getSettings, setSettings, readJson, writeJson, join }));
+  void applyModelsDirSetting(getSettings); // a folder he picked in Preferences, back in place before any split
   installStemsProbe();
 
   (window as any).terminator = { ...base, ...overlay };

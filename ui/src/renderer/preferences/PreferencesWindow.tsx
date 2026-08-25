@@ -52,6 +52,11 @@ const bridge = (window as any).terminator as {
   stemsDeleteSongStems?: (title: string) => Promise<{ ok: boolean; deleted?: number; bytes?: number; error?: string }>;
   stemsRevealModels?: () => Promise<{ ok: boolean; error?: string }>;
   stemsRevealAudio?: () => Promise<{ ok: boolean; error?: string }>;
+  // NATIVE (3.0): the engines folder can move — pointing it at a folder that already holds htdemucs (the
+  // Electron app's, an external drive) adopts those files instead of downloading them again.
+  stemsModelsDir?: () => Promise<{ path: string; isDefault: boolean }>;
+  stemsChooseModelsDir?: () => Promise<{ path: string; isDefault: boolean; cancelled?: boolean; error?: string }>;
+  stemsResetModelsDir?: () => Promise<{ path: string; isDefault: boolean; error?: string }>;
 } | undefined;
 
 /** Finder-style decimal units — matches what the OS shows for the folder. */
@@ -209,6 +214,7 @@ function FoldersPane() {
   const [drumsNote, setDrumsNote] = useState<string | null>(null);
   const [stems, setStems] = useState<{ models: Array<{ quality: 'fast' | 'fine'; bytes: number; ready: boolean; expectedBytes?: number; downloading?: boolean }>; modelsDir: string; audio: { bytes: number; count: number }; songs?: Array<{ title: string; bytes: number; files: number }> } | null>(null);
   const [stemsNote, setStemsNote] = useState<string | null>(null);
+  const [modelsDirDefault, setModelsDirDefault] = useState(true);
   // Engine download progress per quality (0..100) while one is in flight —
   // driven by the broadcast event, not by polling (a .part file reads as 0 B).
   const [dl, setDl] = useState<Partial<Record<'fast' | 'fine', number>>>({});
@@ -223,6 +229,7 @@ function FoldersPane() {
     try { setSizes(await bridge?.getFolderSizes?.() ?? null); } catch { /* */ }
     try { setDrumsDir(await bridge?.drumsUserDir?.() ?? null); } catch { /* */ }
     try { setStems(await bridge?.stemsUsage?.() ?? null); } catch { /* */ }
+    try { const d = await bridge?.stemsModelsDir?.(); if (d) setModelsDirDefault(d.isDefault); } catch { /* */ }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => bridge?.onLibraryMoveProgress?.(p => setMoving(p)) ?? undefined, []);
@@ -248,6 +255,23 @@ function FoldersPane() {
     const r = await bridge?.stemsDeleteModels?.(q);
     if (r && !r.ok) setErr(e => ({ ...e, stems: r.error ?? 'could not delete' }));
     else setStemsNote(`${q.toUpperCase()} engine deleted — it re-downloads on the next ${q.toUpperCase()} split.`);
+    void refresh();
+  };
+  // The engines folder (native): pointing it at one that already holds htdemucs adopts those files — nothing
+  // is copied, and the 166 MB download is skipped.
+  const chooseModelsDir = async () => {
+    setErr(e => ({ ...e, stems: undefined })); setStemsNote(null);
+    const r = await bridge?.stemsChooseModelsDir?.();
+    if (r?.cancelled) return;
+    if (r?.error) setErr(e => ({ ...e, stems: r.error }));
+    else setStemsNote('Engines folder changed — engines already in there are used as they are; anything missing downloads on the next split.');
+    void refresh();
+  };
+  const resetModelsDir = async () => {
+    setErr(e => ({ ...e, stems: undefined })); setStemsNote(null);
+    const r = await bridge?.stemsResetModelsDir?.();
+    if (r?.error) setErr(e => ({ ...e, stems: r.error }));
+    else setStemsNote('Back to the standard engines folder — the files where you pointed it are left alone.');
     void refresh();
   };
   const clearStemAudio = async () => {
@@ -358,6 +382,16 @@ function FoldersPane() {
             The split engines (downloaded once on first use, then yours offline) and the stem audio of every split song (kept in the app's project store so a saved project reloads its stems instantly). Deleting either is safe — an engine re-downloads on the next split, and cleared songs keep their layer choices and simply re-split when opened.
           </div>
           <div style={{ ...pathStyle, marginTop: 8 }} title={stems?.modelsDir ?? ''}>{stems ? `‎${stems.modelsDir}` : '…'}</div>
+          {bridge?.stemsChooseModelsDir && (
+            <div style={{ ...btnRow, marginTop: 6 }}>
+              <button style={btnSm}
+                title="Keep the engines somewhere else — an external drive, or a folder that already holds them (Terminator uses what is already in there instead of downloading it again). Nothing is copied or moved."
+                onClick={() => void chooseModelsDir()}>CHANGE…</button>
+              <button style={btnSm} disabled={modelsDirDefault}
+                title="Back to the standard engines folder (the files where you pointed it are left where they are)"
+                onClick={() => void resetModelsDir()}>USE DEFAULT</button>
+            </div>
+          )}
           {(['fast', 'fine'] as const).map(q => {
             const m = stems?.models.find(x => x.quality === q);
             const pct = dl[q];

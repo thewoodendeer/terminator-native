@@ -60,6 +60,9 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"deleteOk": ?true' "$OUT" || { echo "::error::stems self-test: stemsDeleteSongStems deleted nothing"; exit 1; }
   grep -Eq '"deleteRemovedSong": ?true' "$OUT" || { echo "::error::stems self-test: the song was still listed after its stems were deleted"; exit 1; }
   grep -Eq '"deleteDroppedCache": ?true' "$OUT" || { echo "::error::stems self-test: deleting a song's stems left its cache shortcut behind"; exit 1; }
+  grep -Eq '"modelsDirMoved": ?true' "$OUT" || { echo "::error::stems self-test: the engines folder did not move"; exit 1; }
+  grep -Eq '"modelsDirReset": ?true' "$OUT" || { echo "::error::stems self-test: USE DEFAULT did not put the engines folder back"; exit 1; }
+  grep -Eq '"modelsDirRestored": ?true' "$OUT" || { echo "::error::stems self-test: the probe did not restore the engines folder it found"; exit 1; }
   if grep -Eq '"splitRan": ?true' "$OUT"; then
     grep -Eq '"splitOk": ?true' "$OUT" || { echo "::error::stems self-test: the split failed (see stems.splitError)"; exit 1; }
     grep -Eq '"spanPeak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::stems self-test: the span that came back is SILENT — the blob fetch or the model gave nothing"; exit 1; }

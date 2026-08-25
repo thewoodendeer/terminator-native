@@ -44,7 +44,13 @@ juce::var rangesToVar(const std::vector<stems::ReadyRange>& ranges)
 
 StemHub::StemHub(Engine& engine, SampleRegistry& registry, const juce::File& dataDir,
                  std::function<juce::String(std::vector<std::byte>)> stashBytes)
-    : engine_(engine), registry_(registry), stashBytes_(std::move(stashBytes)), models_(dataDir)
+    : engine_(engine), registry_(registry), dataDir_(dataDir), stashBytes_(std::move(stashBytes)), models_(dataDir)
+{
+    adoptElectronModels();
+    startTimerHz(kDrainHz);
+}
+
+void StemHub::adoptElectronModels()
 {
     // ADOPT THE ELECTRON APP'S MODELS. htdemucs is 166 MB (FAST) / 1.2 GB (FINE) and the shipping app keeps it
     // in its own folder on this machine — asking the same user to download it again would be rude. The files
@@ -68,13 +74,12 @@ StemHub::StemHub(Engine& engine, SampleRegistry& registry, const juce::File& dat
 #endif
         if (electron.isDirectory())
         {
-            stems::StemModels probe(dataDir);
+            stems::StemModels probe(dataDir_);
             probe.setDirectory(electron);
             if (probe.ready(stems::Quality::fast) || probe.ready(stems::Quality::fine))
                 models_.setDirectory(electron);
         }
     }
-    startTimerHz(kDrainHz);
 }
 
 StemHub::~StemHub()
@@ -159,6 +164,7 @@ juce::var StemHub::statusVar() const
     }
     o->setProperty("models", juce::var(list));
     o->setProperty("modelsDir", models_.directory().getFullPathName());
+    o->setProperty("modelsDirIsDefault", !modelsDirChosen_);
 
     juce::Array<juce::var> sources;
     {
@@ -248,6 +254,11 @@ juce::var StemHub::handle(const juce::var& req)
     {
         const auto path = req.getProperty("path", "").toString();
         models_.setDirectory(path.isEmpty() ? juce::File() : juce::File(path));
+        modelsDirChosen_ = path.isNotEmpty();
+        // USE DEFAULT on a machine that had ADOPTED the Electron app's folder must not lose sight of those
+        // 166 MB — the same rule as startup applies, so an empty default re-adopts them.
+        if (path.isEmpty())
+            adoptElectronModels();
         return statusVar();
     }
     if (verb == "forget")

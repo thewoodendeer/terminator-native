@@ -58,9 +58,11 @@ class StemModels
     /// `dataDir` is the app's data directory; the models live in `<dataDir>/stems/models`.
     explicit StemModels(const juce::File& dataDir);
 
-    /// Preferences → FOLDERS can relocate the models (an empty File = back to the default).
+    /// Preferences → Stems can relocate the models (an empty File = back to the default under `dataDir`).
     void setDirectory(const juce::File& dir);
     juce::File directory() const { return dir_; }
+    /// Is the folder still the app's own default? (Preferences greys USE DEFAULT out when it is.)
+    bool isDefaultDirectory() const { return dir_ == defaultDir_; }
 
     static const std::vector<ModelFile>& manifest(Quality q);
     static std::int64_t downloadBytes(Quality q);
@@ -92,5 +94,6 @@ class StemModels
                            const std::atomic<bool>* cancel) const;
 
     juce::File dir_;
+    juce::File defaultDir_; // <dataDir>/stems/models — what setDirectory({}) goes back to
 };
 } // namespace terminator::stems

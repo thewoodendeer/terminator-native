@@ -239,8 +239,10 @@ and linking one would raise the whole app's floor from 12), so a Mac that cannot
 to launch.
 `verb`:
 - `status` → `{ok, available, ort, unavailable?, busy, key, engine:"cpu", models:[{quality, ready, bytes,
-  expectedBytes}], modelsDir, sources:[{key, ranges, readySeconds, seconds}]}`. `available:false` + `unavailable`
-  is the honest "this machine cannot split" answer.
+  expectedBytes}], modelsDir, modelsDirIsDefault, sources:[{key, ranges, readySeconds, seconds}]}`.
+  `available:false` + `unavailable` is the honest "this machine cannot split" answer. `modelsDirIsDefault` is
+  false only when the USER picked the folder (Preferences → CHANGE…) — the auto-adopted Electron folder still
+  counts as the default, because that is what a reset goes back to.
 - `split` {`key` (a **SampleStore key** — the audio is already in the shell, the page never ships PCM),
   `quality`:"fast"|"fine", `windows`?[{startSec,endSec}] (priority spans — the chops in view), `sweep`? (also do
   the rest of the track), **`planes`?**} → `{ok}` and the run starts. `planes:true` also keeps the four
@@ -248,8 +250,12 @@ to launch.
   four times the source in memory and today the page still takes the audio.
 - `queueWindow` {span:{startSec,endSec}} — a chop he just focused jumps to the HEAD of the queue mid-run (the
   Electron worker skipped a chunk that was already queued, so a focused chop waited out the whole sweep).
-- `cancel` · `downloadModels` {quality} · `deleteModels` {quality} · `modelsDir` {path} (Preferences → FOLDERS) ·
+- `cancel` · `downloadModels` {quality} · `deleteModels` {quality} · `modelsDir` {path} (Preferences → Stems →
+  CHANGE…; an EMPTY path is USE DEFAULT — it goes back to `<dataDir>/stems/models` and re-adopts the Electron
+  app's folder if that is where the models are, so a reset never hides 166 MB the machine already has) ·
   `forget` {key} (drop a source's planes; pads reading them are detached first).
+  The chosen folder is remembered by the PAGE (`stemsModelsDir` in settings, re-applied at install) — the shell
+  keeps no settings of its own.
 Models: htdemucs from R2, SHA-256 verified, into `<dataDir>/stems/models` — **the Electron app's folder is
 adopted when it already holds them**, so nobody downloads 166 MB twice.
 
