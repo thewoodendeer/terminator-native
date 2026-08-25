@@ -50,6 +50,10 @@ if(EXISTS "${STAMP_FILE}")
     endif()
 endif()
 
+# One pinned asset, hash-verified. RETRIED: these come from third-party hosts (rarewares.org took the Windows
+# job red on 2026-08-25 with "Timeout was reached" — nothing to do with the commit), and a build that fails
+# because someone else's server was busy for ten seconds teaches nobody anything. The HASH is still absolute:
+# a download that completes with the wrong bytes fails on the spot, unretried.
 function(fetch_pinned url dest sha)
     if(EXISTS "${dest}")
         file(SHA256 "${dest}" _cur)
@@ -58,14 +62,26 @@ function(fetch_pinned url dest sha)
         endif()
         file(REMOVE "${dest}")
     endif()
-    message(STATUS "tools: downloading ${url}")
-    file(DOWNLOAD "${url}" "${dest}" EXPECTED_HASH SHA256=${sha} STATUS _st SHOW_PROGRESS TLS_VERIFY ON)
-    list(GET _st 0 _code)
-    if(NOT _code EQUAL 0)
+    set(_attempts 3)
+    foreach(_try RANGE 1 ${_attempts})
+        message(STATUS "tools: downloading ${url} (attempt ${_try}/${_attempts})")
+        file(DOWNLOAD "${url}" "${dest}" EXPECTED_HASH SHA256=${sha}
+             STATUS _st SHOW_PROGRESS TLS_VERIFY ON INACTIVITY_TIMEOUT 60)
+        list(GET _st 0 _code)
+        if(_code EQUAL 0)
+            return()
+        endif()
         list(GET _st 1 _msg)
         file(REMOVE "${dest}")
-        message(FATAL_ERROR "tools: download failed for ${url}: ${_msg}")
-    endif()
+        # A hash mismatch is not a flake — the server answered, with the wrong file. Stop.
+        if(_msg MATCHES "HASH mismatch" OR _msg MATCHES "hash mismatch")
+            message(FATAL_ERROR "tools: ${url} downloaded but does NOT match its pinned SHA-256: ${_msg}")
+        endif()
+        if(_try LESS ${_attempts})
+            execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 5)
+        endif()
+    endforeach()
+    message(FATAL_ERROR "tools: download failed for ${url} after ${_attempts} attempts: ${_msg}")
 endfunction()
 
 file(MAKE_DIRECTORY "${CACHE}")
