@@ -14,6 +14,10 @@
 #undef ORT_API_MANUAL_INIT
 
 #if defined(_WIN32)
+// windows.h defines `max` and `min` as MACROS, which turn every later `std::max(a, b)` into
+// `std::((a) > (b) ? (a) : (b))` — MSVC error C2589, and it took the Windows job red on `262b755` the moment
+// compareEp used std::max. NOMINMAX has to come BEFORE the include, every time.
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <dlfcn.h>
