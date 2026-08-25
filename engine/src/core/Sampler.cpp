@@ -63,18 +63,33 @@ constexpr std::array<double, kSincBuckets> kBucketRate{1.0, 1.25, 1.5, 2.0, 2.5,
 
 /// Built at static-init (never on the audio thread, and never as a function-local static — that would put a
 /// thread-safe-init guard in the RT path).
-const std::array<SincBucket, kSincBuckets> kSincBucketTable = []
+/// Filled IN PLACE by the constructor: the table is ~1 MB, and building it in a lambda's local and returning
+/// it puts that megabyte on the STACK — which is 1 MB by default on Windows, so the process died during
+/// static init and the test binary could not even list its tests (CI, run 32815049568). A global is not a
+/// place to be casual about size.
+struct SincBucketTable
+{
+    std::array<SincBucket, kSincBuckets> b{};
+    SincBucketTable();
+};
+const SincBucketTable kSincBuckets_;
+const std::array<SincBucket, kSincBuckets>& sincBuckets() noexcept
+{
+    return kSincBuckets_.b;
+}
+
+SincBucketTable::SincBucketTable()
 {
     constexpr double beta = 9.0;
     const double i0b = besselI0(beta);
-    std::array<SincBucket, kSincBuckets> out{};
-    for (int b = 0; b < kSincBuckets; ++b)
+    auto& out = b;
+    for (int bi = 0; bi < kSincBuckets; ++bi)
     {
-        const double rate = kBucketRate[static_cast<std::size_t>(b)];
+        const double rate = kBucketRate[static_cast<std::size_t>(bi)];
         const double cut = rate > 1.0 ? kSincCutMargin / rate : 1.0;
         const int half =
             rate > 1.0 ? std::min(kSincHalfMax, static_cast<int>(std::ceil(kSincLobes * rate))) : kSincLobes;
-        out[static_cast<std::size_t>(b)].half = half;
+        out[static_cast<std::size_t>(bi)].half = half;
         for (int ph = 0; ph < kSincPhases; ++ph)
         {
             const double t = static_cast<double>(ph) / kSincPhases; // the fractional read position
@@ -91,7 +106,7 @@ const std::array<SincBucket, kSincBuckets> kSincBucketTable = []
                 const double u = std::abs(d) / half;
                 const double win = u >= 1.0 ? 0.0 : besselI0(beta * std::sqrt(std::max(0.0, 1.0 - u * u))) / i0b;
                 const double v = sinc * win;
-                out[static_cast<std::size_t>(b)].w[static_cast<std::size_t>(ph * 2 * kSincHalfMax + j)] =
+                out[static_cast<std::size_t>(bi)].w[static_cast<std::size_t>(ph * 2 * kSincHalfMax + j)] =
                     static_cast<float>(v);
                 sum += v;
             }
@@ -99,19 +114,18 @@ const std::array<SincBucket, kSincBuckets> kSincBucketTable = []
             // cutoff, or the level would move with the pitch.
             const float norm = sum != 0.0 ? static_cast<float>(1.0 / sum) : 0.0f;
             for (int j = 0; j < n; ++j)
-                out[static_cast<std::size_t>(b)].w[static_cast<std::size_t>(ph * 2 * kSincHalfMax + j)] *= norm;
+                out[static_cast<std::size_t>(bi)].w[static_cast<std::size_t>(ph * 2 * kSincHalfMax + j)] *= norm;
         }
     }
-    return out;
-}();
+}
 
 /// The bucket for a read rate (rates at or below 1 need no band-limiting — bucket 0 is a plain interpolator).
 inline const SincBucket& bucketFor(float rate) noexcept
 {
     for (int b = 0; b < kSincBuckets; ++b)
         if (static_cast<double>(rate) <= kBucketRate[static_cast<std::size_t>(b)])
-            return kSincBucketTable[static_cast<std::size_t>(b)];
-    return kSincBucketTable[kSincBuckets - 1];
+            return sincBuckets()[static_cast<std::size_t>(b)];
+    return sincBuckets()[kSincBuckets - 1];
 }
 
 /// One tap summed over the voice's read set (the stem combo = the exact per-sample sum of its lit planes).
