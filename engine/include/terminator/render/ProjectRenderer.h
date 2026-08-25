@@ -47,9 +47,12 @@ struct ProjectRenderOptions
     double sampleRate = 48000.0;
     int blockSize = 512;
     int numChannels = 2;
-    int loops = 1;                    // how many times the current pattern repeats
-    double tailSeconds = 0.5;         // extra time after the last note so tails ring out
-    bool classicInterpolation = true; // linear = golden-match the Web Audio engine; false = hermite (native default)
+    int loops = 1;            // how many times the current pattern repeats
+    double tailSeconds = 0.5; // extra time after the last note so tails ring out
+    /// How a voice READS between samples. The default stays `linear` because that is what golden-matches the
+    /// Web Audio engine the fixtures were rendered by; the APP asks for `sinc`, which is what its pads play —
+    /// a bounce should not read the audio differently from the thing that made it.
+    Interpolation interpolation = Interpolation::linear;
     /// Phase 4.5b: build the mix from the project's `mixer` blob (strips, sends, inserts, console) and route every
     /// pad into its strip, so the export carries what the mixer is doing. False = the Phase-3 direct path.
     bool useMixer = false;

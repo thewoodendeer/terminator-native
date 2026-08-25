@@ -856,7 +856,7 @@ class NativeEngineShadow {
       this.stats.stemPadCommands++;
     }
     if (!prev || !sameParams(prev, d)) {
-      await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, fadeOut: d.mode === 'oneshot' ? d.fadeOut : 0, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'hermite', strip: d.strip });
+      await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, fadeOut: d.mode === 'oneshot' ? d.fadeOut : 0, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'sinc', strip: d.strip });
     }
     const lp = loopOf(d);
     if (!sameLoop(loopOf(prev), lp) || (lp && prev && !sameRegion(prev, d))) {
@@ -879,10 +879,10 @@ class NativeEngineShadow {
     const fire = async () => {
       const d = this.last[pad];
       const flip = reverseOverride !== undefined && d !== null && d.mode !== 'loop' && reverseOverride !== d.reverse;
-      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'hermite', strip: d!.strip });
+      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: reverseOverride, chokeGroup: d!.choke, interpolation: 'sinc', strip: d!.strip });
       this.stats.triggers++;
       await this.cmd(atSample > 0 ? { type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)), atSample } : { type: 'triggerPad', pad, velocity: Math.max(0, Math.min(1, velocity)) });
-      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'hermite', strip: d!.strip });
+      if (flip) await this.cmd({ type: 'setPadParams', pad, pitch: d!.pitch, fine: d!.fine, attack: d!.attack, release: d!.release, fadeOut: d!.mode === 'oneshot' ? d!.fadeOut : 0, gain: d!.gain, outputPair: 0, mode: d!.mode, gate: d!.gate, reverse: d!.reverse, chokeGroup: d!.choke, interpolation: 'sinc', strip: d!.strip });
     };
     const delayMs = when !== undefined && atSample <= 0 ? (when - this.engine.ctx.currentTime) * 1000 : 0;
     const go = () => { this.chain[pad] = this.chain[pad].then(fire).catch(() => {}); };

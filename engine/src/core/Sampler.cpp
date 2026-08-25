@@ -1,6 +1,7 @@
 #include "terminator/core/Sampler.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace terminator
@@ -16,6 +17,97 @@ inline float hermite4(float xm1, float x0, float x1, float x2, float t) noexcept
     const float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
     const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
     return ((c3 * t + c2) * t + c1) * t + c0;
+}
+
+// ── the band-limited read (Interpolation::sinc) ──────────────────────────────────────────────────────────
+// Reading at rate r > 1 (a chop pitched UP) folds everything above the new Nyquist back into the band as
+// inharmonic ringing. Neither linear nor Hermite band-limits at all — nor does an AudioBufferSourceNode — and
+// it is not subtle: measured, a 15 kHz tone at +12 st comes back at 18 kHz at the SAME level as the music
+// (0 dB). This read squeezes a windowed-sinc kernel by 1/rate so that content is gone before it can fold:
+// measured -77.6 dB on the same signal.
+//
+// WHY IT IS A TABLE OF PHASES rather than a kernel evaluated per tap. Evaluating the sinc and the Kaiser
+// window per tap cost 43x a Hermite read (measured) — nothing that expensive belongs on the audio thread. The
+// kernel is precomputed instead, once, as PHASES x TAPS: a read picks its phase row and does one multiply-add
+// per tap. What decides the stopband is how many sinc lobes fit in the window, and the cutoff squeeze
+// stretches them, so the tap count has to grow with the rate as well — hence one table per rate BUCKET.
+constexpr int kSincLobes = 8;          // half-width in SOURCE samples at rate 1 (16 taps)
+constexpr int kSincHalfMax = 32;       // ... capped (rate 4 and above): 64 taps
+constexpr int kSincPhases = 512;       // fractional positions per input sample; the phase is picked, never lerped
+constexpr int kSincBuckets = 8;        // rate buckets: 1, 1.25, 1.5, 2, 2.5, 3, 3.5, 4+
+constexpr double kSincCutMargin = 0.9; // a finite kernel needs a transition band; the top 10% is the cheap loss
+
+/// Modified Bessel I0 — the Kaiser window's shape parameter (series; it converges fast for the betas here).
+inline double besselI0(double x)
+{
+    double sum = 1.0, term = 1.0;
+    for (int k = 1; k < 40; ++k)
+    {
+        term *= (x * x) / (4.0 * static_cast<double>(k) * static_cast<double>(k));
+        sum += term;
+        if (term < 1.0e-16 * sum)
+            break;
+    }
+    return sum;
+}
+
+struct SincBucket
+{
+    int half = kSincLobes;                                 // half-width in taps
+    std::array<float, kSincPhases * 2 * kSincHalfMax> w{}; // [phase][tap], already normalised to unity gain
+};
+
+/// The rate a bucket is built for (the bucket a rate lands in is the first whose rate is >= it).
+constexpr std::array<double, kSincBuckets> kBucketRate{1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0};
+
+/// Built at static-init (never on the audio thread, and never as a function-local static — that would put a
+/// thread-safe-init guard in the RT path).
+const std::array<SincBucket, kSincBuckets> kSincBucketTable = []
+{
+    constexpr double beta = 9.0;
+    const double i0b = besselI0(beta);
+    std::array<SincBucket, kSincBuckets> out{};
+    for (int b = 0; b < kSincBuckets; ++b)
+    {
+        const double rate = kBucketRate[static_cast<std::size_t>(b)];
+        const double cut = rate > 1.0 ? kSincCutMargin / rate : 1.0;
+        const int half =
+            rate > 1.0 ? std::min(kSincHalfMax, static_cast<int>(std::ceil(kSincLobes * rate))) : kSincLobes;
+        out[static_cast<std::size_t>(b)].half = half;
+        for (int ph = 0; ph < kSincPhases; ++ph)
+        {
+            const double t = static_cast<double>(ph) / kSincPhases; // the fractional read position
+            double sum = 0.0;
+            const int n = 2 * half;
+            for (int j = 0; j < n; ++j)
+            {
+                const double d = static_cast<double>(j - half + 1) - t; // tap distance from the read point
+                const double x = d * cut;
+                const double sinc = std::abs(x) < 1.0e-9 ? 1.0 : std::sin(M_PI * x) / (M_PI * x);
+                const double u = std::abs(d) / half;
+                const double win = u >= 1.0 ? 0.0 : besselI0(beta * std::sqrt(std::max(0.0, 1.0 - u * u))) / i0b;
+                const double v = sinc * win;
+                out[static_cast<std::size_t>(b)].w[static_cast<std::size_t>(ph * 2 * kSincHalfMax + j)] =
+                    static_cast<float>(v);
+                sum += v;
+            }
+            // Normalise the ROW: a truncated kernel must still have unity DC gain, at every phase and every
+            // cutoff, or the level would move with the pitch.
+            const float norm = sum != 0.0 ? static_cast<float>(1.0 / sum) : 0.0f;
+            for (int j = 0; j < n; ++j)
+                out[static_cast<std::size_t>(b)].w[static_cast<std::size_t>(ph * 2 * kSincHalfMax + j)] *= norm;
+        }
+    }
+    return out;
+}();
+
+/// The bucket for a read rate (rates at or below 1 need no band-limiting — bucket 0 is a plain interpolator).
+inline const SincBucket& bucketFor(float rate) noexcept
+{
+    for (int b = 0; b < kSincBuckets; ++b)
+        if (static_cast<double>(rate) <= kBucketRate[static_cast<std::size_t>(b)])
+            return kSincBucketTable[static_cast<std::size_t>(b)];
+    return kSincBucketTable[kSincBuckets - 1];
 }
 
 /// One tap summed over the voice's read set (the stem combo = the exact per-sample sum of its lit planes).
@@ -599,7 +691,27 @@ void Sampler::renderVoice(Voice& v, float* l, float* r, int numSamples) noexcept
         const double fpos = v.position;
         const auto i0 = static_cast<std::int64_t>(std::floor(fpos));
         const float t = static_cast<float>(fpos - static_cast<double>(i0));
-        if (v.interpolation == Interpolation::hermite)
+        if (v.interpolation == Interpolation::sinc)
+        {
+            // one phase row, one multiply-add per tap; the row is already normalised, so no division here
+            const float rate = static_cast<float>(v.rate <= 0.0 ? 1.0 : v.rate);
+            const SincBucket& bk = bucketFor(rate);
+            const auto ph = std::min(kSincPhases - 1, static_cast<int>(t * static_cast<float>(kSincPhases)));
+            const float* w = bk.w.data() + static_cast<std::size_t>(ph) * 2 * kSincHalfMax;
+            const int n = 2 * bk.half;
+            const std::int64_t base = i0 - bk.half + 1;
+            float accL = 0.0f, accR = 0.0f;
+            for (int j = 0; j < n; ++j)
+            {
+                const float g = w[j];
+                accL += g * readTap(chL, nSrc, nFrames, base + j);
+                if (stereo)
+                    accR += g * readTap(chR, nSrc, nFrames, base + j);
+            }
+            outSampleL = accL;
+            outSampleR = stereo ? accR : accL;
+        }
+        else if (v.interpolation == Interpolation::hermite)
         {
             outSampleL = hermite4(readTap(chL, nSrc, nFrames, i0 - 1), readTap(chL, nSrc, nFrames, i0),
                                   readTap(chL, nSrc, nFrames, i0 + 1), readTap(chL, nSrc, nFrames, i0 + 2), t);

@@ -138,6 +138,104 @@ TEST_CASE("Sampler: pitch is varispeed (rate = 2^(semis/12)), fine cents, and so
     }
 }
 
+TEST_CASE("Sampler: the sinc read does not alias a chop pitched up; hermite does", "[sampler][dsp][gate]")
+{
+    // Pitching a chop UP reads the source faster than it was recorded, and everything that ends up above the
+    // new Nyquist folds back into the band as inharmonic ringing. Neither linear nor Hermite band-limits (nor
+    // does an AudioBufferSourceNode); Interpolation::sinc squeezes its kernel by 1/rate, so the content that
+    // would fold is gone before it can. Source: 1 kHz + 15 kHz. At +12 st the 15 kHz would land at 30 kHz,
+    // which on a 48k engine folds to 18 kHz; the 1 kHz becomes 2 kHz and must survive either way.
+    const double sr = 48000.0;
+    const auto tone = [&](Interpolation interp)
+    {
+        Rig r(2, 512, sr);
+        auto src = std::make_shared<SampleBuffer>();
+        src->allocate(1, static_cast<std::int64_t>(sr), sr);
+        for (std::int64_t i = 0; i < src->numFrames; ++i)
+        {
+            const double t = static_cast<double>(i) / sr;
+            src->channel(0)[i] =
+                static_cast<float>(0.4 * std::sin(2.0 * M_PI * 1000.0 * t) + 0.4 * std::sin(2.0 * M_PI * 15000.0 * t));
+        }
+        auto p = r.params(0);
+        p.pitchSemitones = 12.0f;
+        p.interpolation = interp;
+        p.attackSec = 0.0f;
+        r.engine.commands().push(Command::setPadParams(p));
+        r.engine.commands().push(Command::setPadSample(0, src.get()));
+        r.engine.commands().push(Command::triggerPad(0, 1.0f));
+        return r.capture(0, 40); // 20480 samples
+    };
+    /// Power at `hz` (a Goertzel over the settled tail) — no FFT plumbing needed for two known frequencies.
+    const auto powerAt = [&](const std::vector<float>& v, double hz)
+    {
+        const int n = 8192, from = static_cast<int>(v.size()) - n;
+        double re = 0.0, im = 0.0;
+        for (int i = 0; i < n; ++i)
+        {
+            const double w = 0.5 - 0.5 * std::cos(2.0 * M_PI * static_cast<double>(i) / n); // Hann
+            const double s = static_cast<double>(v[static_cast<std::size_t>(from + i)]) * w;
+            const double a = 2.0 * M_PI * hz * static_cast<double>(i) / sr;
+            re += s * std::cos(a);
+            im += s * std::sin(a);
+        }
+        return (re * re + im * im) / (static_cast<double>(n) * n);
+    };
+
+    const auto herm = tone(Interpolation::hermite);
+    const auto sinc = tone(Interpolation::sinc);
+    const double aliasHerm = powerAt(herm, 18000.0), fundHerm = powerAt(herm, 2000.0);
+    const double aliasSinc = powerAt(sinc, 18000.0), fundSinc = powerAt(sinc, 2000.0);
+    const double dbHerm = 10.0 * std::log10(std::max(aliasHerm, 1e-30) / std::max(fundHerm, 1e-30));
+    const double dbSinc = 10.0 * std::log10(std::max(aliasSinc, 1e-30) / std::max(fundSinc, 1e-30));
+    INFO("alias vs fundamental: hermite " << dbHerm << " dB, sinc " << dbSinc << " dB");
+    CHECK(dbSinc < dbHerm - 20.0); // the whole point: a real, large rejection
+    CHECK(dbSinc < -60.0);         // and an honest floor, not just "better"
+    // the music itself is still there, at the same level (a band-limiter that eats the signal is no use)
+    CHECK(10.0 * std::log10(std::max(fundSinc, 1e-30) / std::max(fundHerm, 1e-30)) > -1.0);
+}
+
+TEST_CASE("Sampler: what the band-limited read COSTS", "[.][sampler][bench]")
+{
+    // Hidden (run it by name): the read is the only part that changes, so this times a full bank of voices
+    // reading at rate 2 — the worst case, where the kernel is widest — through the real engine.
+    const double sr = 48000.0;
+    const int voices = 32, blocks = 400; // ~4.3 s of audio
+    const auto timeOne = [&](Interpolation interp)
+    {
+        Rig r(2, 512, sr);
+        auto src = std::make_shared<SampleBuffer>();
+        src->allocate(2, static_cast<std::int64_t>(sr * 10), sr);
+        for (std::int64_t i = 0; i < src->numFrames; ++i)
+        {
+            const auto v = static_cast<float>(0.2 * std::sin(0.03 * static_cast<double>(i)));
+            src->channel(0)[i] = v;
+            src->channel(1)[i] = v;
+        }
+        for (int pad = 0; pad < voices; ++pad)
+        {
+            auto p = r.params(static_cast<std::uint16_t>(pad));
+            p.pitchSemitones = 12.0f; // rate 2 — the widest kernel
+            p.interpolation = interp;
+            p.chokeGroup = -2; // poly: every voice stays up
+            r.engine.commands().push(Command::setPadParams(p));
+            r.engine.commands().push(Command::setPadSample(static_cast<std::uint16_t>(pad), src.get()));
+            r.engine.commands().push(Command::triggerPad(static_cast<std::uint16_t>(pad), 1.0f));
+        }
+        r.run(4); // let the triggers land
+        const auto t0 = std::chrono::steady_clock::now();
+        r.run(blocks);
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    };
+    const double hermMs = timeOne(Interpolation::hermite);
+    const double sincMs = timeOne(Interpolation::sinc);
+    const double audioMs = 1000.0 * (blocks * 512) / sr;
+    WARN("32 voices at rate 2, " << audioMs << " ms of audio: hermite " << hermMs << " ms ("
+                                 << (hermMs / audioMs * 100.0) << "% of one core), sinc " << sincMs << " ms ("
+                                 << (sincMs / audioMs * 100.0) << "%)");
+    CHECK(sincMs > 0.0);
+}
+
 TEST_CASE("Sampler: attack ramps linearly over attackSec; release tail after the region end", "[sampler][env]")
 {
     Rig r(2, 480);

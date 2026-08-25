@@ -632,7 +632,7 @@ RenderSpec buildProjectRenderSpec(const juce::ValueTree& project, const SampleBa
         p.params.mode = looping ? PadMode::loop : PadMode::oneShot;
         p.params.reverse = reversed ? 1 : 0;
         p.params.chokeGroup = static_cast<std::int16_t>(chokeInt(idx));
-        p.params.interpolation = opts.classicInterpolation ? Interpolation::linear : Interpolation::hermite;
+        p.params.interpolation = opts.interpolation;
         if (opts.useMixer)
         {
             // the page's padRoute: this pad sums into its channel's strip, not straight to the outs

@@ -1164,8 +1164,10 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         p.reverse = static_cast<bool>(json.getProperty("reverse", false)) ? 1 : 0;
         p.gate = static_cast<bool>(json.getProperty("gate", false)) ? 1 : 0;
         p.chokeGroup = static_cast<std::int16_t>(static_cast<int>(json.getProperty("chokeGroup", -1)));
-        p.interpolation = json.getProperty("interpolation", "hermite").toString() == "linear" ? Interpolation::linear
-                                                                                              : Interpolation::hermite;
+        const auto interp = json.getProperty("interpolation", "sinc").toString();
+        p.interpolation = interp == "linear"    ? Interpolation::linear
+                          : interp == "hermite" ? Interpolation::hermite
+                                                : Interpolation::sinc;
         p.pan = static_cast<float>(static_cast<double>(json.getProperty("pan", 0.0)));
         p.chokeFadeSec = static_cast<float>(static_cast<double>(json.getProperty("chokeFade", 0.003)));
         p.strip = static_cast<std::int16_t>(
@@ -1740,6 +1742,15 @@ void WebShell::handleExport(const juce::var& req, juce::WebBrowserComponent::Nat
     opts.blockSize = std::clamp(static_cast<int>(req.getProperty("blockSize", 512)), 32, 4096);
     opts.loops = std::clamp(static_cast<int>(req.getProperty("loops", 1)), 1, 64);
     opts.tailSeconds = std::clamp(static_cast<double>(req.getProperty("tail", 2.5)), 0.0, 30.0);
+    // The bounce reads the audio the way the PADS do (band-limited): the same varispeed that folds the top
+    // octave back into a pitched chop live would do it in the file, and a file is forever. `interpolation`
+    // can override it for an A/B ("linear" is what the Web Audio engine did).
+    {
+        const auto interp = req.getProperty("interpolation", "sinc").toString();
+        opts.interpolation = interp == "linear"    ? Interpolation::linear
+                             : interp == "hermite" ? Interpolation::hermite
+                                                   : Interpolation::sinc;
+    }
     opts.useMixer = static_cast<bool>(req.getProperty("mixer", true));
     opts.renderDrums = static_cast<bool>(req.getProperty("drums", true));
     opts.renderBass = static_cast<bool>(req.getProperty("bass", true));

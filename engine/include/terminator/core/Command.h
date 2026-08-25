@@ -153,6 +153,11 @@ enum class Interpolation : std::uint8_t
 {
     linear = 0,  // "CLASSIC" — matches the Web Audio engine for golden renders
     hermite = 1, // 4-point — the native default
+    /// 16-tap windowed sinc whose cutoff FOLLOWS the read rate: pitching a chop UP reads faster than the
+    /// source, and everything above the new Nyquist folds back into the band as inharmonic ringing. Neither
+    /// linear nor Hermite band-limits at all (nor does an AudioBufferSourceNode), so this is the only path
+    /// here that does not alias. It costs about five times the read; the mixer and FX dwarf it.
+    sinc = 2,
 };
 
 struct PadParams

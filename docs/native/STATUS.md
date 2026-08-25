@@ -1739,6 +1739,36 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## SOUND: A CHOP PITCHED UP DOES NOT ALIAS ANY MORE, 2026-08-25 eighteenth session
+
+**What was wrong.** Reading a sample faster than it was recorded — every pad with PITCH up — puts its top
+octave above the new Nyquist, and with no band-limiting it folds straight back into the band as inharmonic
+ringing. Neither the engine's Hermite read nor the Web Audio `AudioBufferSourceNode` the app grew up on does
+anything about it. Measured on a 1 kHz + 15 kHz source at +12 st: **the folded 15 kHz comes back at 18 kHz at
+the SAME level as the music (0 dB)**.
+
+**`Interpolation::sinc`** squeezes a windowed-sinc kernel by 1/rate, so that content is gone before it can
+fold: **−77.6 dB** on the same signal, with the music itself untouched (the gate checks that too — a
+band-limiter that eats the signal is no use).
+
+**Three things the measurements forced, in order:**
+1. A **fixed 16-tap** kernel measured only −49 dB, because squeezing the cutoff stretches the sinc's lobes and
+   a short window then holds too few of them. **The half-width scales with the rate** (8 source samples at
+   rate 1 → capped at 32), so the lobe count stays put and the cost only rises when the pitch is up.
+2. Windowing in the SCALED argument silently un-windows the kernel as the cutoff drops. The window belongs in
+   TAP space; getting that wrong measured −23 dB.
+3. Evaluating the sinc and the Kaiser window per tap cost **43x a Hermite read** — nothing that expensive
+   belongs on the audio thread. The kernel is a **polyphase table** now (512 phases x taps, per rate bucket,
+   each row normalised to unity gain so the level cannot move with the pitch): one multiply-add per tap.
+   **Release, 32 voices all at +12 st: 1.3% of one core through Hermite, 6.7% through sinc.**
+
+**It is the default in the app** — `setPadParams` defaults to sinc, and so does the EXPORT
+(`ProjectRenderOptions::interpolation`), because a bounce should not read the audio differently from the thing
+that made it. The engine's own default stays `linear`, which is what golden-matches the Web Audio fixtures the
+render tests compare against; a request can still ask for `linear` or `hermite` for an A/B.
+Gates: `Sampler: the sinc read does not alias a chop pitched up; hermite does` (the rejection, and that the
+music survives) + a hidden `[.][bench]` case that prints both costs. ctest **419/419**.
+
 ## SOUND: TIME STRETCH IS REAL NOW (and the shipping app's stretch has a bug), 2026-08-25 eighteenth session
 
 **The shell played every stretched pad DRY.** The page applies stretch inside its own `startVoice` — a cache
