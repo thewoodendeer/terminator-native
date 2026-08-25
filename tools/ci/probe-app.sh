@@ -64,7 +64,8 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"modelsDirReset": ?true' "$OUT" || { echo "::error::stems self-test: USE DEFAULT did not put the engines folder back"; exit 1; }
   grep -Eq '"modelsDirRestored": ?true' "$OUT" || { echo "::error::stems self-test: the probe did not restore the engines folder it found"; exit 1; }
   # Preferences -> FOLDERS (7.4): the size chips walk real folders, and the YouTube row points inside the library
-  grep -Eq '"folderSizes": ?\{[^}]*"projects": ?\{[^}]*"bytes": ?[1-9]' "$OUT" || { echo "::error::getFolderSizes reported nothing for the projects folder (the du verb did not walk it)"; exit 1; }
+  grep -Eq '"folderSizes": ?\{[^}]*"projects": ?\{[^}]*"bytes": ?[0-9]' "$OUT" || { echo "::error::getFolderSizes did not answer for the projects folder"; exit 1; }
+  grep -Eq '"duBytes": ?(5[0-9]{3}|[6-9][0-9]{3}|[0-9]{5,})' "$OUT" || { echo "::error::the du verb did not measure a folder the probe filled with 5000 bytes"; exit 1; }
   grep -Eq '"cacheDir": ?\{[^}]*"path": ?"[^"]+"' "$OUT" || { echo "::error::getCacheDirInfo has no path — the YouTube row would sit at '…' forever"; exit 1; }
   if grep -Eq '"splitRan": ?true' "$OUT"; then
     grep -Eq '"splitOk": ?true' "$OUT" || { echo "::error::stems self-test: the split failed (see stems.splitError)"; exit 1; }

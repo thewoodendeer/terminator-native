@@ -332,7 +332,9 @@ export function installNativeIPC(): void {
   installStemsProbe();
 
   (window as any).terminator = { ...base, ...overlay };
-  (window as any).__terminatorNativeIpc = { installed: true, version: boot?.version ?? '' };
+  // `fs` is here for the app PROBE (WebShell::runProbeAsyncChecks): it needs a raw verb call to prove the
+  // folder walk against a folder it fills itself — a real machine's folders can legitimately be empty.
+  (window as any).__terminatorNativeIpc = { installed: true, version: boot?.version ?? '', fs: (req: AnyRecord) => native.fs(req) };
 }
 
 installNativeIPC();

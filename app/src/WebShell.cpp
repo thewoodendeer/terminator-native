@@ -2060,10 +2060,21 @@ void WebShell::runProbeAsyncChecks()
                     r.projectFiles = t.listProjectFiles ? (await t.listProjectFiles()).length : -1;
                     r.layout = t.loadLayout ? await t.loadLayout() : undefined;
                     r.openPreferences = t.openPreferences ? await t.openPreferences() : null;
-                    // Preferences -> FOLDERS (7.4): the size chips and the YouTube row. The projects folder
-                    // holds at least the file listed above, so a zero there means the walk never ran.
+                    // Preferences -> FOLDERS (7.4): the size chips and the YouTube row. The chips themselves
+                    // are only a SHAPE check — a fresh machine's folders are legitimately empty (CI's are), so
+                    // the `du` walk is proven against a folder the probe fills itself.
                     r.folderSizes = t.getFolderSizes ? await t.getFolderSizes() : null;
                     r.cacheDir = t.getCacheDirInfo ? await t.getCacheDirInfo() : null;
+                    try {
+                        const nb = window.__TERMINATOR_BOOT__ || {};
+                        const sep = (nb.dirs && nb.dirs.sep) || '/';
+                        const duDir = ((nb.dirs && nb.dirs.temp) || '/tmp') + sep + 'terminator-du-probe';
+                        await window.__terminatorNativeIpc.fs({ verb: 'mkdir', path: duDir });
+                        await window.__terminatorNativeIpc.fs({ verb: 'writeText', path: duDir + sep + 'a.txt', text: 'x'.repeat(5000) });
+                        const du = await window.__terminatorNativeIpc.fs({ verb: 'du', path: duDir });
+                        r.duBytes = du && du.ok ? du.bytes : -1;
+                        await window.__terminatorNativeIpc.fs({ verb: 'trash', path: duDir });
+                    } catch (e) { r.duBytes = -1; }
                     // the native-engine shadow (ui/src/renderer/native/nativeEngineShadow.ts): upload a synthetic
                     // buffer through terminatorSamples, bind + trigger a pad, read the engine back
                     const sh = window.__terminatorNativeShadow;
