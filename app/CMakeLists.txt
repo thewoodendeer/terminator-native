@@ -41,6 +41,8 @@ target_sources(Terminator PRIVATE
     src/PluginHub.cpp
     src/PluginRack.h
     src/PluginRack.cpp
+    src/StemHub.h
+    src/StemHub.cpp
     src/AppMenu.h
     src/AppMenu.cpp)
 
@@ -53,10 +55,15 @@ target_compile_definitions(Terminator PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:Terminator,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:Terminator,JUCE_VERSION>"
     JUCE_REPORT_APP_USAGE=0
-    $<$<PLATFORM_ID:Windows>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>)
+    $<$<PLATFORM_ID:Windows>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>
+    # STEMS (Phase 7): compiled in only where onnxruntime was provisioned. The runtime itself is dlopen'd at the
+    # first split, never linked (cmake/Onnxruntime.cmake explains why).
+    $<$<BOOL:${TERMINATOR_ORT_FOUND}>:TERMINATOR_STEMS=1>)
 
 target_link_libraries(Terminator PRIVATE
-    terminator::engine
+    # terminator::stems already carries terminator::engine (PUBLIC) — naming both makes ld see the same static
+    # library twice and say so.
+    $<IF:$<BOOL:${TERMINATOR_ORT_FOUND}>,terminator::stems,terminator::engine>
     TerminatorWebResources
     juce::juce_gui_extra
     juce::juce_gui_basics
@@ -105,4 +112,30 @@ if(TERMINATOR_BUNDLE_TOOLS)
         COMMENT "Bundling yt-dlp + qjs + lame (pinned, SHA-256 verified; cached in third_party/.tools-cache)"
         VERBATIM)
     add_dependencies(TerminatorBundleTools Terminator)
+endif()
+
+# The onnxruntime shared library rides in the bundle, next to the app that dlopens it: macOS
+# Contents/Frameworks (where StemModel's `@loader_path/../Frameworks/...` candidate looks), Windows beside the
+# exe. It is a RUNTIME asset — nothing links it, so a Mac too old for it (it needs 13.4) still launches, and
+# stems are simply unavailable there.
+if(TERMINATOR_ORT_FOUND AND TERMINATOR_ORT_RUNTIME_LIB)
+    if(APPLE)
+        set(_terminator_ort_dest "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Frameworks")
+    else()
+        set(_terminator_ort_dest "$<TARGET_FILE_DIR:Terminator>")
+    endif()
+    add_custom_command(TARGET Terminator POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_terminator_ort_dest}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${TERMINATOR_ORT_RUNTIME_LIB}" "${_terminator_ort_dest}"
+        COMMENT "Bundling onnxruntime (stems)"
+        VERBATIM)
+    if(APPLE)
+        # StemModel asks dlopen for the PLAIN name first; a symlink beside the real file answers it without a
+        # second 75 MB copy in the bundle (and codesign is happy to sign a symlink's target).
+        add_custom_command(TARGET Terminator POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E rm -f "${_terminator_ort_dest}/libonnxruntime.dylib"
+            COMMAND "${CMAKE_COMMAND}" -E create_symlink "libonnxruntime.1.23.2.dylib"
+                    "${_terminator_ort_dest}/libonnxruntime.dylib"
+            VERBATIM)
+    endif()
 endif()

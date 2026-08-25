@@ -44,6 +44,21 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"midiNoDoubleTrigger": ?true' "$OUT" || { echo "::error::shadow self-test: a MIDI note triggered the native pad twice (direct path + shadow)"; exit 1; }
   grep -Eq '"midiTransportOk": ?true' "$OUT" || { echo "::error::shadow self-test: an injected MIDI START/STOP did not start/stop the page's transport (midiStartPlays / midiStopStops)"; exit 1; }
   grep -Eq '"midiClockOk": ?true' "$OUT" || { echo "::error::shadow self-test: the native MIDI clock OUT did not run/tick/stop with the transport (see midiClockRunning / midiClockTicksGrew / midiClockStopped / midiOutDropped)"; exit 1; }
+  # STEMS (7.1c): htdemucs runs IN THIS PROCESS. onnxruntime has to load (it is dlopen'd, and the dylib rides in
+  # the bundle), the bridge has to be there, an unknown sample key has to be refused rather than started, and the
+  # cache index has to round-trip. The real split only runs with TERMINATOR_PROBE_STEMS=1 AND a model on the
+  # machine (166 MB — never downloaded in CI), so it is checked only when it ran.
+  grep -Eq '"ortLoaded": ?true' "$OUT" || { echo "::error::stems self-test: onnxruntime did not load in the app (see stems.unavailable — the dylib should be bundled in Contents/Frameworks)"; exit 1; }
+  grep -Eq '"bridgeOk": ?true' "$OUT" || { echo "::error::stems self-test: window.terminator has no stemsSplit/onStemsChunk (the native overlay did not install)"; exit 1; }
+  grep -Eq '"refusesUnknownKey": ?true' "$OUT" || { echo "::error::stems self-test: a split with an unknown sample key was NOT refused"; exit 1; }
+  grep -Eq '"cacheRoundTrip": ?true' "$OUT" || { echo "::error::stems self-test: the stems cache index did not round-trip"; exit 1; }
+  if grep -Eq '"splitRan": ?true' "$OUT"; then
+    grep -Eq '"splitOk": ?true' "$OUT" || { echo "::error::stems self-test: the split failed (see stems.splitError)"; exit 1; }
+    grep -Eq '"spanPeak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::stems self-test: the span that came back is SILENT — the blob fetch or the model gave nothing"; exit 1; }
+    echo "stems split OK: $(grep -Eo '"spanFrames": ?[0-9]+' "$OUT") $(grep -Eo '"splitSeconds": ?[0-9.]+' "$OUT")"
+  else
+    echo "::warning::the real stems split did not run (set TERMINATOR_PROBE_STEMS=1 with htdemucs on the machine)"
+  fi
   # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and
   # when the library already holds a file the shell served it byte-complete
   # the offline exporter (4.5e): the project rendered through the real engine + mixer and a real WAV landed on disk

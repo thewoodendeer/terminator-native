@@ -385,6 +385,17 @@ class NativeEngineShadow {
     return r;
   }
 
+  /** STEMS (7.1c): the store key for a buffer the SPLIT will read, uploading it if the pads have not already.
+   *  Held for as long as the shadow lives — a source being separated is a source in use, and the split reads it
+   *  from the store for its whole run. */
+  private stemsHeld = new Set<AudioBuffer>();
+  async stemsKeyFor(buf: AudioBuffer): Promise<string | null> {
+    if (this.detached) return null;
+    const rec = this.ensure(buf, 'stems');
+    if (!this.stemsHeld.has(buf)) { this.stemsHeld.add(buf); this.retain(rec); }
+    return (await rec.ready) ? rec.key : null;
+  }
+
   private async upload(buf: AudioBuffer, rec: BufRec): Promise<boolean> {
     const ch = buf.numberOfChannels, frames = buf.length;
     try {

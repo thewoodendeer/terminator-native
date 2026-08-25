@@ -54,6 +54,7 @@ add_library(terminator_engine STATIC
     include/terminator/model/ProjectPlanner.h
     include/terminator/stems/Resampler.h
     include/terminator/stems/SplitSession.h
+    include/terminator/stems/StemSet.h
     include/terminator/analysis/WaveformPeaks.h
     include/terminator/analysis/EffectiveBuffer.h
     include/terminator/core/planners/Onsets.h
@@ -96,6 +97,7 @@ add_library(terminator_engine STATIC
     src/model/ProjectPlanner.cpp
     src/stems/Resampler.cpp
     src/stems/SplitSession.cpp
+    src/stems/StemSet.cpp
     src/analysis/WaveformPeaks.cpp
     src/analysis/Onsets.cpp
     src/analysis/EffectiveBuffer.cpp)

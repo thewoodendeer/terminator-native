@@ -163,7 +163,7 @@ void ShellServices::handleFs(const juce::var& req, Completion complete)
             complete(ok(false, "file too large"));
             return;
         }
-        const auto token = stash({{}, f, "application/octet-stream", 0});
+        const auto token = stash({.file = f, .mime = "application/octet-stream"});
         auto o = ok(true);
         put(o, "url", "/blob/" + token);
         put(o, "bytes", static_cast<juce::int64>(f.getSize()));
@@ -503,13 +503,21 @@ juce::String ShellServices::stash(Blob blob)
     return token;
 }
 
+juce::String ShellServices::stashBytes(std::vector<std::byte> bytes, const juce::String& mime)
+{
+    Blob blob;
+    blob.binary = std::move(bytes);
+    blob.mime = mime;
+    return stash(std::move(blob));
+}
+
 juce::var ShellServices::maybeLarge(const juce::var& reply)
 {
     const auto json = juce::JSON::toString(reply, true);
     if (json.length() <= kLargeReplyBytes)
         return reply;
     const auto bytes = json.length();
-    const auto token = stash({json, {}, "application/json", 0});
+    const auto token = stash({.json = json, .mime = "application/json"});
     auto o = ok(true);
     put(o, "__largeReply", "/blob/" + token);
     put(o, "bytes", bytes);
@@ -525,7 +533,11 @@ std::optional<ShellServices::BlobData> ShellServices::takeBlob(const juce::Strin
     blobs_.erase(it);
     BlobData out;
     out.mime = blob.mime.isNotEmpty() ? blob.mime : "application/octet-stream";
-    if (blob.file != juce::File())
+    if (!blob.binary.empty())
+    {
+        out.bytes = std::move(blob.binary);
+    }
+    else if (blob.file != juce::File())
     {
         juce::MemoryBlock mb;
         if (!blob.file.loadFileAsData(mb))

@@ -226,9 +226,16 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
       services_(settings), registry_(engine, samples, loader),
       processes_([this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); }),
       plugins_(settings.file().getSiblingFile("plugins.xml")), rack_(engine, plugins_),
+#if TERMINATOR_STEMS
+      stems_(engine, registry_, services_.dataDir(),
+             [this](std::vector<std::byte> bytes) { return services_.stashBytes(std::move(bytes)); }),
+#endif
       audioError_(std::move(audioError))
 {
     plugins_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
+#if TERMINATOR_STEMS
+    stems_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
+#endif
     const auto probePath = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_FILE", {});
     if (probePath.isNotEmpty())
     {
@@ -302,6 +309,9 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
         juce::String(juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_AUDIO", {}).isNotEmpty()
                          ? "window.__terminatorProbeAudio = true;"
                          : "void 0;") +
+        juce::String(juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_STEMS", {}).isNotEmpty()
+                         ? "window.__terminatorProbeStems = true;"
+                         : "void 0;") +
         juce::String(juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_NET", {}).isNotEmpty()
                          ? "window.__terminatorProbeNet = true;"
                          : "void 0;");
@@ -358,6 +368,21 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                     const auto req = args.size() > 0 ? args[0] : juce::var();
                     complete(PluginRack::ownsVerb(req.getProperty("verb", "").toString()) ? rack_.handle(req)
                                                                                           : plugins_.handle(req));
+                })
+            .withNativeFunction(
+                "terminatorStems",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                {
+#if TERMINATOR_STEMS
+                    complete(stems_.handle(args.size() > 0 ? args[0] : juce::var()));
+#else
+                    juce::ignoreUnused(args);
+                    auto* o = new juce::DynamicObject();
+                    o->setProperty("ok", true);
+                    o->setProperty("available", false);
+                    o->setProperty("unavailable", "this build has no stem separation");
+                    complete(juce::var(o));
+#endif
                 })
             .withNativeFunction(
                 "terminatorProcess",
@@ -810,6 +835,13 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
         return registry_.setPadSample(json);
     if (type == "setPadLoop")
         return registry_.setPadLoop(json);
+    // STEMS (7.1c): a pad reads the planes of a source key through its 4-bit mask; the audio never leaves C++.
+    if (type == "setPadStems")
+#if TERMINATOR_STEMS
+        return stems_.setPadStems(json);
+#else
+        return ok(false, "this build has no stem separation");
+#endif
     // the chop sequencer (Phase 3.1): a whole pattern → SeqPattern (grid bit masks + per-cell velocity), by pointer
     if (type == "queueSequence" && static_cast<bool>(json.getProperty("cancel", false)))
     {
@@ -2025,6 +2057,10 @@ void WebShell::runProbeAsyncChecks()
                     // written to a real WAV on disk
                     const ex = window.__terminatorNativeExport;
                     r.export = ex && ex.selfTest ? await ex.selfTest() : { error: 'no export' };
+                    // STEMS (7.1c): the verb answers, the models are reported, the cache round-trips — and with
+                    // TERMINATOR_PROBE_STEMS=1 (and a model on the machine) a real split runs end to end
+                    const st = window.__terminatorNativeStems;
+                    r.stems = st && st.selfTest ? await st.selfTest() : { error: 'no stems' };
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();

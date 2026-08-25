@@ -61,6 +61,14 @@ export const native = {
   pads: lazy<AnyRecord, AnyRecord>('terminatorPads'),
   samples: lazy<AnyRecord, AnyRecord>('terminatorSamples'),
   process: lazy<AnyRecord, AnyRecord>('terminatorProcess'),
+  /** Phase 7.1c: STEM SEPARATION in process (htdemucs through onnxruntime). `{verb:'status'}` ·
+   *  `{verb:'split', key, quality, windows[], sweep, planes?}` (the audio is read from the SAMPLE STORE by key —
+   *  the renderer never ships PCM) · `{verb:'queueWindow', span}` · `{verb:'cancel'}` ·
+   *  `{verb:'downloadModels'|'deleteModels', quality}` · `{verb:'modelsDir', path}` · `{verb:'forget', key}`.
+   *  Events: `terminator.stemsProgress` {phase, pct, total?} · `terminator.stemsChunk` {key, startFrame,
+   *  endFrame, frames, planes, blob:"/blob/<token>"} (the span's PCM is FETCHED, never put in the payload) ·
+   *  `terminator.stemsDone` · `terminator.stemsError` · `terminator.stemsModels`. */
+  stems: lazy<AnyRecord, AnyRecord>('terminatorStems'),
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),

@@ -20,7 +20,9 @@
  * terminatorFs; files served by the shell at /lib/b64/; Finder drops come in as bytes via libraryImportFiles).
  * plus the ASSET STORE + `.tprojz` bundles (assetsNative.ts — <dataDir>/assets with a read fallback into the
  * Electron app's store, bundle bytes via readBinary/writeBinary) and YouTube pulls (the bundled yt-dlp).
- * NOT yet native (browser-shim or undefined): drums/stems, menu shortcuts / Recent submenu / open-with-file
+ * plus STEMS (stemsNative.ts — htdemucs in process; the split takes the store key, a ready span's PCM comes
+ * back through /blob/<token>, and the cache is the same stems-cache.json shape).
+ * NOT yet native (browser-shim or undefined): drums, menu shortcuts / Recent submenu / open-with-file
  * events, drag-out, licence, cloud presets.
  */
 import { installBrowserIPC } from '../ipc-browser';
@@ -28,6 +30,7 @@ import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
 import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
 import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } from './assetsNative';
 import { installExportProbe } from './exportNative';
+import { buildStemsOverlay, installStemsProbe } from './stemsNative';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -298,6 +301,10 @@ export function installNativeIPC(): void {
   const library = buildLibraryOverlay({ getSettings, setSettings, settingsSync: () => settingsCache });
   Object.assign(overlay, library.keys);
   installLibraryProbe(library.core, library.keys, library.yt);
+
+  // STEMS (7.1c): the split runs in the shell; the renderer's stems layer keeps its contract (stemsNative.ts)
+  Object.assign(overlay, buildStemsOverlay({ presetsDir, readJson, writeJson, join }));
+  installStemsProbe();
 
   (window as any).terminator = { ...base, ...overlay };
   (window as any).__terminatorNativeIpc = { installed: true, version: boot?.version ?? '' };

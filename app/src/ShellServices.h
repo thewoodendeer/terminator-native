@@ -43,6 +43,10 @@ class ShellServices
         juce::String mime;
     };
     std::optional<BlobData> takeBlob(const juce::String& token);
+    /// Stash raw bytes for the page to fetch once through `/blob/<token>` (60 s expiry) — how a stem span's
+    /// PCM reaches the renderer: a binary fetch instead of an emitEvent payload, which would be escaped into a
+    /// JS string literal character by character. Message thread.
+    juce::String stashBytes(std::vector<std::byte> bytes, const juce::String& mime = "application/octet-stream");
 
     /// Files the resource provider may serve at `/lib/b64/<base64url(path)>`: anything under a root the page
     /// registered with `serveRoots` (the sample-library root + its linked folders — the page's own library
@@ -76,10 +80,11 @@ class ShellServices
     std::vector<juce::File> servableRoots_;
     struct Blob
     {
-        juce::String json; // a JSON reply (maybeLarge) …
-        juce::File file;   // … or a file to stream (readBinary)
+        juce::String json;             // a JSON reply (maybeLarge) …
+        juce::File file;               // … or a file to stream (readBinary) …
+        std::vector<std::byte> binary; // … or raw bytes already in memory (stashBytes)
         juce::String mime;
-        juce::int64 expiresMs;
+        juce::int64 expiresMs = 0;
     };
     juce::String stash(Blob blob);
     std::map<juce::String, Blob> blobs_;

@@ -232,6 +232,32 @@ is a bounce, and system audio, which is the OS's).
   fader/inserts/console then apply; −1 = straight to outs 1/2)} — hearing the input through the engine costs no
   latency of ours: the block that arrives is added to the block that leaves.
 
+## `terminatorStems(req)` — STEM SEPARATION, in process (Phase 7.1c)
+htdemucs runs inside Terminator through the onnxruntime C++ API — no Node child, no temp file, no IPC of the
+audio. The runtime is dlopen'd at the first call (never linked: every prebuilt onnxruntime for macOS needs 13.4,
+and linking one would raise the whole app's floor from 12), so a Mac that cannot run it says so instead of failing
+to launch.
+`verb`:
+- `status` → `{ok, available, ort, unavailable?, busy, key, engine:"cpu", models:[{quality, ready, bytes,
+  expectedBytes}], modelsDir, sources:[{key, ranges, readySeconds, seconds}]}`. `available:false` + `unavailable`
+  is the honest "this machine cannot split" answer.
+- `split` {`key` (a **SampleStore key** — the audio is already in the shell, the page never ships PCM),
+  `quality`:"fast"|"fine", `windows`?[{startSec,endSec}] (priority spans — the chops in view), `sweep`? (also do
+  the rest of the track), **`planes`?**} → `{ok}` and the run starts. `planes:true` also keeps the four
+  full-length buffers HERE so `setPadStems` can point a pad at them (7.3); off by default, because a set costs
+  four times the source in memory and today the page still takes the audio.
+- `queueWindow` {span:{startSec,endSec}} — a chop he just focused jumps to the HEAD of the queue mid-run (the
+  Electron worker skipped a chunk that was already queued, so a focused chop waited out the whole sweep).
+- `cancel` · `downloadModels` {quality} · `deleteModels` {quality} · `modelsDir` {path} (Preferences → FOLDERS) ·
+  `forget` {key} (drop a source's planes; pads reading them are detached first).
+Models: htdemucs from R2, SHA-256 verified, into `<dataDir>/stems/models` — **the Electron app's folder is
+adopted when it already holds them**, so nobody downloads 166 MB twice.
+
+## `terminatorCommand {type:"setPadStems", pad, key, mask}` (7.1c)
+Attach the four planes of source `key` to a pad through its 4-bit mask (bit 0 drums, 1 bass, 2 other, 3 vocals);
+mask 0/15, an unknown key, or planes that are not the pad's base buffer's twin → the ORIGINAL plays. Only
+meaningful for a split run with `planes:true`.
+
 ## `terminatorWindow(req)` — windows
 `verb`: `preferences` → opens (or fronts) the **Preferences window**: a second JUCE `DocumentWindow` hosting the
 React `preferences/preferences.html` from the same resource provider with the SAME bridge options (one backend,
@@ -328,6 +354,16 @@ MIDI checks (a note, then START/STOP driving the transport + the clock OUT).
 A take started with `lengthSeconds` ends in the engine on its own frame; the shell closes the file and emits this, so
 the take lands without anybody holding STOP. The page reads the file back, saves it under USER SAMPLES and drops it
 on a pad — the same landing STOP uses.
+### `terminator.stemsChunk` {key, startFrame, endFrame, frames, planes, startSec, endSec, blob} — a ready span (7.1c)
+**The audio is NOT in the payload.** `emitEvent` escapes every C++→JS payload into a JS string literal with a
+quadratic `String::replace`, so the span's PCM is stashed and `blob` names it (`/blob/<token>`, one-shot, 60 s):
+the page fetches it binary and gets the eight planes end to end, float32, in the order drums L,R · bass L,R ·
+other L,R · vocals L,R — the same array `onStemsChunk` has always handed the renderer. The shim fetches spans in
+order and holds `done` until the last one is in (finalizing while a span was still in flight wrote assets that
+were missing it — the Electron path's ORDER TRAP).
+### `terminator.stemsProgress` {phase:"models"|"load"|"split", pct, total?} — the download, the session load, the run
+### `terminator.stemsReady` / `terminator.stemsDone` {key, ranges, cancelled?} — ready ranges in SECONDS, merged
+### `terminator.stemsError` {message} · `terminator.stemsModels` {quality, ready, error?}
 ### `terminator.midiClock` {bpm, port} — the clock-IN follower settled on a new tempo (3.5)
 ≤ once per beat, only the owning port's ticks; the page applies Preferences "MIDI Clock (follow tempo)" (and only
 while the hardware's START is in charge) → `engine.setMetronomeBpm(bpm)`.

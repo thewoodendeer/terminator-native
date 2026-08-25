@@ -17,6 +17,7 @@
 
 #include "terminator/stems/Resampler.h"
 #include "terminator/stems/SplitSession.h"
+#include "terminator/stems/StemSet.h"
 
 using namespace terminator::stems;
 using Catch::Approx;
@@ -355,4 +356,85 @@ TEST_CASE("Stems split: progress counts the chunks queued, sub-chunk ticks inclu
     REQUIRE(ticks[2] == Approx(1.25));
     REQUIRE(ticks[3] == Approx(2.0));
     REQUIRE(s.doneCount() == Approx(static_cast<double>(total)));
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// THE STEM SET (7.1c) — where a split's spans land: four full-length planes the engine can read straight, plus
+// the ready ranges (seconds, merged) that decide whether a pad plays its stem mix or the original.
+TEST_CASE("Stem set: a split's spans land in the planes, and the ranges say where", "[stems][set]")
+{
+    const std::int64_t frames = kStride * 2 + 5000;
+    const auto l = noise(frames, 11), r = noise(frames, 12);
+    SplitSession session(l.data(), r.data(), frames, 44100.0);
+    StemSet set(frames, 2, 44100.0);
+    REQUIRE(set.valid());
+    REQUIRE(set.ranges().empty());
+    REQUIRE_FALSE(set.ready(0.0, 1.0)); // nothing separated yet: the ORIGINAL plays
+
+    // Only the first chunk's window, so the track is PARTLY separated — the normal state mid-split.
+    session.queueWindows({{0.1, 0.2}}, false);
+    REQUIRE(session.run(identityInfer, [&](const ReadyChunk& c) { set.write(c); }));
+
+    REQUIRE(set.ranges().size() == 1u);
+    REQUIRE(set.ranges()[0].start == Approx(0.0));
+    REQUIRE(set.ranges()[0].end == Approx(static_cast<double>(kStride) / kModelRate));
+    REQUIRE(set.ready(0.5, 1.5));
+    REQUIRE_FALSE(set.ready(5.0, 7.0)); // past the ready edge
+    REQUIRE(set.readySeconds() == Approx(static_cast<double>(kStride) / kModelRate));
+
+    // The drums plane IS the mix over that span (the identity model), and the untouched tail is still silent.
+    const auto drums = set.plane(0);
+    REQUIRE(drums != nullptr);
+    REQUIRE(drums->numFrames == frames);
+    REQUIRE(drums->numChannels == 2);
+    REQUIRE(drums->sampleRate == Approx(44100.0));
+    for (std::int64_t i = 0; i < kStride; i += 97)
+    {
+        REQUIRE(drums->channel(0)[i] == Approx(l[static_cast<std::size_t>(i)]).margin(1e-5));
+        REQUIRE(drums->channel(1)[i] == Approx(r[static_cast<std::size_t>(i)]).margin(1e-5));
+    }
+    for (std::int64_t i = kStride + 1000; i < frames; i += 997)
+        REQUIRE(drums->channel(0)[i] == 0.0f);
+    // A silent stem row stays a silent plane.
+    REQUIRE(set.plane(1)->channel(0)[100] == 0.0f);
+
+    // Finishing the track merges into ONE range covering everything.
+    session.queueSweep();
+    REQUIRE(session.run(identityInfer, [&](const ReadyChunk& c) { set.write(c); }));
+    REQUIRE(set.ranges().size() == 1u);
+    REQUIRE(set.ranges()[0].end == Approx(static_cast<double>(frames) / 44100.0));
+    REQUIRE(set.ready(0.0, static_cast<double>(frames) / 44100.0 - 0.01));
+
+    // What the voice checks before it sums anything: four planes, same length, rate and channels as the base.
+    const auto pointers = set.planePointers();
+    for (const auto* p : pointers)
+    {
+        REQUIRE(p != nullptr);
+        REQUIRE(p->numFrames == frames);
+        REQUIRE(p->numChannels == 2);
+    }
+}
+
+TEST_CASE("Stem set: a mono source keeps mono planes, and a span past the end is clipped", "[stems][set]")
+{
+    const std::int64_t frames = 20000;
+    StemSet set(frames, 1, 44100.0);
+    REQUIRE(set.plane(0)->numChannels == 1);
+
+    ReadyChunk chunk;
+    chunk.startFrame = frames - 1000;
+    chunk.endFrame = frames + 5000; // runs off the end
+    chunk.stems.assign(static_cast<std::size_t>(kStemPlanes), std::vector<float>(6000, 0.25f));
+    set.write(chunk);
+    REQUIRE(set.plane(0)->channel(0)[frames - 1] == Approx(0.25f));
+    REQUIRE(set.ranges().size() == 1u);
+    REQUIRE(set.ranges()[0].end == Approx(static_cast<double>(frames) / 44100.0));
+
+    // A chunk with too few planes is ignored rather than read out of bounds.
+    ReadyChunk bad;
+    bad.startFrame = 0;
+    bad.endFrame = 100;
+    bad.stems.assign(3, std::vector<float>(100, 1.0f));
+    set.write(bad);
+    REQUIRE(set.plane(0)->channel(0)[0] == 0.0f);
 }

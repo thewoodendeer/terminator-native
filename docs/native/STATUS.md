@@ -1810,6 +1810,42 @@ is size- AND hash-checked; a partial or corrupt one is deleted, never left to be
 0..100 over the whole job, cancellable, blocking (it belongs on a background thread). 5 gates run against a
 local fixture server over `file://` URLs with a tiny manifest — nothing in CI touches R2 or a 166 MB file.
 
+### 7.1c (part 2) — THE SPLIT IS ON THE BRIDGE: the STEMS button works natively
+- **`StemHub`** (`app/src/StemHub.{h,cpp}`) — `terminatorStems`: status · split · queueWindow · cancel ·
+  downloadModels · deleteModels · modelsDir · forget. One split at a time on its own thread; everything the page
+  sees goes through an outbox drained by a Timer on the message thread. The model stays loaded between splits at
+  the same quality (his batch workflow pays the 2 s load once).
+- **The page never ships PCM.** The audio is already in the shell's SampleStore (the engine shadow uploaded it to
+  play the pads), so a split takes the store KEY — the controller asks the shadow for it
+  (`NativeEngineShadow.stemsKeyFor`, which uploads + holds it). Copying 170 MB of floats over the bridge to start
+  a split the shell can already see would have been the slowest part of the feature.
+- **A ready span comes back as BYTES, not as an event payload**: the shell stashes the eight planes and the event
+  carries `/blob/<token>`; `stemsNative.ts` fetches it binary and hands the renderer the same
+  `Float32Array[8]` the Electron worker did. **The fetches are chained and `done` waits for them** — the exact
+  ORDER TRAP the Electron path hit (finalizing while the last span was in flight wrote assets missing it).
+- **The renderer's whole stems layer is untouched**: its waveform composite, its FLAC assets, its project
+  save/restore and its cache all still work, because the contract they were written against is the one the shell
+  now answers. The cache is the same `stems-cache.json` shape, in the app's presets folder.
+- **The models are adopted, not re-downloaded**: if the Electron app's `terminator-stems/models` folder on this
+  machine already holds htdemucs (same names, same SHA-256s), that becomes the folder. Nobody pulls 166 MB twice.
+- `Command::setPadStems` is wired too (`{verb:'split', planes:true}` keeps the four full-length planes in C++ and
+  the RT voice sums the lit stems per hit) — off by default until 7.3 moves the audio out of the page entirely.
+- Bundling: the onnxruntime dylib rides in `Contents/Frameworks` (a symlink covers the plain name — one copy,
+  not two) and nothing links it, so `otool -L` on the app still has no onnxruntime line.
+
+### Measured in the app (probe, `TERMINATOR_PROBE_STEMS=1`)
+`ortLoaded: true` (1.23.2, dlopen'd from the bundle) · an unknown sample key is refused · the cache round-trips ·
+**a real 2-second split: one span, 88200 frames, peak 0.324, 4.8 s wall (2.3 s model load + one chunk)** — the
+whole path, from the verb through the model to the blob fetch, inside the shipping app. The probe asserts all of
+it; the split part only runs when a model is on the machine (never in CI — it is 166 MB).
+
+### Known gaps after 7.1c
+- **The page still owns the stem audio** (that is what keeps the waveform composite and the asset saving working).
+  7.3 flips it: `planes:true`, the shadow binds the ORIGINAL + a mask instead of uploading a mix, and the native
+  cache writes the assets — then the page holds none of it.
+- Preferences has no STEMS pane yet (download / delete / relocate the models is only on the bridge).
+- No GPU: CPU EP only until 7.2's probe.
+
 ### Two things 7.1c part 2 has to handle (known, not bugs yet)
 - **The accumulators are the whole track.** 8 planes + the weight = 36 bytes a frame at 44.1k, so a 6-minute
   song is ~570 MB while it splits (`SplitSession::accumulatorBytes()` reports it). The plan's answer is

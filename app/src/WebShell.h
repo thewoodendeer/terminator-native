@@ -29,6 +29,9 @@
 #include "PluginRack.h"
 #include "ProcessHub.h"
 #include "SampleRegistry.h"
+#if TERMINATOR_STEMS
+#include "StemHub.h"
+#endif
 #include "ShellServices.h"
 
 namespace terminator::app
@@ -107,6 +110,10 @@ class WebShell final : public juce::Component, private juce::Timer
     PluginHub plugins_;       // terminatorPlugins — the VST3/AU scan (in child processes) + the known list (6.1)
     PluginRack rack_;         // …and the loaded ones: instances, editors, state (6.2). MUST be declared after
                               // plugins_ (it holds a reference) and destroyed before the engine stops
+#if TERMINATOR_STEMS
+    StemHub stems_; // terminatorStems — htdemucs in process, the planes the pads read (7.1c). After
+                    // registry_ (it holds a reference), destroyed before the engine stops
+#endif
     juce::String audioError_;
     std::unique_ptr<Browser> browser_;
     std::unique_ptr<PrefsWindow> prefsWindow_; // Preferences = a second window hosting the React preferences page

@@ -26,6 +26,7 @@ import type { ChopPreset } from './ChopperEngine';
 import { encodeFlac16 } from '../audio/flacEncode';
 import { freshSplitSm, seedSplitSm, tickSplitSm, creepSplitSm, blendMsPerChunk, DEFAULT_MS_PER_CHUNK, type SplitSm } from './stemsProgress';
 import { audioKey } from './stemsKey';
+import { nativeEngineShadow } from '../native/nativeEngineShadow';
 
 export type Span = { startSec: number; endSec: number };
 /** What a split is about: the main track, or one pad source (its buffer). */
@@ -41,7 +42,11 @@ type CacheEntry = {
   savedAt: number;
 };
 type Bridge = {
-  stemsSplit?: (opts: { pcmL: ArrayBuffer; pcmR: ArrayBuffer; srcRate: number; quality: 'fast' | 'fine'; windows: Span[]; sweep: boolean }) => Promise<{ ok: boolean; error?: string }>;
+  /** NATIVE (Terminator 3.0): the split runs in the shell and reads the audio out of its own sample store, so
+   *  `key` replaces the PCM — copying 170 MB of floats across the bridge to start a split it can already see
+   *  would be the slowest part of the whole feature. `stemsNative` marks that host. */
+  stemsNative?: boolean;
+  stemsSplit?: (opts: { pcmL?: ArrayBuffer; pcmR?: ArrayBuffer; key?: string; srcRate: number; quality: 'fast' | 'fine'; windows: Span[]; sweep: boolean }) => Promise<{ ok: boolean; error?: string }>;
   stemsQueueWindow?: (span: Span) => Promise<{ ok: boolean; error?: string }>;
   stemsCancel?: () => Promise<{ ok: boolean }>;
   stemsCacheGet?: (key: string, quality: 'fast' | 'fine') => Promise<CacheEntry | null>;
@@ -290,8 +295,11 @@ export class StemsController {
     if (!windows.length && viewSpan) windows.push(viewSpan);
 
     const sr = buf.sampleRate;
-    const L = buf.getChannelData(0);
-    const R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+    // NATIVE: the shell already holds this audio (the engine shadow uploaded it to play the pads) — hand over
+    // its store key instead of a copy of every sample. A key that cannot be resolved falls back to the PCM path.
+    const nativeKey = b.stemsNative ? await nativeEngineShadow()?.stemsKeyFor(buf).catch(() => null) : null;
+    const L = nativeKey ? null : buf.getChannelData(0);
+    const R = nativeKey ? null : (buf.numberOfChannels > 1 ? buf.getChannelData(1) : L!);
     this.running = true;
     this.set('models', 0);
     // ORDER TRAP (caught by test:stems-e2e): the invoke's resolution races the
@@ -303,8 +311,12 @@ export class StemsController {
     const doneEvent = new Promise<void>(r => { signalDone = r; });
     this.listen(sr, signalDone, target);
     const res = await b.stemsSplit({
-      pcmL: (L.buffer as ArrayBuffer).slice(L.byteOffset, L.byteOffset + L.byteLength),
-      pcmR: (R.buffer as ArrayBuffer).slice(R.byteOffset, R.byteOffset + R.byteLength),
+      ...(nativeKey
+        ? { key: nativeKey }
+        : {
+            pcmL: (L!.buffer as ArrayBuffer).slice(L!.byteOffset, L!.byteOffset + L!.byteLength),
+            pcmR: (R!.buffer as ArrayBuffer).slice(R!.byteOffset, R!.byteOffset + R!.byteLength),
+          }),
       // The worker's model is 44.1k; tell it what rate this audio actually is
       // (a Mac's AudioContext usually runs 48k) so it resamples both ways and
       // the chunks come back in OUR frames.
