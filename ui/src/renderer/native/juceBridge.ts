@@ -77,6 +77,10 @@ export const native = {
    *  boundary — it lives in the OS store (Keychain / DPAPI) and only the shell reads it.
    *  Event: `terminator.authSignedIn` {email} when the `terminator://auth` callback completed. */
   license: lazy<AnyRecord, AnyRecord>('terminatorLicense'),
+  /** Phase 8.1: CLOUD PRESETS on the KCC account — `{verb:'list'}` · `{verb:'save', preset}` ·
+   *  `{verb:'remove', id}` → `{ok, data}` or `{ok:false, status, error}`. Authorised in the SHELL with the
+   *  device token; a call made while signed out is refused there (401) without a request going out. */
+  cloud: lazy<AnyRecord, AnyRecord>('terminatorCloud'),
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),

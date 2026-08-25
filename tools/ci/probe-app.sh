@@ -143,6 +143,7 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"licenseSeam": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::licence self-test: the sign-in round trip failed (see the licenseSeam object above)"; exit 1; }
   grep -Eq '"wrongStateStillLocked": ?true' "$OUT" || { echo "::error::licence self-test: a callback with the WRONG nonce signed the app in — that is a forgeable sign-in"; exit 1; }
   grep -Eq '"nonceIsSingleUse": ?true' "$OUT" || { echo "::error::licence self-test: a consumed nonce could be replayed"; exit 1; }
+  grep -Eq '"cloudRefusesSignedOut": ?true' "$OUT" || { echo "::error::cloud presets: a call made while signed out was not refused locally — an unauthenticated request went to the KCC endpoint"; exit 1; }
   grep -Eq '"signedOutLocked": ?true' "$OUT" || { echo "::error::licence self-test: SIGN OUT left the device token in place"; exit 1; }
   echo "licence OK: $(grep -Eo '"licenseSeam": ?\{[^}]*\}' "$OUT")"
   # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and

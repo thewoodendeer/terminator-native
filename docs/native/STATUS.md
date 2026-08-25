@@ -1739,6 +1739,26 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 8 — 8.1b DONE (CLOUD PRESETS RIDE THE DEVICE TOKEN), 2026-08-25 nineteenth session
+
+The projects saved to a KCC account were the last thing the licence work left dangling: the token existed, the
+three calls did not. `app/src/CloudPresets.{h,cpp}` is the port — list / save / remove against
+`/api/terminator-presets`, authorised in the SHELL because that is where the token lives, each on a background
+thread. **A call made while signed out is refused locally (401) and no request goes out** — an unauthenticated
+request to a private endpoint is one that should never have been made, and the probe asserts it.
+
+- The page keeps its Electron contract exactly (`cloudPresetsList/Save/Delete`), so `OpenProjectModal`'s CLOUD
+  tab lights up natively with no renderer change.
+- **The licence is now OBSERVED natively, still not ENFORCED.** ChopperView's native escape hatch used to skip
+  the check entirely; it now refreshes the cached `{unlocked, email}` (so cloud presets know whether we are
+  signed in) but never shows the sign-in overlay and never locks the app. The gate flip is still owed.
+- **Parity note worth knowing:** with `cloudPresetsList` present, the OPEN dialog's preset list is the CLOUD
+  list — exactly as in the Electron desktop app — so while signed out it is EMPTY, where the native build
+  previously showed local named presets. That is the shipping app's behaviour, and it resolves itself on the
+  first sign-in.
+- Gate: `cloudRefusesSignedOut` + `cloudBridgeOk` in the licence self-test. The live round trip needs a real
+  account and is his to confirm.
+
 ## Phase 9 — 9.3a: WHAT THE NATIVE BUILD ACTUALLY COSTS (measured, 2026-08-25 nineteenth session)
 
 The whole premise of 3.0 is that a native app starts fast, sits light and leaves the CPU to the music — and

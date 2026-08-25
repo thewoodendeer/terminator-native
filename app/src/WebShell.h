@@ -32,6 +32,7 @@
 #if TERMINATOR_STEMS
 #include "StemHub.h"
 #endif
+#include "CloudPresets.h"
 #include "LicenseHub.h"
 #include "ShellServices.h"
 
@@ -114,6 +115,7 @@ class WebShell final : public juce::Component, private juce::Timer
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
     ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
     LicenseHub license_;      // terminatorLicense — browser sign-in, the device token in the OS store (8.5)
+    CloudPresets cloud_;      // terminatorCloud — your presets on your KCC account, authorised with that token
     PluginHub plugins_;       // terminatorPlugins — the VST3/AU scan (in child processes) + the known list (6.1)
     PluginRack rack_;         // …and the loaded ones: instances, editors, state (6.2). MUST be declared after
                               // plugins_ (it holds a reference) and destroyed before the engine stops

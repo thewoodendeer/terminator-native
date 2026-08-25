@@ -230,6 +230,15 @@ armed, because a page that could call it could forge its own sign-in).
   (`device-token-probe`), so a self-test can sign in and out without a KCC account, a live server, a browser, or
   any risk to the user's real token. `TERMINATOR_LICENSE_BASE` points the two calls at another host.
 
+## `terminatorCloud(req)` — CLOUD PRESETS on the KCC account (Phase 8.1)
+`verb`: `list` · `save {preset}` · `remove {id}` → `{ok, data}` or `{ok:false, status, error}`.
+Three calls against `killaviccheatcodes.app/api/terminator-presets`, authorised in the SHELL with the device
+token (`LicenseHub::deviceToken`) — which is why they are here and not in the page. **A call made while signed
+out is refused locally with 401 and no request goes out**: "signed out" is a local fact, and an unauthenticated
+request to a private endpoint is one that should never have been made (the probe asserts this). Each call runs
+on a background thread and answers on the message thread. `TERMINATOR_LICENSE_BASE` moves the host, same as the
+licence calls.
+
 ## `terminatorSettings(req)` — the UI's settings
 `verb`: `get` → `{ ok, settings }` · `set` {`patch`} → shallow-merges into settings.json **`app`** (the Electron
 `terminator-settings.json` keys, verbatim — Phase 8 imports that file here), saves, emits

@@ -13,6 +13,23 @@ type Unsub = () => void;
 
 export function buildLicenseOverlay(): AnyRecord {
   return {
+    // CLOUD PRESETS (8.1): your saved projects on your KCC account. The shell authorises them with the device
+    // token — the page never holds it — and a call made while signed out is refused there without a request.
+    cloudPresetsList: async (): Promise<any[]> => {
+      const r = await native.cloud({ verb: 'list' });
+      if (!r?.ok) throw new Error(`HTTP ${r?.status ?? 0}`);
+      return Array.isArray(r.data) ? r.data : [];
+    },
+    cloudPresetsSave: async (preset: AnyRecord): Promise<any> => {
+      const r = await native.cloud({ verb: 'save', preset });
+      if (!r?.ok) throw new Error(`HTTP ${r?.status ?? 0}`);
+      return r.data;
+    },
+    cloudPresetsDelete: async (id: string): Promise<{ ok?: boolean }> => {
+      const r = await native.cloud({ verb: 'remove', id });
+      if (!r?.ok) throw new Error(`HTTP ${r?.status ?? 0}`);
+      return { ok: true };
+    },
     checkLicense: async (): Promise<{ unlocked: boolean; email: string }> => {
       const r = await native.license({ verb: 'status' }).catch(() => null);
       return { unlocked: r?.unlocked === true, email: String(r?.email ?? '') };
@@ -49,7 +66,12 @@ export function installLicenseProbe(): void {
           const forged = await native.license({ verb: 'deepLink', url: 'terminator://auth?code=x&state=y' }).catch(() => null);
           out.deepLinkRefused = forged?.ok === false || forged === null;
         }
-        out.ok = out.bridgeOk === true && out.statusAnswers === true && out.deepLinkRefused !== false;
+        // CLOUD PRESETS: signed out, a list call must be refused LOCALLY (401) — never sent unauthenticated.
+        const cloud = await native.cloud({ verb: 'list' }).catch(() => null);
+        out.cloudRefusesSignedOut = cloud?.ok === false && cloud?.status === 401;
+        out.cloudBridgeOk = typeof t?.cloudPresetsList === 'function' && typeof t?.cloudPresetsSave === 'function';
+        out.ok = out.bridgeOk === true && out.statusAnswers === true && out.deepLinkRefused !== false
+          && out.cloudBridgeOk === true && out.cloudRefusesSignedOut === true;
         return out;
       } catch (e: any) {
         out.error = String(e?.message ?? e);

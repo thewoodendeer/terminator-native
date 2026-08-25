@@ -226,7 +226,8 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
     : engine_(engine), audioIO_(audioIO), midi_(midi), samples_(samples), loader_(loader), settings_(settings),
       services_(settings), registry_(engine, samples, loader),
       processes_([this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); }),
-      plugins_(settings.file().getSiblingFile("plugins.xml")), rack_(engine, plugins_),
+      cloud_([this] { return license_.deviceToken(); }), plugins_(settings.file().getSiblingFile("plugins.xml")),
+      rack_(engine, plugins_),
 #if TERMINATOR_STEMS
       stems_(engine, registry_, services_.dataDir(),
              [this](std::vector<std::byte> bytes) { return services_.stashBytes(std::move(bytes)); }),
@@ -350,6 +351,11 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                 "terminatorLicense",
                 [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
                 { license_.handle(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
+            // CLOUD PRESETS (8.1): list / save / remove against the KCC account, authorised in the shell with
+            // the device token. A call with no token is refused here, never sent.
+            .withNativeFunction("terminatorCloud", [this](const juce::Array<juce::var>& args,
+                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                                { cloud_.handle(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
             .withNativeFunction("terminatorInfo", [this](const juce::Array<juce::var>&,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { complete(engineInfo()); })

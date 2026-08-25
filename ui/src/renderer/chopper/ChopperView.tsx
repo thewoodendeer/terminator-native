@@ -655,8 +655,16 @@ export function ChopperView() {
   const checkLicenseGate = async () => {
     // DEV Electron runs unlocked (see isSubscribed) — no sign-in overlay either.
     if ((import.meta as any).env?.DEV) { setShowSignIn(false); return; }
-    // NATIVE build: unlocked until the licence flow is ported (see lib/subscription.ts).
-    if (typeof __TERMINATOR_NATIVE__ !== 'undefined' && __TERMINATOR_NATIVE__) { setShowSignIn(false); return; }
+    // NATIVE build (Terminator 3.0): the licence is OBSERVED but not ENFORCED yet. The shell can sign in and
+    // re-validate (8.5), and cloud presets need to know whether we are signed in — so refresh the cache — but
+    // the app is never locked and the sign-in overlay never shows, because a bug in a gate that is not finished
+    // would lock a paying user out of his own app. lib/subscription.ts keeps the same escape hatch.
+    if (typeof __TERMINATOR_NATIVE__ !== 'undefined' && __TERMINATOR_NATIVE__) {
+      setShowSignIn(false);
+      await refreshLicense().catch(() => null);
+      forceLicenseRerender((n) => n + 1);
+      return;
+    }
     await refreshLicense();
     if (getLicense()?.unlocked) {
       setShowSignIn(false);

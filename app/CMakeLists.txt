@@ -95,6 +95,8 @@ target_sources(Terminator PRIVATE
     src/StemHub.cpp
     src/LicenseHub.h
     src/LicenseHub.cpp
+    src/CloudPresets.h
+    src/CloudPresets.cpp
     src/SecretStore.h
     src/SecretStore.cpp
     src/AppMenu.h
