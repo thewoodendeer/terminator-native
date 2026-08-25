@@ -492,7 +492,7 @@ class NativeEngineShadow {
   private stretchWarming = new Set<number>();
   private stretchFor(i: number): AudioBuffer | null {
     let r: { buffer?: AudioBuffer; warming?: Promise<void> } | null = null;
-    try { r = this.engine.nativeStretchSlice(i); } catch { return null; }
+    try { r = this.engine.stretchedSliceFor(i); } catch { return null; }
     if (!r) return null;
     if (r.buffer) return r.buffer;
     if (r.warming && !this.stretchWarming.has(i)) {
@@ -504,7 +504,7 @@ class NativeEngineShadow {
         // still loading, stretch turned off while it was queued) would otherwise re-arm itself from the sync it
         // triggers — a quiet busy loop. The next real state emit tries again.
         let ready = false;
-        try { ready = !!this.engine.nativeStretchSlice(i)?.buffer; } catch { ready = false; }
+        try { ready = !!this.engine.stretchedSliceFor(i)?.buffer; } catch { ready = false; }
         if (!ready) return;
         try { this.syncPad(i, this.engine.getState()); } catch { /* the next emit catches up */ }
       }).catch(() => { this.stretchWarming.delete(i); });

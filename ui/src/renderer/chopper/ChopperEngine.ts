@@ -6853,18 +6853,19 @@ export class ChopperEngine {
     if (!t) { t = this.nextBufToken++; this.bufTokens.set(buf, t); }
     return t;
   }
-  /** NATIVE (Terminator 3.0) — what a hit on this pad would actually PLAY with TIME STRETCH on.
+  /** What a hit on this pad would actually PLAY with TIME STRETCH on.
    *
-   *  The page applies stretch inside startVoice: a cache HIT swaps the chop for its pre-stretched buffer and
-   *  plays the whole of it, a MISS plays dry this once and warms for the next hit. The native engine plays the
-   *  pads, so it never reaches startVoice — without this the shell played every stretched pad DRY, which is
-   *  the wrong sound, not a missing feature. The resolution below is startVoice's, kept in step with it
+   *  startVoice applies stretch inline: a cache HIT swaps the chop for its pre-stretched buffer and plays the
+   *  whole of it, a MISS plays dry this once and warms for the next hit. Everything that does NOT go through
+   *  startVoice — the sequencer, the offline bakes, and the native engine, which plays the pads itself — has
+   *  to ask the same question here, or it plays the chop DRY at the wrong tempo. The resolution below is
+   *  startVoice's, kept in step with it
    *  (reverse picks the reversed buffer and the mirrored region, exactly as a hit does — so the audio the
    *  engine gets is the SAME audio the page would have made).
    *
    *  Returns `{ buffer }` when the stretched slice is ready (bind it whole, forward — it IS the chop),
    *  `{ warming }` on a miss (bind dry now, ask again when it settles), or null when stretch does not apply. */
-  nativeStretchSlice(padIdx: number): { buffer?: AudioBuffer; warming?: Promise<void> } | null {
+  stretchedSliceFor(padIdx: number): { buffer?: AudioBuffer; warming?: Promise<void> } | null {
     if (!this.stretchEnabled || this.bpm <= 0 || this.targetBpm <= 0) return null;
     const ratio = this.targetBpm / this.bpm;
     if (Math.abs(ratio - 1) <= 0.005) return null;
@@ -7138,9 +7139,9 @@ export class ChopperEngine {
       startSec = psrc.buffer.duration - chop.end;
     }
     // TIME STRETCH: a bounce has to be what the pads play. The hot path can only take a cache HIT (a miss
-    // plays dry and warms) — a render is offline, so it waits for the slice instead. `nativeStretchSlice`
+    // plays dry and warms) — a render is offline, so it waits for the slice instead. `stretchedSliceFor`
     // resolves it exactly as a hit would, reverse included, so the slice is played whole and forward.
-    const stretched = this.nativeStretchSlice(e.padIdx)?.buffer ?? null;
+    const stretched = this.stretchedSliceFor(e.padIdx)?.buffer ?? null;
     let bufDurPlayed = bufDur, realDurPlayed = realDur;
     if (stretched) {
       srcBuf = stretched;

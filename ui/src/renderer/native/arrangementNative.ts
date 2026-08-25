@@ -175,8 +175,8 @@ export async function nativeSampleKeys(
     // rendered by the page here and then uploaded — an export can afford the compute a hit cannot.
     let stretched: AudioBuffer | null = null;
     try {
-      const r = engine.nativeStretchSlice(i);
-      if (r?.warming) { await r.warming; stretched = engine.nativeStretchSlice(i)?.buffer ?? null; }
+      const r = engine.stretchedSliceFor(i);
+      if (r?.warming) { await r.warming; stretched = engine.stretchedSliceFor(i)?.buffer ?? null; }
       else stretched = r?.buffer ?? null;
     } catch { stretched = null; }
     if (stretched) {
