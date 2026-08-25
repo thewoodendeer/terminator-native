@@ -46,6 +46,7 @@ import { NativeBassShadow } from './nativeBassShadow';
 import { NativeDrumShadow } from './nativeDrumShadow';
 import { NativeMixerShadow, CLICK_STRIP, DRUM_TRACK_STRIP } from './nativeMixerShadow';
 import { midiHub } from '../chopper/midiHub';
+import { MASK_ALL, spanReady } from '../chopper/stemMask';
 
 type AnyRecord = Record<string, any>;
 
@@ -72,6 +73,10 @@ interface PadDesc {
   fadeIn: number;  // LOOP crossfade (seconds) — render inputs
   fadeOut: number;
   strip: number;   // the mixer strip its voices sum into (4.1: stripFor(padRoute)); −1 = the direct path (no mixer)
+  /** STEM PLANES (7.3a, flag `stemsPlanes`): 0 = ordinary sample. 1..14 = this pad plays the ENGINE's four
+   *  planes for `buf`'s key through this mask — `buf` is then the UNMASKED source and the page ships no mixed
+   *  audio at all. 15 never appears (all four lit IS the original). */
+  stemsMask: number;
 }
 
 interface BufRec {
@@ -100,7 +105,8 @@ function sameDesc(a: PadDesc | null, b: PadDesc | null): boolean {
   if (!a || !b) return false;
   return a.buf === b.buf && a.start === b.start && a.end === b.end && a.pitch === b.pitch && a.fine === b.fine
     && a.attack === b.attack && a.release === b.release && a.gain === b.gain && a.mode === b.mode && a.gate === b.gate
-    && a.reverse === b.reverse && a.choke === b.choke && a.fadeIn === b.fadeIn && a.fadeOut === b.fadeOut;
+    && a.reverse === b.reverse && a.choke === b.choke && a.fadeIn === b.fadeIn && a.fadeOut === b.fadeOut
+    && a.stemsMask === b.stemsMask;
 }
 const sameParams = (a: PadDesc, b: PadDesc) =>
   a.pitch === b.pitch && a.fine === b.fine && a.attack === b.attack && a.release === b.release && a.gain === b.gain
@@ -146,6 +152,9 @@ export interface NativeShadowStats {
   arpCommands: number;
   /** Phase 4.1 — the native mixer */
   mixerCommands: number;
+  /** 7.3a: how many sources the hub holds planes for, and how many setPadStems the shadow has sent. */
+  stemSources: number;
+  stemPadCommands: number;
   mixerStrips: number;
   /** The self-test's last completed part (the probe reads it even when the test has not returned yet). */
   stage: string;
@@ -158,9 +167,11 @@ class NativeEngineShadow {
   private nextKey = 1;
   private last: Array<PadDesc | null> = new Array(MAX_PADS).fill(null);
   private lastKey: Array<string | null> = new Array(MAX_PADS).fill(null); // the store key the pad was bound to
+  private lastStemMask: number[] = new Array(MAX_PADS).fill(0);          // the stem mask the engine holds (7.3a)
   private chain: Array<Promise<void>> = new Array(MAX_PADS).fill(Promise.resolve());
   private chokeIds = new Map<string, number>();
   private unsubscribe: (() => void) | null = null;
+  private unsubs: Array<() => void> = []; // native-event listeners the shadow owns (7.3a: the stems hub's)
   private unsubSnapshot: (() => void) | null = null;
   private unsubMidi: (() => void) | null = null;
   private unsubMidiPorts: (() => void) | null = null;
@@ -182,7 +193,7 @@ class NativeEngineShadow {
   private playStartSample = NaN; // the engine sample the run started at (its first loop start)
   private nudgeApplied = 0;      // seconds of satellite nudge applied this run
   private snapEmitPerfMs = NaN;  // performance.now() the newest snapshot's position was stamped at (its emit)
-  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, metroCommands: 0, arpCommands: 0, mixerCommands: 0, mixerStrips: 0, stage: 'idle', lastError: null };
+  stats: NativeShadowStats = { attached: false, buffersLive: 0, bytesUploaded: 0, uploads: 0, uploadFailures: 0, commands: 0, commandErrors: 0, padsBound: 0, triggers: 0, midiNotes: 0, midiRouting: true, seqCommands: 0, seqNudges: 0, clockReady: false, clockRttMs: Infinity, snapshotAgeMs: 0, driftMs: 0, drumCommands: 0, drumLanesBound: 0, drumHits: 0, bassCommands: 0, bassEvents: 0, metroCommands: 0, arpCommands: 0, mixerCommands: 0, mixerStrips: 0, stemSources: 0, stemPadCommands: 0, stage: 'idle', lastError: null };
   private drumShadow: NativeDrumShadow | null = null;
   private bassShadow: NativeBassShadow | null = null;
   private mixerShadow: NativeMixerShadow | null = null; // 4.1 — the page's MixerEngine strips are the engine's
@@ -218,6 +229,10 @@ class NativeEngineShadow {
     // the cursor at the EAR from the engine's own clock (3.3): the TS Timeline/grid playheads stop depending on the
     // AudioContext's clock quality (a headless / virtual device runs it fast or slow; the native position is the truth)
     this.engine.nativeCursorHook = () => this.seqElapsedSec();
+    // STEM PLANES (7.3a): which sources the hub holds planes for. A split answers `stemsDone` when it has
+    // filled them, and the pads re-describe then — that is the moment a masked pad can stop uploading a mix.
+    this.unsubs.push(onNativeEvent('terminator.stemsDone', () => { void this.refreshStemSources(); }));
+    void this.refreshStemSources();
     // the mixer (4.1) — first: the pads' / lanes' strips are resolved through it
     if (this.engine.mixerEngine) {
       this.mixerShadow = new NativeMixerShadow(this.engine.mixerEngine, {
@@ -342,6 +357,8 @@ class NativeEngineShadow {
     this.bassShadow?.detach(); this.bassShadow = null;
     this.mixerShadow?.detach(); this.mixerShadow = null;
     this.unsubscribe?.(); this.unsubscribe = null;
+    for (const u of this.unsubs) { try { u(); } catch { /* */ } }
+    this.unsubs = [];
     this.unsubSnapshot?.(); this.unsubSnapshot = null;
     this.unsubMidi?.(); this.unsubMidi = null;
     this.unsubMidiPorts?.(); this.unsubMidiPorts = null;
@@ -354,20 +371,23 @@ class NativeEngineShadow {
     if (this.engine.seqSink) { this.engine.seqSink = null; if (this.engine.isSeqPlaying()) void this.cmd({ type: 'seqStop' }); }
     for (let i = 0; i < MAX_PADS; i++) {
       if (this.last[i]) { void this.cmd({ type: 'setPadSample', pad: i }); void this.cmd({ type: 'setPadLoop', pad: i, clear: true }); }
-      this.last[i] = null; this.lastKey[i] = null;
+      this.last[i] = null; this.lastKey[i] = null; this.lastStemMask[i] = 0;
     }
     for (const rec of [...this.liveRecs]) { if (rec.releaseTimer) clearTimeout(rec.releaseTimer); void this.releaseRec(rec); }
   }
 
   // ── commands ──
-  private async cmd(c: AnyRecord): Promise<boolean> {
+  private async cmd(c: AnyRecord): Promise<boolean> { return (await this.cmdReply(c)) !== null; }
+  /** The command's REPLY, for the few commands that answer with more than ok (setPadStems reports the mask it
+   *  actually attached). null = it failed, and the error is already recorded. */
+  private async cmdReply(c: AnyRecord): Promise<AnyRecord | null> {
     this.stats.commands++;
     try {
-      const r = await native.command(c);
-      if (!r?.ok) { this.stats.commandErrors++; this.stats.lastError = `${c.type}: ${r?.error ?? 'failed'}`; return false; }
-      return true;
+      const r = (await native.command(c)) as AnyRecord | null;
+      if (!r?.ok) { this.stats.commandErrors++; this.stats.lastError = `${c.type}: ${r?.error ?? 'failed'}`; return null; }
+      return r;
     } catch (e) {
-      this.stats.commandErrors++; this.stats.lastError = `${c.type}: ${String((e as any)?.message ?? e)}`; return false;
+      this.stats.commandErrors++; this.stats.lastError = `${c.type}: ${String((e as any)?.message ?? e)}`; return null;
     }
   }
 
@@ -459,10 +479,69 @@ class NativeEngineShadow {
     return id;
   }
 
+  // ── STEM PLANES (7.3a) ──────────────────────────────────────────────────────────────────────────────────
+  // With the flag on, a masked pad does NOT get a mixed slice uploaded for it: the split kept the four planes
+  // in C++ (`split {planes:true}`), so the pad is bound to the UNMASKED source and told which stems to sum
+  // (`setPadStems`). Two pads on the same song with different masks then cost ONE buffer in the store instead
+  // of one per mask, and a mask change is a command instead of a render + upload.
+  // Only for keys the hub really has planes for: a project RESTORED from the stems cache has page audio and no
+  // planes at all, and attaching there would silently play the original. `stemSourceKeys` is the hub's own list.
+  private stemSourceKeys = new Set<string>();
+  private stemPlanesOn(): boolean { return (window as any).__terminatorStemPlanes === true; }
+  /** Preferences flipped the flag: re-read the hub's sources and re-describe every pad, so the change is
+   *  audible on the next hit instead of at the next edit. */
+  async stemPlanesFlagChanged(): Promise<void> {
+    await this.refreshStemSources();
+    try { this.sync(this.engine.getState()); } catch { /* the next emit catches up */ }
+  }
+  async refreshStemSources(): Promise<void> {
+    if (this.detached || !isNative()) return;
+    try {
+      const st = await native.stems({ verb: 'status' });
+      const keys = new Set<string>();
+      for (const src of (Array.isArray(st?.sources) ? st.sources : [])) keys.add(String((src as AnyRecord).key ?? ''));
+      const changed = keys.size !== this.stemSourceKeys.size || [...keys].some(k => !this.stemSourceKeys.has(k));
+      this.stemSourceKeys = keys;
+      this.stats.stemSources = keys.size;
+      if (changed) { try { this.sync(this.engine.getState()); } catch { /* the pads catch up on the next emit */ } }
+    } catch { /* no shell / no stems build */ }
+  }
+  /** The pad's UNMASKED source + region + mask, or null when the page's own masked audio should be used
+   *  (no flag, no partial mask, span not ready, no planes for that key, or a LOOP pad — a rendered crossfade
+   *  loop reads the SAMPLE, so its masked audio has to be real audio). */
+  private planesPlan(i: number, s: ChopperState): { buf: AudioBuffer; start: number; end: number; mask: number } | null {
+    if (!this.stemPlanesOn()) return null;
+    const pad = s.pads[i];
+    const mask = pad?.stems;
+    if (typeof mask !== 'number' || mask <= 0 || mask >= MASK_ALL) return null; // ALL = the original plays
+    if (pad?.mode === 'loop') return null;
+    const kind = this.engine.stemTargetKind(i);
+    if (kind === 'source') {
+      const buf = this.engine.padSourceBuffer(i);
+      const pb = this.engine.getPadBuffer(i);
+      if (!buf || !pb) return null;
+      const ranges = this.engine.sourceStemsMeta(buf)?.readyRanges ?? [];
+      if (!spanReady(ranges, pb.start, pb.end)) return null;
+      return this.stemSourceKeys.has(this.recs.get(buf)?.key ?? '') ? { buf, start: pb.start, end: pb.end, mask } : null;
+    }
+    if (kind !== 'main') return null;
+    const buf = this.engine.sourceBuffer; // the ORIGINAL (the split's own time base), not the trimmed one
+    if (!buf) return null;
+    const chopId = pad?.chopId;
+    const chop = chopId != null ? s.chops.find(c => c.id === chopId) : undefined;
+    if (!chop) return null;
+    const start = this.engine.effToFile(chop.start), end = this.engine.effToFile(chop.end, true);
+    const ranges = this.engine.stemsMeta()?.readyRanges ?? [];
+    if (!(end > start) || !spanReady(ranges, start, end)) return null;
+    return this.stemSourceKeys.has(this.recs.get(buf)?.key ?? '') ? { buf, start, end, mask } : null;
+  }
+
   private describe(i: number, s: ChopperState): PadDesc | null {
     const pad = s.pads[i];
     if (!pad) return null;
-    const src = this.engine.resolvePadSource(i);
+    const planes = this.planesPlan(i, s);
+    const src = planes ? { buffer: planes.buf, start: planes.start, end: planes.end, isPad: this.engine.stemTargetKind(i) === 'source' }
+                       : this.engine.resolvePadSource(i);
     if (!src) return null;
     const fx = this.engine.sourceSettings(this.engine.padSourceKey(i) ?? 'main');
     const pitchTotal = pad.pitch + fx.pitch + fx.fine / 100;
@@ -484,6 +563,7 @@ class NativeEngineShadow {
       mode: looping ? 'loop' : 'oneshot', gate: !!pad.gate, reverse: this.engine.reversedFor(i),
       choke: this.chokeId(this.engine.chokeGroupOf(i)), fadeIn, fadeOut,
       strip: this.mixerShadow ? this.mixerShadow.stripFor(this.engine.padRoute(i)) : -1,
+      stemsMask: planes ? planes.mask : 0,
     };
   }
 
@@ -721,6 +801,7 @@ class NativeEngineShadow {
         if (loopOf(prev)) await this.cmd({ type: 'setPadLoop', pad: i, clear: true });
       }
       this.lastKey[i] = null;
+      this.lastStemMask[i] = 0; // an unbound pad has no planes (setPadSample dropped them in the engine too)
       this.stats.padsBound = this.last.filter(Boolean).length;
       return;
     }
@@ -730,6 +811,17 @@ class NativeEngineShadow {
     if (!prev || !sameRegion(prev, d) || this.lastKey[i] !== rec.key) {
       await this.cmd({ type: 'setPadSample', pad: i, key: rec.key, startSec: d.start, endSec: d.end });
       this.lastKey[i] = rec.key;
+      // A new sample drops the pad's planes in the engine (the voice's snapshot is only kept when the sample is
+      // the same one) — so the mask has to be sent again after it, never before.
+      this.lastStemMask[i] = 0;
+    }
+    if (d.stemsMask !== this.lastStemMask[i]) {
+      const r = await this.cmdReply({ type: 'setPadStems', pad: i, key: d.stemsMask ? rec.key : '', mask: d.stemsMask || 15 });
+      // The hub answers with the mask it attached; no mask back means it did NOT attach (the planes went away),
+      // and the pad is now playing the ORIGINAL — forget the key so the next sync re-binds the page's own mix.
+      if (d.stemsMask && !r?.mask) { this.stemSourceKeys.delete(rec.key); this.last[i] = null; }
+      this.lastStemMask[i] = d.stemsMask;
+      this.stats.stemPadCommands++;
     }
     if (!prev || !sameParams(prev, d)) {
       await this.cmd({ type: 'setPadParams', pad: i, pitch: d.pitch, fine: d.fine, attack: d.attack, release: d.release, fadeOut: d.mode === 'oneshot' ? d.fadeOut : 0, gain: d.gain, outputPair: 0, mode: d.mode, gate: d.gate, reverse: d.reverse, chokeGroup: d.choke, interpolation: 'hermite', strip: d.strip });

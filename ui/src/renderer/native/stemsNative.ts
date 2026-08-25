@@ -281,6 +281,9 @@ export function buildStemsOverlay(deps: StemsNativeDeps): AnyRecord {
       const finished = splitDone();
       const r = await native.stems({
         verb: 'split', key,
+        // 7.3a: also keep the four planes in C++ so a masked pad can read them per hit (the page still gets
+        // every span — this does not change what comes back).
+        planes: !!opts?.planes,
         quality: opts?.quality === 'fine' ? 'fine' : 'fast',
         windows: Array.isArray(opts?.windows) ? opts.windows.map((w: Span) => ({ startSec: w.startSec, endSec: w.endSec })) : [],
         sweep: !!opts?.sweep,
@@ -476,7 +479,7 @@ export function installStemsProbe(): void {
             });
             const offProgress = t.onStemsProgress((p: AnyRecord) => phases.add(String(p.phase)));
             const started = Date.now();
-            const res = await t.stemsSplit({ key: sampleKey, srcRate: sr, quality: 'fast', windows: [], sweep: true });
+            const res = await t.stemsSplit({ key: sampleKey, srcRate: sr, quality: 'fast', windows: [], sweep: true, planes: true });
             offChunk(); offProgress();
             r.splitRan = true;
             r.splitOk = (res as AnyRecord)?.ok === true;
@@ -486,6 +489,17 @@ export function installStemsProbe(): void {
             r.spanFrames = spans.reduce((n, s) => n + (s.end - s.start), 0);
             r.spanPeak = Math.round(Math.max(0, ...spans.map(s => s.peak)) * 1000) / 1000;
             r.phases = [...phases];
+            // 7.3a: the planes stayed in C++ — the hub lists the source, a pad can be pointed at a partial mask
+            // through the REAL command, and a full mask detaches it again (the original plays).
+            const st2 = await native.stems({ verb: 'status' });
+            r.planesKept = (st2?.sources ?? []).some((x: AnyRecord) => x.key === sampleKey);
+            await native.command({ type: 'setPadSample', pad: 62, key: sampleKey, startSec: 0, endSec: 0 });
+            const att = await native.command({ type: 'setPadStems', pad: 62, key: sampleKey, mask: 1 });
+            r.padStemsAttached = (att as AnyRecord)?.mask === 1;
+            const det = await native.command({ type: 'setPadStems', pad: 62, key: sampleKey, mask: 15 });
+            r.padStemsDetached = (det as AnyRecord)?.ok === true && (det as AnyRecord)?.mask === undefined;
+            await native.command({ type: 'setPadSample', pad: 62 });
+            await native.stems({ verb: 'forget', key: sampleKey });
             await native.samples({ verb: 'release', key: sampleKey });
           } else {
             r.splitError = begun?.error ?? 'upload failed';

@@ -70,6 +70,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   if grep -Eq '"splitRan": ?true' "$OUT"; then
     grep -Eq '"splitOk": ?true' "$OUT" || { echo "::error::stems self-test: the split failed (see stems.splitError)"; exit 1; }
     grep -Eq '"spanPeak": ?0\.[0-9]*[1-9]' "$OUT" || { echo "::error::stems self-test: the span that came back is SILENT — the blob fetch or the model gave nothing"; exit 1; }
+    # 7.3a: the split kept its planes in C++ and a pad can read them through a partial mask
+    grep -Eq '"planesKept": ?true' "$OUT" || { echo "::error::stems self-test: split{planes:true} left no planes in the hub"; exit 1; }
+    grep -Eq '"padStemsAttached": ?true' "$OUT" || { echo "::error::stems self-test: setPadStems did not attach a partial mask to the pad"; exit 1; }
+    grep -Eq '"padStemsDetached": ?true' "$OUT" || { echo "::error::stems self-test: a full mask did not detach the pad's planes"; exit 1; }
     echo "stems split OK: $(grep -Eo '"spanFrames": ?[0-9]+' "$OUT") $(grep -Eo '"splitSeconds": ?[0-9.]+' "$OUT")"
   else
     echo "::warning::the real stems split did not run (set TERMINATOR_PROBE_STEMS=1 with htdemucs on the machine)"

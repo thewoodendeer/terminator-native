@@ -215,6 +215,8 @@ function FoldersPane() {
   const [stems, setStems] = useState<{ models: Array<{ quality: 'fast' | 'fine'; bytes: number; ready: boolean; expectedBytes?: number; downloading?: boolean }>; modelsDir: string; audio: { bytes: number; count: number }; songs?: Array<{ title: string; bytes: number; files: number }> } | null>(null);
   const [stemsNote, setStemsNote] = useState<string | null>(null);
   const [modelsDirDefault, setModelsDirDefault] = useState(true);
+  // 7.3a experiment: masked pads read the engine's stem planes instead of a mix the page uploads.
+  const [stemPlanes, setStemPlanes] = useState(false);
   // Engine download progress per quality (0..100) while one is in flight —
   // driven by the broadcast event, not by polling (a .part file reads as 0 B).
   const [dl, setDl] = useState<Partial<Record<'fast' | 'fine', number>>>({});
@@ -230,6 +232,7 @@ function FoldersPane() {
     try { setDrumsDir(await bridge?.drumsUserDir?.() ?? null); } catch { /* */ }
     try { setStems(await bridge?.stemsUsage?.() ?? null); } catch { /* */ }
     try { const d = await bridge?.stemsModelsDir?.(); if (d) setModelsDirDefault(d.isDefault); } catch { /* */ }
+    try { setStemPlanes((await bridge?.getSettings?.())?.stemsPlanes === true); } catch { /* */ }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => bridge?.onLibraryMoveProgress?.(p => setMoving(p)) ?? undefined, []);
@@ -273,6 +276,14 @@ function FoldersPane() {
     if (r?.error) setErr(e => ({ ...e, stems: r.error }));
     else setStemsNote('Back to the standard engines folder — the files where you pointed it are left alone.');
     void refresh();
+  };
+  const toggleStemPlanes = async () => {
+    const next = !stemPlanes;
+    setStemPlanes(next); setStemsNote(null);
+    await bridge?.setSettings?.({ stemsPlanes: next });
+    setStemsNote(next
+      ? 'Pads will read their stems straight from the engine — split a song again for it to take effect on that song.'
+      : 'Back to the normal path: Terminator mixes each pad’s stems itself.');
   };
   const clearStemAudio = async () => {
     setConfirmClear(null); setErr(e => ({ ...e, stems: undefined }));
@@ -453,6 +464,16 @@ function FoldersPane() {
               )}
             </div>
           ))}
+          {bridge?.stemsChooseModelsDir && (
+            <div style={toggleRow}>
+              <span title="EXPERIMENTAL. Normally Terminator mixes a pad's chosen stems into a new piece of audio and hands it to the engine — one for every different combination. With this on, the engine keeps the four layers itself and sums the lit ones as the pad plays: much less memory on a long song, and switching layers is instant. Split a song again after turning it on. Turn it off and everything works exactly as before.">
+                Play stems from the engine (experimental)
+              </span>
+              <button style={btnSm} title={stemPlanes ? 'Back to the normal path' : 'Let the engine hold the layers'} onClick={() => void toggleStemPlanes()}>
+                {stemPlanes ? 'ON' : 'OFF'}
+              </button>
+            </div>
+          )}
           <div style={btnRow}>
             <button style={btnSm} title="Show the engines folder in Finder / Explorer" onClick={() => void bridge?.stemsRevealModels?.()}>OPEN ENGINES</button>
             <button style={btnSm}

@@ -1739,6 +1739,38 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 7 — 7.3a (THE PADS CAN READ THE ENGINE'S STEM PLANES — behind a flag), 2026-08-25 eighteenth session
+
+**Off by default** (Preferences → Stems → "Play stems from the engine", setting `stemsPlanes`). His stems pass
+is owed on the shipping path, and this changes what a masked pad plays — so it ships as an experiment he can
+A/B, not as a silent switch.
+
+**What it replaces.** Today a masked pad gets a MIXED slice: the page sums the lit stems into a new
+AudioBuffer (`bufferForPadChop`, a 96-entry LRU) and the shadow uploads that to the store — one buffer per
+(mask, chop). With the flag on, the split also keeps its four planes in C++ (`split {planes:true}`), the pad is
+bound to the UNMASKED source, and `setPadStems {pad, key, mask}` tells the RT voice which planes to sum per
+hit. One buffer per SOURCE instead of one per mask, and a layer change is a command instead of a render.
+
+**The rules it has to obey (all of them cost a line each):**
+- **Only for keys the hub actually holds planes for.** A project restored from the stems cache has page audio
+  and NO planes; attaching there would silently play the original. The shadow keeps the hub's own `sources`
+  list (`refreshStemSources`, refreshed at attach and on every `terminator.stemsDone`), and `setPadStems`
+  answers with the mask it attached — no mask back means it did not attach, so that key is forgotten and the
+  pad re-binds the page's mix on the next sync.
+- **A new sample drops the pad's planes in the engine**, so the mask is sent AFTER `setPadSample`, never
+  before (the voice only keeps its snapshot when the sample is the same one).
+- **Not for LOOP pads**: a rendered crossfade loop reads the SAMPLE, so its masked audio has to be real audio.
+- Mask 15 (all four) is not a mask at all — that is the original, and it detaches.
+- The page still receives every span: its waveform composite, its FLAC assets and its cache are untouched.
+  Dropping the page's copy entirely is 7.3b, after his pass.
+
+**Measured in the app** (`TERMINATOR_PROBE_STEMS=1`, a real 2 s split through htdemucs): `planesKept` — the
+split left its planes in the hub · `padStemsAttached` — a partial mask attaches through the real command and
+the hub reports mask 1 back · `padStemsDetached` — a full mask detaches it · the shadow's `stemSources` went
+to 1 on `stemsDone` without anything asking it to. ctest 416/416, ui gate green, 0 new warnings.
+**Not provable in CI**: the model is 166 MB and never downloaded there, so CI runs everything except the split
+itself — and the page-level choice (which pad, which mask) needs a real song, which is his pass.
+
 ## Phase 7 — 7.4 (part 1) DONE (PREFERENCES → STEMS: THE ENGINES AND THE SAVED STEM AUDIO), 2026-08-25 eighteenth session
 
 The Preferences page has carried the whole Stems card since it was copied from the Electron renderer — the

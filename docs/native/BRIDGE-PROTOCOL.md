@@ -247,8 +247,9 @@ to launch.
 - `split` {`key` (a **SampleStore key** — the audio is already in the shell, the page never ships PCM),
   `quality`:"fast"|"fine", `windows`?[{startSec,endSec}] (priority spans — the chops in view), `sweep`? (also do
   the rest of the track), **`planes`?**} → `{ok}` and the run starts. `planes:true` also keeps the four
-  full-length buffers HERE so `setPadStems` can point a pad at them (7.3); off by default, because a set costs
-  four times the source in memory and today the page still takes the audio.
+  full-length buffers HERE so `setPadStems` can point a pad at them (7.3a); the page asks for it only when the
+  `stemsPlanes` setting is on (Preferences → Stems), because a set costs four times the source in memory and
+  today the page still takes the audio as well.
 - `queueWindow` {span:{startSec,endSec}} — a chop he just focused jumps to the HEAD of the queue mid-run (the
   Electron worker skipped a chunk that was already queued, so a focused chop waited out the whole sweep).
 - `cancel` · `downloadModels` {quality} · `deleteModels` {quality} · `modelsDir` {path} (Preferences → Stems →
@@ -262,7 +263,9 @@ adopted when it already holds them**, so nobody downloads 166 MB twice.
 
 ## `terminatorCommand {type:"setPadStems", pad, key, mask}` (7.1c)
 Attach the four planes of source `key` to a pad through its 4-bit mask (bit 0 drums, 1 bass, 2 other, 3 vocals);
-mask 0/15, an unknown key, or planes that are not the pad's base buffer's twin → the ORIGINAL plays. Only
+mask 0/15, an unknown key, or planes that are not the pad's base buffer's twin → the ORIGINAL plays; the reply
+carries `mask` ONLY when it really attached, which is how the page tells "stems now" from "no planes for that
+key" (7.3a). Only
 meaningful for a split run with `planes:true`.
 
 ## `terminatorWindow(req)` — windows

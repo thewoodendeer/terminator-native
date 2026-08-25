@@ -46,7 +46,7 @@ type Bridge = {
    *  `key` replaces the PCM — copying 170 MB of floats across the bridge to start a split it can already see
    *  would be the slowest part of the whole feature. `stemsNative` marks that host. */
   stemsNative?: boolean;
-  stemsSplit?: (opts: { pcmL?: ArrayBuffer; pcmR?: ArrayBuffer; key?: string; srcRate: number; quality: 'fast' | 'fine'; windows: Span[]; sweep: boolean }) => Promise<{ ok: boolean; error?: string }>;
+  stemsSplit?: (opts: { pcmL?: ArrayBuffer; pcmR?: ArrayBuffer; key?: string; srcRate: number; quality: 'fast' | 'fine'; windows: Span[]; sweep: boolean; planes?: boolean }) => Promise<{ ok: boolean; error?: string }>;
   stemsQueueWindow?: (span: Span) => Promise<{ ok: boolean; error?: string }>;
   stemsCancel?: () => Promise<{ ok: boolean }>;
   stemsCacheGet?: (key: string, quality: 'fast' | 'fine') => Promise<CacheEntry | null>;
@@ -324,6 +324,10 @@ export class StemsController {
       quality,
       windows,
       sweep: scope === 'all',
+      // NATIVE 7.3a (flag `stemsPlanes`, off by default): also keep the four planes in C++, so a masked pad can
+      // read them per hit instead of the page mixing and uploading a slice per mask. The page still receives
+      // every span either way — its waveform composite, its FLAC assets and its cache are unchanged.
+      planes: !!nativeKey && (window as any).__terminatorStemPlanes === true,
     });
     if (res?.ok) await doneEvent; // every chunk precedes done on the wire
     this.unlisten();

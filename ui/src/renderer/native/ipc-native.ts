@@ -31,6 +31,7 @@ import { buildLibraryOverlay, installLibraryProbe } from './libraryNative';
 import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } from './assetsNative';
 import { installExportProbe } from './exportNative';
 import { applyModelsDirSetting, buildStemsOverlay, installStemsProbe } from './stemsNative';
+import { nativeEngineShadow } from './nativeEngineShadow';
 
 type AnyRecord = Record<string, any>;
 type Unsub = () => void;
@@ -78,8 +79,18 @@ export function installNativeIPC(): void {
   let settingsCache: AnyRecord = boot?.settings ?? {};
   const settingsListeners = new Set<(s: AnyRecord) => void>();
   onNativeEvent('terminator.settingsChanged', (s) => {
-    if (s && typeof s === 'object') { settingsCache = s; for (const l of settingsListeners) { try { l(s); } catch { /* */ } } }
+    if (s && typeof s === 'object') { settingsCache = s; applyStemPlanesFlag(s); for (const l of settingsListeners) { try { l(s); } catch { /* */ } } }
   });
+  /** STEM PLANES (7.3a, experimental): when it is on, a masked pad reads the ENGINE's four planes instead of a
+   *  mixed slice the page uploads. The flag lives on `window` because BOTH windows see the settings event and
+   *  the shadow (main window) reads it on every pad sync. */
+  const applyStemPlanesFlag = (s: AnyRecord | null): void => {
+    const on = s?.stemsPlanes === true;
+    if ((window as any).__terminatorStemPlanes === on) return;
+    (window as any).__terminatorStemPlanes = on;
+    void nativeEngineShadow()?.stemPlanesFlagChanged();
+  };
+
   const getSettings = async (): Promise<AnyRecord> => {
     const r = await native.settings({ verb: 'get' });
     if (r?.ok && r.settings && typeof r.settings === 'object') settingsCache = r.settings;
@@ -87,7 +98,7 @@ export function installNativeIPC(): void {
   };
   const setSettings = async (patch: AnyRecord) => {
     const r = await native.settings({ verb: 'set', patch });
-    if (r?.ok && r.settings) { settingsCache = r.settings; for (const l of settingsListeners) { try { l(r.settings); } catch { /* */ } } }
+    if (r?.ok && r.settings) { settingsCache = r.settings; applyStemPlanesFlag(r.settings); for (const l of settingsListeners) { try { l(r.settings); } catch { /* */ } } }
     return r?.ok ? { ok: true, settings: r.settings } : { error: r?.error ?? 'settings write failed' };
   };
 
@@ -329,6 +340,7 @@ export function installNativeIPC(): void {
   // STEMS (7.1c): the split runs in the shell; the renderer's stems layer keeps its contract (stemsNative.ts)
   Object.assign(overlay, buildStemsOverlay({ presetsDir, assetsDir: assets.assetsDir, getSettings, setSettings, readJson, writeJson, join }));
   void applyModelsDirSetting(getSettings); // a folder he picked in Preferences, back in place before any split
+  void getSettings().then(applyStemPlanesFlag).catch(() => { /* the flag stays off */ });
   installStemsProbe();
 
   (window as any).terminator = { ...base, ...overlay };
