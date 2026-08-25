@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 
 namespace terminator
 {
@@ -83,7 +84,10 @@ const std::array<SincBucket, kSincBuckets> kSincBucketTable = []
             {
                 const double d = static_cast<double>(j - half + 1) - t; // tap distance from the read point
                 const double x = d * cut;
-                const double sinc = std::abs(x) < 1.0e-9 ? 1.0 : std::sin(M_PI * x) / (M_PI * x);
+                // std::numbers, not M_PI: MSVC only defines M_PI when <cmath> is included with
+                // _USE_MATH_DEFINES, which is how this turned the Windows job red.
+                constexpr double pi = std::numbers::pi_v<double>;
+                const double sinc = std::abs(x) < 1.0e-9 ? 1.0 : std::sin(pi * x) / (pi * x);
                 const double u = std::abs(d) / half;
                 const double win = u >= 1.0 ? 0.0 : besselI0(beta * std::sqrt(std::max(0.0, 1.0 - u * u))) / i0b;
                 const double v = sinc * win;
