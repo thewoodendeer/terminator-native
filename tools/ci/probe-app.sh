@@ -40,6 +40,12 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"release": ?true' "$OUT" || { echo "::error::shadow self-test: sample release failed"; exit 1; }
   grep -Eq '"syncBound": ?true' "$OUT" || { echo "::error::shadow self-test: a pad source loaded into the TS engine was not mirrored (describe/diff/upload/bind) to the native pad"; exit 1; }
   grep -Eq '"syncUnbound": ?true' "$OUT" || { echo "::error::shadow self-test: removing the pad source did not unbind the native pad"; exit 1; }
+  # TIME STRETCH (the page applies it inside its own voice path, which the engine never reaches): a stretched
+  # pad has to bind the STRETCHED slice — a different key, longer by 1/ratio — and go back to the dry one when
+  # stretch is turned off. Without this the shell plays every stretched pad at the wrong tempo.
+  grep -Eq '"stretchKeyChanged": ?true' "$OUT" || { echo "::error::shadow self-test: turning STRETCH on did not re-bind the pad to its stretched slice"; exit 1; }
+  grep -Eq '"stretchLonger": ?true' "$OUT" || { echo "::error::shadow self-test: the stretched slice is not 1/ratio long (see stretchDry / stretchWet / stretchRatioSeen)"; exit 1; }
+  grep -Eq '"stretchOffRestoresDry": ?true' "$OUT" || { echo "::error::shadow self-test: turning STRETCH off did not put the dry sample back"; exit 1; }
   grep -Eq '"midiMirrored": ?true' "$OUT" || { echo "::error::shadow self-test: an injected MIDI note did not reach the page's engine (terminator.midiMessage → midiHub.injectNative → the router → triggerPad nativeOwned)"; exit 1; }
   grep -Eq '"midiNoDoubleTrigger": ?true' "$OUT" || { echo "::error::shadow self-test: a MIDI note triggered the native pad twice (direct path + shadow)"; exit 1; }
   grep -Eq '"midiTransportOk": ?true' "$OUT" || { echo "::error::shadow self-test: an injected MIDI START/STOP did not start/stop the page's transport (midiStartPlays / midiStopStops)"; exit 1; }

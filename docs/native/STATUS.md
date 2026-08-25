@@ -1739,6 +1739,48 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## SOUND: TIME STRETCH IS REAL NOW (and the shipping app's stretch has a bug), 2026-08-25 eighteenth session
+
+**The shell played every stretched pad DRY.** The page applies stretch inside its own `startVoice` — a cache
+hit swaps the chop for its pre-stretched buffer — and the native engine never reaches `startVoice`, so TARGET
+BPM did nothing at all in Terminator 3.0. `ChopperEngine.nativeStretchSlice(pad)` now answers the same
+question outside a voice (startVoice's own resolution: pad source or chop, and the REVERSED buffer with its
+mirrored region when the pad is reversed), and the shadow binds that slice whole and forward — `reverse` goes
+FALSE with it, because the slice already IS the reversed audio. A miss plays dry once and warms, exactly as a
+page hit does; the pad re-describes when the warm lands, and a hit re-syncs the pad anyway.
+
+**Then the measurement found a real bug underneath, in the shipping app's own code.** SoundTouch's
+`fillOutputBuffer` only processes once its input buffer holds 8192*2 frames, and stops when what remains is
+less than that. Measured in plain node against the same library the app bundles:
+
+| slice | out | expected |
+|---|---|---|
+| 11 025 frames (0.25 s — a normal 1/16 chop) | **0** | 14 700 |
+| 44 100 (1 s) | 37 752 | 58 800 |
+| 176 400 (4 s) | 212 355 | 235 200 |
+
+So **a chop shorter than 16 384 frames (371 ms at 44.1k) was never stretched at all** — `getStretchedBuffer`
+returned the dry buffer and the chop played at the wrong tempo, silently — **and every longer chop lost its
+last ~0.37 s.** Chopping a loop into sixteenths makes almost every chop shorter than the threshold, so TARGET
+BPM has been quietly doing nothing to them.
+
+**The fix**: pad the input with 32 768 frames of silence so the whole slice is processed, then cut the output
+to `numSamples / ratio` — measured: full level right up to that point, silence after it, and the content
+starts at sample ~3, so there is no latency to compensate. The extract loop also fills preallocated
+Float32Arrays instead of pushing into two `number[]` (a 4-minute chop was millions of boxed pushes).
+
+**OWED IN THE ELECTRON REPO**: `terminator/src/renderer/chopper/ChopperEngine.ts` holds this code verbatim —
+the shipping app has the same bug, and it is a web-bundle + desktop-release change.
+
+**Probe**: pad 62 bound at 0.25 s dry; STRETCH on at 120 → 90 re-binds it to a slice of **0.333 s** (1.33x =
+1/0.75) with `reverse` false, and turning stretch off puts the dry key back. All three are asserted.
+
+**Still dry**: the EXPORT (the native renderer takes source keys, not per-pad stretched audio) — the same gap
+the Electron export has, since it renders from `resolvePadSource` too. **The native SEQUENCER now plays
+stretched** (it plays the pad's bound sample), which is a deliberate improvement over the Electron app, where
+the sequencer takes `resolvePadSource` and plays dry while the pad plays stretched. His stems precedent
+("it's not the same sound as when I hit the pad") says the sequencer should match the pad.
+
 ## Phase 7 — 7.2 DONE (THE EP PROBE: COREML MEASURED AND REFUSED), 2026-08-25 eighteenth session
 
 The question was whether an accelerator can make a split faster on his Mac. It is answered with numbers, and

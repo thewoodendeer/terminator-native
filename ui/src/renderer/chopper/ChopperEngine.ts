@@ -6853,6 +6853,47 @@ export class ChopperEngine {
     if (!t) { t = this.nextBufToken++; this.bufTokens.set(buf, t); }
     return t;
   }
+  /** NATIVE (Terminator 3.0) — what a hit on this pad would actually PLAY with TIME STRETCH on.
+   *
+   *  The page applies stretch inside startVoice: a cache HIT swaps the chop for its pre-stretched buffer and
+   *  plays the whole of it, a MISS plays dry this once and warms for the next hit. The native engine plays the
+   *  pads, so it never reaches startVoice — without this the shell played every stretched pad DRY, which is
+   *  the wrong sound, not a missing feature. The resolution below is startVoice's, kept in step with it
+   *  (reverse picks the reversed buffer and the mirrored region, exactly as a hit does — so the audio the
+   *  engine gets is the SAME audio the page would have made).
+   *
+   *  Returns `{ buffer }` when the stretched slice is ready (bind it whole, forward — it IS the chop),
+   *  `{ warming }` on a miss (bind dry now, ask again when it settles), or null when stretch does not apply. */
+  nativeStretchSlice(padIdx: number): { buffer?: AudioBuffer; warming?: Promise<void> } | null {
+    if (!this.stretchEnabled || this.bpm <= 0 || this.targetBpm <= 0) return null;
+    const ratio = this.targetBpm / this.bpm;
+    if (Math.abs(ratio - 1) <= 0.005) return null;
+    const pad = this.pads[padIdx];
+    if (!pad) return null;
+    const reversed = this.reversedFor(padIdx);
+    let srcBuf: AudioBuffer, startSec: number, durSec: number;
+    const padBuf = this.padBuffers.get(padIdx);
+    if (padBuf) {
+      durSec = padBuf.end - padBuf.start;
+      const base = this.bufferForPadSource(padIdx);
+      srcBuf = reversed ? this.reversedOf(base.buffer) : base.buffer;
+      startSec = reversed ? base.buffer.duration - base.end : base.start;
+    } else {
+      if (pad.chopId === null || !this.buffer) return null;
+      const chop = this.chops.find(c => c.id === pad.chopId);
+      if (!chop) return null;
+      durSec = chop.end - chop.start;
+      const base = this.bufferForPadChop(padIdx, chop.start, chop.end);
+      srcBuf = reversed ? this.reversedOf(base.buffer) : base.buffer;
+      startSec = reversed ? base.buffer.duration - base.end : base.start;
+    }
+    if (!(durSec > 0)) return null;
+    const endSec = startSec + durSec;
+    const hit = this.stretchCache.get(this.stretchKey(srcBuf, startSec, endSec, ratio));
+    if (hit) return { buffer: hit };
+    return { warming: this._warmOneChop(srcBuf, startSec, endSec, ratio) };
+  }
+
   private stretchKey(srcBuf: AudioBuffer, startSec: number, endSec: number, ratio: number): string {
     return `b${this.bufToken(srcBuf)}_${startSec.toFixed(4)}_${endSec.toFixed(4)}_${ratio.toFixed(4)}`;
   }

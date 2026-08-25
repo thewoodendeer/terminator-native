@@ -487,6 +487,30 @@ class NativeEngineShadow {
   // Only for keys the hub really has planes for: a project RESTORED from the stems cache has page audio and no
   // planes at all, and attaching there would silently play the original. `stemSourceKeys` is the hub's own list.
   private stemSourceKeys = new Set<string>();
+  /** The pre-stretched slice for a pad, or null (stretch off, or not warm yet — one warm is armed per pad and
+   *  the pad re-describes when it lands, so the next hit is stretched). */
+  private stretchWarming = new Set<number>();
+  private stretchFor(i: number): AudioBuffer | null {
+    let r: { buffer?: AudioBuffer; warming?: Promise<void> } | null = null;
+    try { r = this.engine.nativeStretchSlice(i); } catch { return null; }
+    if (!r) return null;
+    if (r.buffer) return r.buffer;
+    if (r.warming && !this.stretchWarming.has(i)) {
+      this.stretchWarming.add(i);
+      void r.warming.then(() => {
+        this.stretchWarming.delete(i);
+        if (this.detached) return;
+        // Only come back when the warm actually PRODUCED something. A warm that could not (the stretch library
+        // still loading, stretch turned off while it was queued) would otherwise re-arm itself from the sync it
+        // triggers — a quiet busy loop. The next real state emit tries again.
+        let ready = false;
+        try { ready = !!this.engine.nativeStretchSlice(i)?.buffer; } catch { ready = false; }
+        if (!ready) return;
+        try { this.syncPad(i, this.engine.getState()); } catch { /* the next emit catches up */ }
+      }).catch(() => { this.stretchWarming.delete(i); });
+    }
+    return null;
+  }
   private stemPlanesOn(): boolean { return (window as any).__terminatorStemPlanes === true; }
   /** Preferences flipped the flag: re-read the hub's sources and re-describe every pad, so the change is
    *  audible on the next hit instead of at the next edit. */
@@ -539,8 +563,13 @@ class NativeEngineShadow {
   private describe(i: number, s: ChopperState): PadDesc | null {
     const pad = s.pads[i];
     if (!pad) return null;
-    const planes = this.planesPlan(i, s);
-    const src = planes ? { buffer: planes.buf, start: planes.start, end: planes.end, isPad: this.engine.stemTargetKind(i) === 'source' }
+    // TIME STRETCH: the page applies it inside its own startVoice, which the engine never reaches — so a
+    // stretched pad used to play DRY in the shell. Ask the page for the slice a hit would play; a cache miss
+    // plays dry this once (exactly as a page hit does) and re-describes when the warm settles.
+    const stretched = this.stretchFor(i);
+    const planes = stretched ? null : this.planesPlan(i, s);
+    const src = stretched ? { buffer: stretched, start: 0, end: stretched.duration, isPad: !!s.padBufferMeta[i] }
+              : planes ? { buffer: planes.buf, start: planes.start, end: planes.end, isPad: this.engine.stemTargetKind(i) === 'source' }
                        : this.engine.resolvePadSource(i);
     if (!src) return null;
     const fx = this.engine.sourceSettings(this.engine.padSourceKey(i) ?? 'main');
@@ -560,7 +589,10 @@ class NativeEngineShadow {
     return {
       buf: src.buffer, start: src.start, end: src.end,
       pitch: pad.pitch + fx.pitch, fine: fx.fine, attack, release: s.master.release, gain,
-      mode: looping ? 'loop' : 'oneshot', gate: !!pad.gate, reverse: this.engine.reversedFor(i),
+      mode: looping ? 'loop' : 'oneshot', gate: !!pad.gate,
+      // A stretched slice was rendered FROM the reversed buffer (startVoice's own resolution), so the engine
+      // must not reverse it a second time.
+      reverse: stretched ? false : this.engine.reversedFor(i),
       choke: this.chokeId(this.engine.chokeGroupOf(i)), fadeIn, fadeOut,
       strip: this.mixerShadow ? this.mixerShadow.stripFor(this.engine.padRoute(i)) : -1,
       stemsMask: planes ? planes.mask : 0,
@@ -1349,10 +1381,43 @@ class NativeEngineShadow {
         r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerRestoreParams && r.mixerRestoreCleared && r.mixerEnumByValue && r.mixerEnumBogusRefused && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0 && r.pluginHosted !== false && r.pluginUnhosted !== false;
       } else r.mixerPageOk = null;
       mark('p8mixer');
+
+      // TIME STRETCH: the page applies it inside its own startVoice, which the engine never reaches. With the
+      // fix, pad 62 must bind a DIFFERENT buffer (the stretched slice) whose length is the chop's / ratio —
+      // without it the pad keeps the dry key and the shell plays the wrong tempo.
+      const dryKey = this.lastKey[62];
+      const dryEnd = this.last[62]?.end ?? 0;
+      this.engine.setBpm(120);
+      this.engine.setTargetBpm(90);          // ratio 0.75 → the slice gets 1/0.75 = 1.333x longer
+      if (!this.engine.getState().stretchEnabled) this.engine.toggleStretch();
+      // Re-describe on every tick, the way a HIT does (onStart syncs the pad first): the first look always
+      // misses — the page loads its stretch library lazily and warms off the call stack — and in the app the
+      // next hit is what picks the warm slice up.
+      for (let t = 0; t < 200 && this.lastKey[62] === dryKey; t++) {
+        try { this.syncPad(62, this.engine.getState()); } catch { /* */ }
+        await this.tick();
+      }
+      r.stretchKeyChanged = this.lastKey[62] !== dryKey;
+      r.stretchDry = Math.round(dryEnd * 1000) / 1000;
+      r.stretchWet = Math.round((this.last[62]?.end ?? 0) * 1000) / 1000;
+      r.stretchRatioSeen = dryEnd > 0 ? Math.round(((this.last[62]?.end ?? 0) / dryEnd) * 100) / 100 : 0;
+      // SoundTouch is not sample-exact about the length, so this is a band, not an equality.
+      r.stretchLonger = r.stretchRatioSeen > 1.25 && r.stretchRatioSeen < 1.45;
+      r.stretchReverseOff = this.last[62]?.reverse === false; // the slice already IS the reversed audio
+      if (this.engine.getState().stretchEnabled) this.engine.toggleStretch();
+      for (let t = 0; t < 60 && this.lastKey[62] !== dryKey; t++) {
+        try { this.syncPad(62, this.engine.getState()); } catch { /* */ }
+        await this.tick();
+      }
+      r.stretchOffRestoresDry = this.lastKey[62] === dryKey;
+      this.engine.setTargetBpm(0);
+      mark('p9stretch');
+
       this.engine.removePadBuffer(62);
       for (let t = 0; t < 40 && this.last[62]; t++) await this.tick();
       r.syncUnbound = !this.last[62];
-      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true) && (this.engine.liveClockHook ? r.liveRecOk === true : true) && (this.mixerShadow ? r.mixerPageOk === true : true)) : true);
+      r.ok = r.upload && r.bind && r.trigger && r.release && r.storeFrames === frames && r.syncBound && r.syncUnbound
+        && r.stretchKeyChanged === true && r.stretchLonger === true && r.stretchOffRestoresDry === true && (r.syncDesc?.pitch === 3) && r.midiMirrored && r.midiNoDoubleTrigger && (r.enginePrepared ? (r.seqAdvances && r.seqStopped && r.seqPageOk === true && (this.drumShadow ? r.drumPageOk === true : true) && (this.bassShadow ? r.bassPageOk === true : true) && (this.engine.metroSink ? r.metroPageOk === true : true) && (this.engine.liveClockHook ? r.liveRecOk === true : true) && (this.mixerShadow ? r.mixerPageOk === true : true)) : true);
     } catch (e) { r.error = String((e as any)?.stack ?? e); r.ok = false; }
     r.lastError = this.stats.lastError;
     return r;
