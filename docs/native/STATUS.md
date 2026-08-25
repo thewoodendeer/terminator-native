@@ -1766,6 +1766,21 @@ device" from a warning that skipped half the gate into an error.
   all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
   itself at a second rate.
 
+## Phase 9 — 9.3b: THE SOAK (does it leak while you play?), 2026-08-25 nineteenth session
+
+Startup and idle memory were measured; what nobody had looked at is the number that actually matters — what
+happens over an hour of making a beat. `TERMINATOR_PROBE_SOAK=<seconds>` keeps the app **playing** after the
+normal checks (the page's own transport, exactly what a user presses), samples resident memory every 5 s, and
+the final read carries the whole curve.
+
+**Measured 2026-08-25, 5.3 minutes of continuous playback (debug build, 64-sample buffer):**
+675 MB → **268 MB**, flat for the last two minutes, **219,199 blocks** processed. It RECLAIMS — the self-test's
+buffers, plugin instance and stem fixtures being released — rather than growing. `growthMbPerMin: −76.7`.
+
+Opt-in, never in the per-push gate (five minutes is too slow for that), and `probe-app.sh` fails a soak past
+**20 MB/min of sustained growth** — far outside anything this app legitimately does while playing. It is on the
+pre-release list in RELEASE-CYCLES-NATIVE.md at ten minutes.
+
 ## THE WINDOWS BUILD HAS NOW BEEN RUN — AND IT IS A REAL GATE (2026-08-25 nineteenth session)
 
 The Windows job built the app and never launched it: its smoke step was `continue-on-error: true` and every

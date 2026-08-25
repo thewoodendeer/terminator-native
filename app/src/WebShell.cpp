@@ -2157,6 +2157,22 @@ void WebShell::pageLoaded(const juce::String& url)
     }
 }
 
+void WebShell::soakTick()
+{
+    if (--soakSampleCountdown_ <= 0)
+    {
+        soakSampleCountdown_ = 20 * 5; // a sample every 5 s
+        soakRssMb_.push_back(perf::residentMb());
+    }
+    if (--soakTicksLeft_ > 0)
+        return;
+    soakRunning_ = false;
+    menuCommand("stop");
+    soakRssMb_.push_back(perf::residentMb());
+    std::cerr << "probe: soak done, final read" << std::endl;
+    runProbe();
+}
+
 void WebShell::runProbeAsyncChecks()
 {
     // phase 1 (≈ 3 s before the final read, after the ESM modules have run): exercise the window.terminator shim's
@@ -2402,6 +2418,26 @@ void WebShell::runProbe()
                     pf->setProperty("bufferSize", dev.bufferSize);
                     pf->setProperty("sampleRate", dev.sampleRate);
                     pf->setProperty("xruns", static_cast<int>(dev.xruns));
+                    // SOAK: what memory did while the app played, and whether the audio kept up.
+                    if (!soakRssMb_.empty())
+                    {
+                        auto* sk = new juce::DynamicObject();
+                        juce::Array<juce::var> samples;
+                        for (double mb : soakRssMb_)
+                            samples.add(juce::roundToInt(mb));
+                        const auto minutes = juce::jmax(0.001, (perf::sinceStartMs() - soakStartMs_) / 60000.0);
+                        sk->setProperty("minutes", juce::roundToInt(minutes * 100.0) / 100.0);
+                        sk->setProperty("rssMb", juce::var(samples));
+                        sk->setProperty("startMb", juce::roundToInt(soakRssMb_.front()));
+                        sk->setProperty("endMb", juce::roundToInt(soakRssMb_.back()));
+                        sk->setProperty("growthMbPerMin",
+                                        juce::roundToInt((soakRssMb_.back() - soakRssMb_.front()) / minutes * 10.0) /
+                                            10.0);
+                        const auto blocks = engine_.snapshot().blocksProcessed;
+                        sk->setProperty("blocks", static_cast<double>(blocks - soakBlocksStart_));
+                        sk->setProperty("xruns", static_cast<int>(dev.xruns));
+                        o->setProperty("soak", juce::var(sk));
+                    }
                     o->setProperty("perf", juce::var(pf));
                     o->setProperty("prefsWindow", prefsWindow_ != nullptr && prefsWindow_->isVisible());
                     o->setProperty("prefsReady", prefsReady_);
@@ -2476,10 +2512,30 @@ void WebShell::timerCallback()
         }
         if (probeCountdown_ == 0)
         {
-            std::cerr << "probe: final read" << std::endl;
-            runProbe();
+            // SOAK first when it was asked for: the app keeps PLAYING for a while and the final read carries
+            // what memory did over that time. Without it the probe only ever sees a 35-second-old process.
+            const auto soakSec = juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_SOAK", {}).getIntValue();
+            if (soakSec > 0 && !soakDone_)
+            {
+                soakRunning_ = true;
+                soakDone_ = true; // one soak per run
+                soakTicksLeft_ = soakSec * 20;
+                soakSampleCountdown_ = 0;
+                soakStartMs_ = perf::sinceStartMs();
+                soakBlocksStart_ = engine_.snapshot().blocksProcessed;
+                soakRssMb_.clear();
+                std::cerr << "probe: soaking for " << soakSec << " s (playing)" << std::endl;
+                menuCommand("play"); // the page's own transport — exactly what a user presses
+            }
+            else
+            {
+                std::cerr << "probe: final read" << std::endl;
+                runProbe();
+            }
         }
     }
+    if (soakRunning_)
+        soakTick();
 
     // The engine is only "running" once it is on a real device and pulling blocks — that is the moment the app
     // can make a sound, and the one worth measuring.

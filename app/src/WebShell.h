@@ -146,6 +146,17 @@ class WebShell final : public juce::Component, private juce::Timer
     double calibrationResultSamples_ = -1.0;
     double calibrationResultMs_ = -1.0;
     int calibrationReportedSamples_ = 0;
+    /// SOAK (9.3, TERMINATOR_PROBE_SOAK=<seconds>): after the normal checks, keep PLAYING and watch resident
+    /// memory. A leak in the audio/UI loop does not show up in a 35-second probe — it shows up in an hour of
+    /// making a beat, which is the only session length that matters.
+    void soakTick();
+    int soakTicksLeft_ = 0; // 20 Hz ticks
+    bool soakRunning_ = false;
+    bool soakDone_ = false;
+    int soakSampleCountdown_ = 0;
+    std::vector<double> soakRssMb_;
+    double soakStartMs_ = 0.0;
+    std::uint64_t soakBlocksStart_ = 0;
     // PROBE DIAGNOSTICS for the Preferences window: `prefsWindow` has been failing on one machine while
     // `prefsReady` passes (the page loaded in its own window), which means something CLOSED it rather than it
     // never opening. Counting both, and where a close came from, turns that into an answer.

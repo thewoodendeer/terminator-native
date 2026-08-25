@@ -45,12 +45,15 @@ TERMINATOR_PROBE_FILE="$OUT" "$BIN" &
 PID=$!
 # 150 s: the React probe's self-test runs the sequencers in real time (≈ 25 s on a Mac, 60+ s on a starved CI runner —
 # the 3.7 tip's universal job was killed at 60 s mid-test); the cap only has to catch "the page never loaded"
-for _ in $(seq 1 150); do
+# A SOAK run (TERMINATOR_PROBE_SOAK=<seconds>) keeps the app PLAYING before the final read, so the cap has to
+# cover it: a leak shows up over minutes, not in a 35-second probe.
+CAP=$(( 150 + ${TERMINATOR_PROBE_SOAK:-0} ))
+for _ in $(seq 1 "$CAP"); do
   sleep 1
   kill -0 "$PID" 2>/dev/null || break
 done
 if kill -0 "$PID" 2>/dev/null; then
-  echo "::error::app did not quit within 150 s (page never loaded, or the self-test hung?)"; kill "$PID" || true; exit 1
+  echo "::error::app did not quit within ${CAP} s (page never loaded, or the self-test hung?)"; kill "$PID" || true; exit 1
 fi
 wait "$PID" || { echo "::error::app exited non-zero"; exit 1; }
 echo "== probe output"; cat "$OUT"; echo
@@ -129,6 +132,15 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   # audio callback costs. REPORTED, not gated: a CI runner's clock is not a user's machine. The one thing that
   # is worth a warning is a startup that has fallen off a cliff.
   echo "perf: $(grep -Eo '"perf": ?\{[^}]*\}' "$OUT")"
+  if grep -q '"soak"' "$OUT"; then
+    echo "soak: $(grep -Eo '"soak": ?\{[^}]*\}' "$OUT")"
+    GROWTH="$(grep -Eo '"growthMbPerMin": ?-?[0-9]+' "$OUT" | grep -Eo -- '-?[0-9]+' | head -1)"
+    # A real leak in the play loop grows without limit; caches settling is a one-off. 20 MB a minute of
+    # sustained growth is far past anything this app legitimately does while playing.
+    if [ -n "$GROWTH" ] && [ "$GROWTH" -gt 20 ]; then
+      echo "::error::memory grew ${GROWTH} MB/min while playing — that is a leak, not a cache"; exit 1
+    fi
+  fi
   MS_TO_PAGE="$(grep -Eo '"msToPage": ?[0-9]+' "$OUT" | grep -Eo '[0-9]+' | head -1)"
   if [ -n "$MS_TO_PAGE" ] && [ "$MS_TO_PAGE" -gt 5000 ]; then
     echo "::warning::the UI took ${MS_TO_PAGE} ms to be usable — it is normally well under a second"
