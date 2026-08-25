@@ -904,10 +904,37 @@ export function HardwareView() {
   const loadRandomFromPlaylist = async () => {
     const pl = playlists.find(p => p.name === selectedPlaylist);
     if (!pl || pl.entries.length === 0) { flash('Playlist is empty — drop a file or pick a list'); return; }
+    const pick = pl.entries[Math.floor(Math.random() * pl.entries.length)];
+    // PADS ALREADY IN PLAY (his rule 2026-08-22, and his report 2026-08-25 that this layout ignored it): a kit
+    // you have started — the main track chopped into pieces, or any pad carrying its own sample — must not be
+    // swapped out under you. GET SAMPLE then pulls onto the NEXT EMPTY PAD as that pad's own source. Only a bare
+    // main track (one whole-sample pad, nothing else) is still replaced — that is "still looking for the sample".
+    // The desktop layout (ChopperView.loadRandomFromPlaylist) has done this since the 22nd; the hardware layout
+    // never got it, so it replaced the track while its own tooltip promised a pad.
+    const padsInPlay = Object.keys(state.padBufferMeta ?? {}).length > 0 || state.chops.length > 1;
+    if (padsInPlay) {
+      const padIdx = findNextEmptyPad();
+      if (!gatePull()) return;
+      setError(null);
+      flash(`Pulling sample → PAD ${padIdx + 1}…`);
+      engine.setLoading(true);
+      try {
+        const res = await fetchTrackData(pick.id, pick.title);
+        if (!res.ok) { setError(res.error ?? 'Download failed'); return; }
+        const buf = await engine.decodeAudio(await resolveAudio(res));
+        const title = pick.title ?? res.title ?? 'sample';
+        engine.loadPadBuffer(padIdx, buf, res.videoId ?? pick.id, title);
+        flash(`PAD ${padIdx + 1}: ${title}`);
+      } catch (e: any) {
+        setError(e?.message ?? String(e));
+      } finally {
+        engine.setLoading(false);
+      }
+      return;
+    }
     if (!gatePull()) return;
     setError(null);
     flash('Pulling sample…');
-    const pick = pl.entries[Math.floor(Math.random() * pl.entries.length)];
     await loadTrackById(pick.id, pick.title);
   };
 
@@ -1775,7 +1802,7 @@ export function HardwareView() {
         </select>
       </div>
       <div className="hw-sc-row">
-        <button className="hw-sc-btn hi" onClick={loadRandomFromPlaylist} title="Pull a random sample from the current playlist onto the next empty pad">↻ GET SAMPLE</button>
+        <button className="hw-sc-btn hi" onClick={loadRandomFromPlaylist} title="Pull a random sample from the current playlist — onto the NEXT EMPTY PAD once you have pads in play, so a kit you have started is never swapped out">↻ GET SAMPLE</button>
         <button className="hw-sc-btn hi" onClick={() => setSampleBrowserOpen(true)} title="Open the sample browser — playlists, your library, recordings">≡ BROWSE</button>
         {/* LOAD FILE is a <label> wrapping the (hidden) file input: a label
             click is a direct user gesture, so the picker opens reliably even
