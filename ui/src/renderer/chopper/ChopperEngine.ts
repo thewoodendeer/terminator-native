@@ -6915,8 +6915,19 @@ export class ChopperEngine {
     const numSamples = Math.round((endSec - startSec) * sr);
     if (numSamples <= 0) return srcBuf;
 
-    // Slice the chop into a fresh stereo buffer for WebAudioBufferSource
-    const sliceBuf = this.ctx.createBuffer(2, numSamples, sr);
+    // THE SILENCE TAIL (measured 2026-08-25 — this is a real bug fix, not a tweak). SoundTouch's
+    // fillOutputBuffer only processes once its input buffer holds 8192*2 frames and STOPS when what is left is
+    // less than that, so:
+    //   • a slice shorter than 16384 frames (371 ms at 44.1k) produced ZERO output — getStretchedBuffer
+    //     returned the dry buffer and the chop played at the WRONG TEMPO. Most chops of a chopped loop are
+    //     shorter than that, so TARGET BPM was silently doing nothing to them.
+    //   • a longer slice lost its last ~16k frames (0.37 s) — measured: 44100 in gave 37752 out where 58800
+    //     was due.
+    // Padding the input with silence lets it process the WHOLE slice; the output is then cut to the length the
+    // ratio asks for, which is where the real audio ends (measured: full level up to that point, silence
+    // after, and the content starts at sample ~3 — no latency to compensate).
+    const PAD = 16384 * 2;
+    const sliceBuf = this.ctx.createBuffer(2, numSamples + PAD, sr);
     const leftSrc = srcBuf.getChannelData(0);
     sliceBuf.copyToChannel(leftSrc.slice(startSample, startSample + numSamples), 0);
     const rightSrc = srcBuf.numberOfChannels > 1 ? srcBuf.getChannelData(1) : leftSrc;
@@ -6929,24 +6940,28 @@ export class ChopperEngine {
 
     const CHUNK = 4096;
     const interleaved = new Float32Array(CHUNK * 2);
-    const leftOut: number[] = [];
-    const rightOut: number[] = [];
-    const maxFrames = numSamples * 4; // safety: never more than 4× slower
+    // The chop's own stretched length is what we keep; the padding's is only there to make SoundTouch run.
+    const wantLen = Math.max(1, Math.round(numSamples / ratio));
+    const leftOut = new Float32Array(wantLen);
+    const rightOut = new Float32Array(wantLen);
+    let filled = 0;
 
-    while (leftOut.length < maxFrames) {
+    while (filled < wantLen) {
       const n = filter.extract(interleaved, CHUNK);
       if (n === 0) break;
-      for (let i = 0; i < n; i++) {
-        leftOut.push(interleaved[i * 2]);
-        rightOut.push(interleaved[i * 2 + 1]);
+      const take = Math.min(n, wantLen - filled);
+      for (let i = 0; i < take; i++) {
+        leftOut[filled + i] = interleaved[i * 2];
+        rightOut[filled + i] = interleaved[i * 2 + 1];
       }
+      filled += take;
     }
 
-    if (leftOut.length === 0) return srcBuf;
-    const outLen = leftOut.length;
+    if (filled === 0) return srcBuf;
+    const outLen = filled; // short only if SoundTouch stopped early — never pad the result with silence
     const outBuf = this.ctx.createBuffer(2, outLen, sr);
-    outBuf.copyToChannel(new Float32Array(leftOut), 0);
-    outBuf.copyToChannel(new Float32Array(rightOut), 1);
+    outBuf.copyToChannel(leftOut.subarray(0, outLen), 0);
+    outBuf.copyToChannel(rightOut.subarray(0, outLen), 1);
 
     this.stretchCache.set(cacheKey, outBuf);
     return outBuf;
