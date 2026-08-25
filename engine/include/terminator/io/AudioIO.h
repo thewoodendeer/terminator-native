@@ -58,6 +58,9 @@ class AudioIO : private juce::AudioIODeviceCallback, private juce::ChangeListene
 
     /// Opens the default device of the default type. Returns an empty string on success, an error otherwise.
     juce::String openDefault(int numInputs, int numOutputs);
+    /// Open the OFFLINE device (TERMINATOR_NULL_AUDIO) — a real callback on a paced thread, no hardware. See
+    /// NullAudioDevice.h for why it exists.
+    juce::String openOffline();
     /// Applies a full setup (type, devices, rate, buffer, channels). Returns an error string or empty.
     juce::String apply(const DeviceSetup& setup);
     void close();

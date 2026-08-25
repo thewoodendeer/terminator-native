@@ -25,6 +25,11 @@ fi
 # on a real KCC account, a live server or a browser. It also makes the probe use its own OS-store entry, so a
 # machine where somebody is really signed in keeps its device token.
 export TERMINATOR_LICENSE_FAKE="${TERMINATOR_LICENSE_FAKE:-unlocked:probe@terminator.test}"
+# THE ENGINE HALF of this probe — the chop sequencer, the drum machine, the bass, the metronome, live record and
+# the whole mixer — only runs once the engine is on a device, and a CI runner has none: all of it was silently
+# SKIPPED there. `auto` falls back to the OFFLINE device (a real callback on a paced thread, no hardware) only
+# when nothing real opens, so a machine with an interface is completely unaffected.
+export TERMINATOR_NULL_AUDIO="${TERMINATOR_NULL_AUDIO:-auto}"
 # WHAT THE OS HANDS THE APP (8.5 / 8.6): the built BUNDLE has to declare the `terminator://` scheme (the browser
 # sign-in's callback) and the two project document types (a double-clicked .tproj / .tprojz). These live in a
 # plist JUCE generates, which is exactly the kind of thing that goes missing in a CMake edit and is invisible
@@ -250,7 +255,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
     } || true
     echo "native engine shadow OK (upload → bind → trigger reached the audio thread)"
   else
-    echo "::warning::no audio device on this machine (engine not prepared) — shadow upload/bind/commands OK, trigger not observable"
+    # With the offline fallback armed above there is no such thing as "no device" any more: if the engine is
+    # still not prepared, the offline device itself failed to open, and every engine assertion below would be
+    # skipped in silence — which is the exact hole this replaced.
+    echo "::error::the engine is not prepared even with TERMINATOR_NULL_AUDIO=$TERMINATOR_NULL_AUDIO — the offline device did not open"; exit 1
   fi
   echo "React UI OK (ChopperView + Preferences window + native engine shadow)"
 else

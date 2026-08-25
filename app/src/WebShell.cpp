@@ -5,6 +5,8 @@
 #include <thread>
 #include <iostream>
 
+#include "terminator/io/NullAudioDevice.h"
+
 #include "Perf.h"
 #include "WebResources.h"
 #include "terminator/Version.h"
@@ -1397,6 +1399,10 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
 void WebShell::persistAudioSetup()
 {
     const auto s = audioIO_.currentSetup();
+    // The OFFLINE device is a test fixture (TERMINATOR_NULL_AUDIO), not a choice anybody made — writing it into
+    // the user's saved setup would leave a real launch pointing at a device that does not exist there.
+    if (s.deviceType == NullAudioDeviceType::kTypeName)
+        return;
     auto* o = new juce::DynamicObject();
     o->setProperty("deviceType", s.deviceType);
     o->setProperty("inputDevice", s.inputDevice);

@@ -1739,6 +1739,28 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## CI CAN RUN THE ENGINE NOW — THE OFFLINE AUDIO DEVICE (2026-08-25 nineteenth session)
+
+The finding above left a hole worth more than the two gates it fixed: **everything that needs a prepared engine
+was skipped on CI** — the chop sequencer, the drum machine, the bass, the metronome and count-in, live record,
+the whole mixer and its PDC plan — because a GitHub runner has no audio device. Roughly thirty assertions only
+ever ran when somebody probed on a real Mac.
+
+- `engine/src/io/NullAudioDevice.cpp` is a real `juce::AudioIODevice` that pulls blocks on its own high-priority
+  thread, **paced to the wall clock** at 48 kHz / 512. The pacing is the point: the cursor and drift checks
+  compare the engine's sample clock against `performance.now()`, so a device running flat out would prove
+  nothing.
+- **It never appears by accident.** `TERMINATOR_NULL_AUDIO=1` selects it; `=auto` registers it and falls back to
+  it only when nothing real opens; unset — every user's app — and the type is not even registered.
+  `tools/ci/probe-app.sh` sets `auto`, so a machine with an interface is completely unaffected, and "no audio
+  device on this machine" is now an ERROR rather than a warning that skipped half the gate.
+- **It is never written into the user's saved setup** (`persistAudioSetup` refuses it): a test fixture in
+  settings.json would point a real launch at a device that does not exist there. Verified by running the probe
+  forced-offline and re-reading settings.json: still CoreAudio.
+- Measured on the offline device: PROBE OK with `enginePrepared · seq · drums · bass · metro · liveRec · mixer`
+  all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
+  itself at a second rate.
+
 ## THE TWO "KNOWN LOCAL PROBE FAILURES" WERE BAD GATES, NOT A BAD MACHINE (2026-08-25 nineteenth session)
 
 `prefsWindow` and `mixerPdcPlan` had been carried for days as "fails on this Mac, green in CI — cross-check CI".

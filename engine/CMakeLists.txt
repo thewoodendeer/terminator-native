@@ -82,6 +82,7 @@ add_library(terminator_engine STATIC
     src/core/fx/FxPool.cpp
     src/core/Arp.cpp
     src/io/AudioIO.cpp
+    src/io/NullAudioDevice.cpp
     src/io/MidiHub.cpp
     src/io/Recorder.cpp
     src/io/SampleLoader.cpp

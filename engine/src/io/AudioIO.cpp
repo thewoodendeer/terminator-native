@@ -1,5 +1,7 @@
 #include "terminator/io/AudioIO.h"
 
+#include "terminator/io/NullAudioDevice.h"
+
 namespace terminator
 {
 
@@ -30,6 +32,11 @@ std::uint64_t AudioIO::hostTimeNowNs() noexcept
 AudioIO::AudioIO(Engine& engine) : engine_(engine)
 {
     deviceManager_.addChangeListener(this);
+    // The OFFLINE device type, only when it was asked for (TERMINATOR_NULL_AUDIO). It exists so the engine can
+    // be exercised where there is no hardware — CI runners, mainly, where half this app's self-test used to be
+    // skipped in silence. A user's app never registers it at all.
+    if (nullAudioMode() != NullAudioMode::off)
+        deviceManager_.addAudioDeviceType(std::make_unique<NullAudioDeviceType>());
 }
 
 AudioIO::~AudioIO()
@@ -50,13 +57,40 @@ void AudioIO::ensureCallback()
 juce::String AudioIO::openDefault(int numInputs, int numOutputs)
 {
     close();
-    const auto err = deviceManager_.initialiseWithDefaultDevices(numInputs, numOutputs);
-    if (err.isNotEmpty())
+    const auto mode = nullAudioMode();
+    if (mode == NullAudioMode::forced)
     {
-        lastError_ = err;
-        return err;
+        const auto err = openOffline();
+        if (err.isEmpty())
+            return {};
+    }
+    const auto err = deviceManager_.initialiseWithDefaultDevices(numInputs, numOutputs);
+    if (err.isNotEmpty() || deviceManager_.getCurrentAudioDevice() == nullptr)
+    {
+        // Nothing real opened. With `auto` that is what the offline device is for; otherwise the app reports it,
+        // exactly as before, and the UI says there is no device.
+        if (mode == NullAudioMode::autoFallback && openOffline().isEmpty())
+            return {};
+        lastError_ = err.isNotEmpty() ? err : juce::String("no audio device");
+        return lastError_;
     }
     ensureCallback();
+    return {};
+}
+
+juce::String AudioIO::openOffline()
+{
+    deviceManager_.setCurrentAudioDeviceType(NullAudioDeviceType::kTypeName, true);
+    juce::AudioDeviceManager::AudioDeviceSetup s;
+    s.outputDeviceName = NullAudioDeviceType::kDeviceName;
+    s.inputDeviceName = NullAudioDeviceType::kDeviceName;
+    s.sampleRate = 48000.0;
+    s.bufferSize = 512;
+    const auto err = deviceManager_.setAudioDeviceSetup(s, true);
+    if (err.isNotEmpty() || deviceManager_.getCurrentAudioDevice() == nullptr)
+        return err.isNotEmpty() ? err : juce::String("the offline device did not open");
+    ensureCallback();
+    lastError_ = {};
     return {};
 }
 
