@@ -1273,7 +1273,25 @@ juce::var WebShell::applyJsonCommand(const juce::var& json)
             value = static_cast<float>(opt);
         }
         else
+        {
             value = static_cast<float>(static_cast<double>(v));
+            // An ENUM param's value is an INDEX here. The page names some of its options by their VALUE rather
+            // than their position — the phaser's STAGES are 4 / 6 / 8 / 12 — so a number that is not a valid
+            // index is matched against the option NAMES before it is used. Without this every STAGES choice
+            // clamped to the last option and the control did nothing (his report 2026-08-25); a number that is
+            // neither an index nor an option is now an error rather than a silent clamp.
+            if (const auto& def = fxTypeInfo(t).params[param];
+                def.isEnum() && (value < 0.0f || value >= static_cast<float>(def.numOptions)))
+            {
+                const auto asName = std::abs(value - std::round(value)) < 1.0e-6f
+                                        ? juce::String(static_cast<int>(std::lround(value)))
+                                        : juce::String(value);
+                const int opt = fxOptionIndex(t, param, asName.toRawUTF8());
+                if (opt < 0)
+                    return ok(false, "value '" + asName + "' is not an option of " + id + "." + key);
+                value = static_cast<float>(opt);
+            }
+        }
         c = Command::mixerSetFxParam(stripOf(json), std::clamp(static_cast<int>(json.getProperty("index", 0)), 0, 7),
                                      param, value, static_cast<bool>(json.getProperty("immediate", false)));
     }

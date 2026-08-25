@@ -579,7 +579,11 @@ class ChannelStrip {
     for (const fp of p.fx ?? []) {
       const idx = this.addFx(fp.id);
       if (idx < 0) continue;
-      for (const [k, v] of Object.entries(fp.params ?? {})) this.fx[idx].setParam(k, v);
+      // THROUGH setFxParam, not the device object: that is what tells the native engine (nativeSink) what the
+      // saved value is. Setting the page's FX directly left every C++ device on its DEFAULTS, so a restored
+      // chain played the right devices with the wrong settings -- and a device that is neutral at its defaults
+      // (CHANNEL, EQ6, COMP at a 0 dB threshold) did nothing at all (his report 2026-08-25).
+      for (const [k, v] of Object.entries(fp.params ?? {})) this.setFxParam(idx, k, v);
       if (fp.bypassed) this.toggleBypass(idx);
     }
   }
@@ -929,7 +933,11 @@ class MasterStrip {
     for (const fp of p?.fx ?? []) {
       const idx = this.addFx(fp.id);
       if (idx < 0) continue;
-      for (const [k, v] of Object.entries(fp.params ?? {})) this.fx[idx].setParam(k, v);
+      // THROUGH setFxParam, not the device object: that is what tells the native engine (nativeSink) what the
+      // saved value is. Setting the page's FX directly left every C++ device on its DEFAULTS, so a restored
+      // chain played the right devices with the wrong settings -- and a device that is neutral at its defaults
+      // (CHANNEL, EQ6, COMP at a 0 dB threshold) did nothing at all (his report 2026-08-25).
+      for (const [k, v] of Object.entries(fp.params ?? {})) this.setFxParam(idx, k, v);
       if (fp.bypassed) this.toggleBypass(idx);
     }
   }

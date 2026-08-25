@@ -1184,6 +1184,39 @@ class NativeEngineShadow {
         if (pdcSlot >= 0) ch.removeFx(pdcSlot);
         mx.setPdc(pdcWas);
         mark('p8p'); r.mixerPdcCleared = await wait(() => planOf() === 0);
+        // A RESTORED chain must carry its SAVED params to the engine, not just the devices (his report
+        // 2026-08-25: "when I add some of these effects they don't do anything" — a project's CHANNEL / EQ6 /
+        // COMP came back on the engine's neutral defaults). restore() went through the page's FX object, which
+        // the native sink never sees; one add + three params is four commands, not one.
+        // The proof is the ENGINE's own number, not a command count: a LIMITER reports its LOOKAHEAD as latency,
+        // so restoring one at 20 ms moves the PDC plan to ~20 ms of samples. On the default (3 ms) it would sit
+        // around 140 — the threshold below is far outside both. PDC has to be on for the plan to be published.
+        const pdcWasRestore = mx.pdcOn;
+        if (!pdcWasRestore) mx.setPdc(true);
+        const restoreCmds = this.stats.commands;
+        ch.restore({ fader: 0, pan: 0, mute: false, solo: false, sends: [], fx: [{ id: 'limiter', bypassed: false, params: { LOOKAHEAD: 20 } }] } as any);
+        const restoreLanded = await wait(() => fxCountOf(sampleIdx) === fxBefore + 1);
+        r.mixerRestoreCmds = this.stats.commands - restoreCmds; // diagnostics: add + every saved param
+        r.mixerRestoreLatency = await wait(() => planOf() > 600); // 20 ms is 882 @44.1k / 960 @48k; 3 ms is ~140
+        r.mixerRestoreParams = restoreLanded && r.mixerRestoreLatency === true;
+        if (!pdcWasRestore) mx.setPdc(false);
+        for (let i = ch.fx.length - 1; i >= 0; i--) ch.removeFx(i);
+        r.mixerRestoreCleared = await wait(() => fxCountOf(sampleIdx) === fxBefore);
+        // An ENUM whose options are named by their VALUE (the phaser's STAGES: 4 / 6 / 8 / 12) has to reach the
+        // engine as the right option — it used to clamp to the last one, so the control did nothing. A number
+        // that is neither an index nor an option is now refused instead of silently clamped.
+        const phaserSlot = ch.addFx('phaser');
+        const enumErrs = this.stats.commandErrors;
+        if (phaserSlot >= 0) ch.setFxParam(phaserSlot, 'STAGES', 8);
+        await this.tick();
+        r.mixerEnumByValue = phaserSlot >= 0 && (await wait(() => fxCountOf(sampleIdx) === fxBefore + 1)) &&
+          this.stats.commandErrors === enumErrs;
+        if (phaserSlot >= 0) ch.setFxParam(phaserSlot, 'STAGES', 5); // not an option, not an index
+        r.mixerEnumBogusRefused = await wait(() => this.stats.commandErrors > enumErrs);
+        // …and that refusal is the ONE command error this self-test expects, so it does not read as a fault below
+        const expectedCmdErrs = r.mixerEnumBogusRefused ? 1 : 0;
+        if (phaserSlot >= 0) ch.removeFx(phaserSlot);
+        await wait(() => fxCountOf(sampleIdx) === fxBefore);
         // 6.2: A PLUGIN AS AN INSERT, from the page's side — the mixer adds a `plugin` slot, the PLUGIN param names
         // one of the scanned effects, and the APP must end up hosting it in THAT slot (the rack says so). A machine
         // with no plugins scanned skips it rather than failing (CI runners have none).
@@ -1219,9 +1252,9 @@ class NativeEngineShadow {
         // 4.3: the master's BS.1770 reading + the per-slot GR rows ride the snapshot; the page's meters read them
         const lo = mixerOf()?.loudness as Record<string, unknown> | undefined;
         r.mixerLoudnessOk = !!lo && typeof lo.m === 'number' && typeof lo.hops === 'number' && typeof mixerOf()?.fxGr === 'object' && mx.master.updateLoudness().worklet === true;
-        r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore;
+        r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore - expectedCmdErrs;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0 && r.pluginHosted !== false && r.pluginUnhosted !== false;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerRestoreParams && r.mixerRestoreCleared && r.mixerEnumByValue && r.mixerEnumBogusRefused && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0 && r.pluginHosted !== false && r.pluginUnhosted !== false;
       } else r.mixerPageOk = null;
       mark('p8mixer');
       this.engine.removePadBuffer(62);

@@ -669,6 +669,9 @@
   text-orientation: mixed;  /* effect name reads vertically; track colour kept inline */
 }
 .mx-device.collapsed .mx-device-sub { display: none; }
+/* ...and the slot's M/S route picker: a 60px dropdown in a 28px tab overhangs the panel and reads as a stray
+   control floating in the mixer (his report 2026-08-25). It comes back with the panel. */
+.mx-device.collapsed .mx-device-route { display: none; }
 
 /* ── one param control ── */
 .mx-param {
