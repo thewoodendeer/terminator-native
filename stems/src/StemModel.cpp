@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <limits>
 #include <mutex>
+#include <vector>
 
 #include <juce_core/juce_core.h>
 
@@ -137,7 +140,44 @@ struct StemModel::Impl
     std::vector<std::string> inputNames;  // one per session
     std::vector<std::string> outputNames; // one per session
     std::unique_ptr<Ort::MemoryInfo> memory;
+    Ep ep = Ep::cpu;
 };
+
+const char* epName(Ep ep) noexcept
+{
+    return ep == Ep::coreml ? "coreml" : ep == Ep::coremlGpu ? "coreml-gpu" : "cpu";
+}
+
+namespace
+{
+/// Put the provider on the options, or say why it cannot go on. NEVER silently leaves CPU in its place: an
+/// accelerator that is not there has to be visible, or a "GPU" build is just a slower CPU build nobody checks.
+bool appendProvider(Ort::SessionOptions& opts, Ep ep, std::string& error)
+{
+    if (ep == Ep::cpu)
+        return true;
+#if JUCE_MAC
+    try
+    {
+        // The generic provider entry point (OrtApi::SessionOptionsAppendExecutionProvider) — no extra symbol to
+        // resolve out of the dlopen'd library, which the provider-specific C functions would need.
+        // MLComputeUnits ALL lets CoreML pick ANE/GPU/CPU per op; the graph's input shape is fixed
+        // (1,2,343980), so static shapes are honest here.
+        opts.AppendExecutionProvider("CoreML", {{"MLComputeUnits", ep == Ep::coremlGpu ? "CPUAndGPU" : "ALL"},
+                                                {"RequireStaticInputShapes", "1"}});
+        return true;
+    }
+    catch (const Ort::Exception& e)
+    {
+        error = std::string("CoreML is not available in this onnxruntime build: ") + e.what();
+        return false;
+    }
+#else
+    error = "CoreML is macOS only";
+    return false;
+#endif
+}
+} // namespace
 
 StemModel::StemModel() : impl_(std::make_unique<Impl>()) {}
 StemModel::~StemModel() = default;
@@ -166,7 +206,12 @@ void StemModel::unload()
     impl_->outputNames.clear();
 }
 
-bool StemModel::load(const std::vector<std::string>& modelPaths, std::string& error, int intraOpThreads)
+Ep StemModel::epUsed() const noexcept
+{
+    return impl_ == nullptr ? Ep::cpu : impl_->ep;
+}
+
+bool StemModel::load(const std::vector<std::string>& modelPaths, std::string& error, int intraOpThreads, Ep ep)
 {
     unload();
     if (!ensureRuntime(error))
@@ -190,6 +235,11 @@ bool StemModel::load(const std::vector<std::string>& modelPaths, std::string& er
             opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
             if (intraOpThreads > 0)
                 opts.SetIntraOpNumThreads(intraOpThreads);
+            if (!appendProvider(opts, ep, error))
+            {
+                unload();
+                return false;
+            }
 #if defined(_WIN32)
             impl_->sessions.emplace_back(*impl_->env, widen(path).c_str(), opts);
 #else
@@ -206,6 +256,7 @@ bool StemModel::load(const std::vector<std::string>& modelPaths, std::string& er
             impl_->inputNames.emplace_back(session.GetInputNameAllocated(0, alloc).get());
             impl_->outputNames.emplace_back(session.GetOutputNameAllocated(0, alloc).get());
         }
+        impl_->ep = ep;
     }
     catch (const Ort::Exception& e)
     {
@@ -265,6 +316,79 @@ bool StemModel::run(const float* mix, float* rows, std::string& error, const std
         error = std::string("onnxruntime: ") + e.what();
         return false;
     }
+    return true;
+}
+
+bool StemModel::compareEp(const std::vector<std::string>& modelPaths, const float* mix, Ep ep, EpCheck& out,
+                          std::string& error, int intraOpThreads)
+{
+    out = {};
+    if (ep == Ep::cpu)
+    {
+        error = "compareEp: the CPU is the reference, not a candidate";
+        return false;
+    }
+    const std::size_t n = static_cast<std::size_t>(kStemRows) * static_cast<std::size_t>(kRowFloats);
+    std::vector<float> cpuRows(n, 0.0f), epRows(n, 0.0f);
+
+    const auto timeOne = [&](StemModel& m, float* rows, double& ms) -> bool
+    {
+        // A warm-up first: the first run of a session pays its arena + (for CoreML) its model compile, and
+        // timing that instead of the steady state is how a provider gets wrongly written off.
+        if (!m.run(mix, rows, error))
+            return false;
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        if (!m.run(mix, rows, error))
+            return false;
+        ms = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0) * 1000.0;
+        return true;
+    };
+
+    {
+        StemModel cpu;
+        if (!cpu.load(modelPaths, error, intraOpThreads, Ep::cpu) || !timeOne(cpu, cpuRows.data(), out.cpuMs))
+            return false;
+    }
+    {
+        StemModel cand;
+        if (!cand.load(modelPaths, error, intraOpThreads, ep) || !timeOne(cand, epRows.data(), out.epMs))
+            return false;
+    }
+
+    // Worst row, not the average: a provider that gets three rows right and vocals wrong is still wrong, and an
+    // average over 1.4 million samples would hide it.
+    double worstSnr = std::numeric_limits<double>::infinity();
+    out.finite = true;
+    for (int row = 0; row < kStemRows; ++row)
+    {
+        double signal = 0.0, noise = 0.0;
+        const std::size_t base = static_cast<std::size_t>(row) * static_cast<std::size_t>(kRowFloats);
+        for (std::size_t i = 0; i < static_cast<std::size_t>(kRowFloats); ++i)
+        {
+            const double a = static_cast<double>(cpuRows[base + i]);
+            const double b = static_cast<double>(epRows[base + i]);
+            ++out.samples;
+            out.cpuPeak = std::max(out.cpuPeak, std::abs(a));
+            if (!std::isfinite(b))
+            {
+                out.finite = false;
+                ++out.nonFinite;
+                continue;
+            }
+            out.epPeak = std::max(out.epPeak, std::abs(b));
+            signal += a * a;
+            noise += (a - b) * (a - b);
+            out.maxDiff = std::max(out.maxDiff, std::abs(a - b));
+        }
+        // A silent row on both sides is not evidence of anything — skip it rather than report a fake infinity.
+        if (signal <= 0.0)
+            continue;
+        const double snr = noise <= 0.0 ? std::numeric_limits<double>::infinity() : 10.0 * std::log10(signal / noise);
+        worstSnr = std::min(worstSnr, snr);
+    }
+    // No row produced a comparison at all (every sample skipped, or both sides silent): that is NOT a perfect
+    // match, and reporting one would be the worst possible lie for a gate to tell.
+    out.snrDb = std::isinf(worstSnr) ? (out.nonFinite > 0 || out.epPeak <= 0.0 ? -999.0 : 999.0) : worstSnr;
     return true;
 }
 } // namespace terminator::stems

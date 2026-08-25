@@ -1,5 +1,6 @@
 // terminator-stems <in.wav> <out-dir> --model <file> [--model <file> ...] [--windows a:b,c:d] [--sweep]
-//                  [--threads N] [--bits 16|24|32] [--quiet] | --version | --help
+//                  [--threads N] [--bits 16|24|32] [--quiet] [--ep cpu|coreml] | --check-ep coreml
+//                  | --version | --help
 //
 // The headless separator: the same SplitSession + StemModel the app uses, with no window and no page. It is how
 // a stem split is MEASURED (speed, and the output compared against the Electron app's), and it is the Phase 7
@@ -73,7 +74,10 @@ void usage()
     std::puts("terminator-stems — htdemucs stem separation, headless (the same engine the app runs)\n"
               "usage: terminator-stems <in.wav> <out-dir> --model <file> [--model <file> x3 for FINE]\n"
               "                        [--windows 12.5:20,40:48] [--sweep] [--threads N] [--bits 16|24|32]\n"
-              "                        [--quiet]\n"
+              "                        [--quiet] [--ep cpu|coreml]\n"
+              "       terminator-stems <in.wav> <out-dir> --model <file> --check-ep coreml|coreml-gpu\n"
+              "              (compares that provider with the CPU on one chunk: worst-row SNR + timings,\n"
+              "               writes nothing; exit 0 only when the audio matches the CPU's)\n"
               "       terminator-stems --version | --help\n"
               "Without --windows the whole track is swept. Writes drums/bass/other/vocals .wav at the source rate.");
 }
@@ -132,11 +136,61 @@ int main(int argc, char* argv[])
     const float* right = source->numChannels > 1 ? source->channel(1) : left;
     const double seconds = rate > 0.0 ? static_cast<double>(frames) / rate : 0.0;
 
+    const int threads = optionValue(args, "--threads").getIntValue();
+
+    // 7.2 — THE EP SELF-CHECK. An accelerator is a candidate until it has been compared with the CPU on the
+    // SAME chunk of the SAME model: the Electron app measured providers that ran happily and returned the
+    // wrong stems. This prints the worst-row SNR and both timings and exits — it never writes stems.
+    const auto epArg = optionValue(args, "--check-ep");
+    if (epArg.isNotEmpty())
+    {
+        const auto candidate = epArg.equalsIgnoreCase("coreml")       ? stems::Ep::coreml
+                               : epArg.equalsIgnoreCase("coreml-gpu") ? stems::Ep::coremlGpu
+                                                                      : stems::Ep::cpu;
+        if (candidate == stems::Ep::cpu)
+        {
+            std::fprintf(stderr, "--check-ep takes: coreml | coreml-gpu\n");
+            return 2;
+        }
+        // The chunk the grid would run first, resampled to the model's 44.1k exactly as a real split does.
+        stems::SplitSession probe(left, right, frames, rate);
+        std::vector<float> mix(static_cast<std::size_t>(2 * stems::kSegment), 0.0f);
+        if (!probe.buildChunkMix(0, mix.data()))
+        {
+            std::fprintf(stderr, "the input is too short to build one %.1f s chunk\n",
+                         static_cast<double>(stems::kSegment) / 44100.0);
+            return 2;
+        }
+        stems::StemModel::EpCheck check;
+        std::string epError;
+        if (!stems::StemModel::compareEp(models, mix.data(), candidate, check, epError, threads))
+        {
+            std::fprintf(stderr, "%s\n", epError.c_str());
+            return 3;
+        }
+        std::printf("ep %s vs cpu: worst-row SNR %.1f dB  max|diff| %.2e\n", stems::epName(candidate), check.snrDb,
+                    check.maxDiff);
+        std::printf("  peaks: cpu %.4f  ep %.4f   non-finite samples: %lld / %lld\n", check.cpuPeak, check.epPeak,
+                    static_cast<long long>(check.nonFinite), static_cast<long long>(check.samples));
+        std::printf("  cpu %.0f ms/chunk   ep %.0f ms/chunk   (%.2fx)\n", check.cpuMs, check.epMs,
+                    check.epMs > 0.0 ? check.cpuMs / check.epMs : 0.0);
+        // THE SAME RULE THE SHIPPING APP USES (stemsWorkerChild.ts probeChunk: GPU_MIN_SNR_DB 40 and
+        // GPU_MIN_SPEEDUP 1.1) — a provider has to be BOTH right and actually faster. Correct-but-slower is
+        // not a win, and there is no reason for the native app to judge an accelerator differently.
+        const bool sounds = check.finite && check.snrDb >= 40.0;
+        const bool faster = check.epMs > 0.0 && check.epMs * 1.1 <= check.cpuMs;
+        std::printf("  verdict: %s\n", sounds && faster ? "USABLE (same audio as the CPU, and faster)"
+                                       : !sounds        ? "NOT USABLE — different audio"
+                                                        : "NOT USABLE — right audio, but no faster than the CPU");
+        return sounds && faster ? 0 : 1;
+    }
+
     const auto t0 = std::chrono::steady_clock::now();
     stems::StemModel model;
     std::string modelError;
-    const int threads = optionValue(args, "--threads").getIntValue();
-    if (!model.load(models, modelError, threads))
+    const auto epOpt = optionValue(args, "--ep");
+    const auto ep = epOpt.equalsIgnoreCase("coreml") ? stems::Ep::coreml : stems::Ep::cpu;
+    if (!model.load(models, modelError, threads, ep))
     {
         std::fprintf(stderr, "model load failed: %s\n", modelError.c_str());
         return 3;

@@ -236,19 +236,28 @@ void SplitSession::emitReady(const ChunkFn& onChunk)
     }
 }
 
+bool SplitSession::buildChunkMix(int idx, float* mix) const
+{
+    if (mix == nullptr || idx < 0 || idx >= nChunks_)
+        return false;
+    const std::int64_t s = static_cast<std::int64_t>(idx) * kStride;
+    const std::int64_t n = std::min(kSegment, frames_ - s);
+    std::fill(mix, mix + 2 * kSegment, 0.0f);
+    if (n > 0)
+    {
+        std::copy(l_.begin() + static_cast<std::ptrdiff_t>(s), l_.begin() + static_cast<std::ptrdiff_t>(s + n), mix);
+        std::copy(r_.begin() + static_cast<std::ptrdiff_t>(s), r_.begin() + static_cast<std::ptrdiff_t>(s + n),
+                  mix + kSegment);
+    }
+    return true;
+}
+
 void SplitSession::runChunk(int idx, const InferFn& infer, const ChunkFn& onChunk, std::vector<float>& mix,
                             std::vector<float>& rows, bool& ok)
 {
     const std::int64_t s = static_cast<std::int64_t>(idx) * kStride;
     const std::int64_t n = std::min(kSegment, frames_ - s);
-    std::fill(mix.begin(), mix.end(), 0.0f);
-    if (n > 0)
-    {
-        std::copy(l_.begin() + static_cast<std::ptrdiff_t>(s), l_.begin() + static_cast<std::ptrdiff_t>(s + n),
-                  mix.begin());
-        std::copy(r_.begin() + static_cast<std::ptrdiff_t>(s), r_.begin() + static_cast<std::ptrdiff_t>(s + n),
-                  mix.begin() + static_cast<std::ptrdiff_t>(kSegment));
-    }
+    buildChunkMix(idx, mix.data());
     std::fill(rows.begin(), rows.end(), 0.0f);
     ok = infer(mix.data(), rows.data());
     if (!ok)

@@ -290,6 +290,39 @@ TEST_CASE("Stems split: the 48k rate bridge keeps the stems sample-aligned", "[s
     REQUIRE(snrDb(l, outL, 2000, frames - 2000) >= 33.0);
 }
 
+TEST_CASE("Stems grid: buildChunkMix is exactly what the run feeds the model", "[stems][grid][gate]")
+{
+    // The EP self-check (7.2) measures a provider on a REAL chunk, which is only meaningful if the mix it
+    // builds is the same one a split would infer on. An identity model records what it was handed; the two
+    // buffers have to agree sample for sample, including the zero pad on the last (short) chunk.
+    const std::int64_t frames = kSegment + kStride + kStride / 2; // three chunks, the last one short
+    const auto l = noise(frames, 11), r = noise(frames, 22);
+    SplitSession session(l.data(), r.data(), frames, kModelRate);
+    REQUIRE(session.chunkCount() == 3);
+
+    std::vector<std::vector<float>> fed;
+    session.queueSweep();
+    REQUIRE(session.run(
+        [&fed](const float* mix, float* rows)
+        {
+            fed.emplace_back(mix, mix + 2 * kSegment);
+            std::fill(rows, rows + static_cast<std::size_t>(kStemRows) * 2 * kSegment, 0.0f);
+            return true;
+        },
+        [](const ReadyChunk&) {}));
+    REQUIRE(fed.size() == 3);
+
+    std::vector<float> mix(static_cast<std::size_t>(2 * kSegment), -1.0f);
+    for (int idx = 0; idx < 3; ++idx)
+    {
+        REQUIRE(session.buildChunkMix(idx, mix.data()));
+        REQUIRE(mix == fed[static_cast<std::size_t>(idx)]);
+    }
+    REQUIRE_FALSE(session.buildChunkMix(3, mix.data()));  // past the end
+    REQUIRE_FALSE(session.buildChunkMix(-1, mix.data())); // and before the start
+    REQUIRE_FALSE(session.buildChunkMix(0, nullptr));
+}
+
 TEST_CASE("Stems queue: a focused window jumps ahead, and cancel stops the run", "[stems][grid]")
 {
     const std::int64_t frames = kStride * 4;

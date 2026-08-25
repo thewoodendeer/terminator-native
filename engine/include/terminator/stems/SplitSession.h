@@ -78,6 +78,11 @@ class SplitSession
         return frames_ * static_cast<std::int64_t>(sizeof(float)) * (kStemPlanes + 1);
     }
 
+    /// Build chunk `idx`'s model-rate mix into `mix` (2 * kSegment floats, L then R) — exactly what the run
+    /// would hand the model. Public so a gate or the EP self-check can measure a provider on REAL audio
+    /// instead of a synthetic buffer. False when the index is out of range.
+    bool buildChunkMix(int idx, float* mix) const;
+
     /// Chunk indices covering a span (source seconds). Public for the queue gates.
     std::vector<int> chunksFor(const Span& span) const;
 

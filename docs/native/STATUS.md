@@ -1739,6 +1739,41 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 7 — 7.2 DONE (THE EP PROBE: COREML MEASURED AND REFUSED), 2026-08-25 eighteenth session
+
+The question was whether an accelerator can make a split faster on his Mac. It is answered with numbers, and
+the answer is NO for both CoreML modes — so **CPU stays the engine**, exactly as in the shipping app.
+
+**The harness** (this is the part that keeps its value after any onnxruntime or model bump):
+- `StemModel::load(..., Ep)` — `cpu` · `coreml` (MLComputeUnits ALL, the Neural Engine included) · `coremlGpu`
+  (CPUAndGPU). A provider this build of onnxruntime cannot create is an ERROR, never a quiet fall back to CPU:
+  a "GPU build" that is silently a slow CPU build is how nobody notices for a year. `epUsed()` says what ran.
+- `StemModel::compareEp(models, mix, ep, …)` — the SAME chunk through CPU and the candidate, after a warm-up
+  run on both (the first run pays the arena and, for CoreML, the model compile). Reports the WORST row's SNR
+  (not the average — a provider that gets three rows right and vocals wrong is wrong), max|diff|, both
+  timings, and how many of the 2 751 840 samples came back non-finite.
+- `SplitSession::buildChunkMix(idx, mix)` — the real chunk the run would infer on, so the check measures music
+  and not a synthetic buffer. Gated: an identity model records what it was fed and the two agree sample for
+  sample, including the zero pad on the short last chunk.
+- `terminator-stems … --check-ep coreml|coreml-gpu` prints all of it and exits non-zero when the provider
+  fails. **The pass rule is the shipping app's own** (`stemsWorkerChild.ts probeChunk`): SNR ≥ 40 dB AND at
+  least 1.1x faster. Correct-but-slower is not a win.
+
+**Measured, M1 Max, htdemucs_fp16weights, 30 s of a real track (first chunk):**
+| provider | worst-row SNR | non-finite | ms/chunk vs CPU | verdict |
+|---|---|---|---|---|
+| CoreML, MLComputeUnits ALL | — (no comparable sample) | **2 751 840 / 2 751 840** | 6 224 vs 1 893 (0.30x) | different audio |
+| CoreML, CPUAndGPU | 55.8 dB (max diff 8.6e-04) | 0 | 132 254 vs 5 625 (0.04x) | right audio, far slower |
+
+**What that tells us, beyond "no":** the Electron app recorded "CoreML returns WRONG stems" — this says WHY.
+The Neural Engine is the part that returns garbage (every sample NaN with fp16 weights); restrict CoreML to
+CPU+GPU and the audio comes back essentially correct — and 23x slower than the plain CPU provider. So a
+re-exported fp32 model would fix the NaN and still lose on speed. **The door that is still open** is a
+different provider entirely (DirectML on Windows), and the harness above is what will judge it.
+
+Nothing in the app changed: the hub still loads CPU, and no setting can pick a provider — the check is a
+developer tool until something passes it.
+
 ## Phase 7 — 7.3a (THE PADS CAN READ THE ENGINE'S STEM PLANES — behind a flag), 2026-08-25 eighteenth session
 
 **Off by default** (Preferences → Stems → "Play stems from the engine", setting `stemsPlanes`). His stems pass
