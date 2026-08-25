@@ -41,6 +41,11 @@ jobs:
         with:
           path: third_party/.ort-cache
           key: ort-mac-${{ hashFiles('cmake/Onnxruntime.cmake') }}
+      - name: Cache the bundled tools (yt-dlp + qjs + lame — pinned, third-party hosts)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.tools-cache
+          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: Configure
         run: cmake --preset mac-release-universal
       - name: Build
@@ -98,6 +103,11 @@ jobs:
         with:
           path: third_party/.ort-cache
           key: ort-mac-${{ hashFiles('cmake/Onnxruntime.cmake') }}
+      - name: Cache the bundled tools (yt-dlp + qjs + lame — pinned, third-party hosts)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.tools-cache
+          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: Configure
         run: cmake --preset mac-release
       - name: Build
@@ -126,6 +136,11 @@ jobs:
         with:
           path: third_party/.ort-cache
           key: ort-mac-${{ hashFiles('cmake/Onnxruntime.cmake') }}
+      - name: Cache the bundled tools (yt-dlp + qjs + lame — pinned, third-party hosts)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.tools-cache
+          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: Configure (RTSan)
         run: cmake --preset mac-rtsan
       - name: Build
@@ -158,6 +173,11 @@ jobs:
         with:
           path: third_party/.ort-cache
           key: ort-win-${{ hashFiles('cmake/Onnxruntime.cmake') }}
+      - name: Cache the bundled tools (yt-dlp + qjs + lame — pinned, third-party hosts)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.tools-cache
+          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: WebView2 SDK (NuGet → JUCE's default search path)
         shell: pwsh
         run: |
