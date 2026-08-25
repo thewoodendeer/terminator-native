@@ -26,7 +26,7 @@
  * store; the page only ever sees {unlocked, email}).
  * plus DRUMS (drumsNative.ts — the KCC library shipped inside the app and served at /drums/<id>.<ext>, and
  * the user's own <Sample Library>/Drums folder behind the MY DRUMS tab + Preferences → FOLDERS).
- * NOT yet native (browser-shim or undefined): menu open-with-file events, drag-out, cloud presets, the curated
+ * NOT yet native (browser-shim or undefined): the curated
  * PLAYLIST cache (list/status/download/delete — the list itself comes off R2 in the page, so only DL PLAYLIST is
  * missing), and the MPC-card export (dead in the shipping app too: nothing calls it).
  */
@@ -38,6 +38,7 @@ import { installExportProbe } from './exportNative';
 import { applyModelsDirSetting, buildStemsOverlay, installStemsProbe } from './stemsNative';
 import { buildDrumsOverlay, installDrumsProbe } from './drumsNative';
 import { buildLicenseOverlay, installLicenseProbe } from './licenseNative';
+import { installDragOutProbe } from './dragOutNative';
 import { nativeEngineShadow } from './nativeEngineShadow';
 
 type AnyRecord = Record<string, any>;
@@ -329,6 +330,7 @@ export function installNativeIPC(): void {
   // has always spoken; nothing about the token or the one-time code crosses into the page.
   Object.assign(overlay, buildLicenseOverlay());
   installLicenseProbe();
+  installDragOutProbe(); // DRAG OUT (8.6c) lives in the pad menu; this gates the render + the containment rule
 
   // DRUMS: the bundled KCC library + the user's own folder (it lives inside the library, so it moves with it)
   const drums = buildDrumsOverlay({ libraryRoot: () => library.core.libraryRoot() });

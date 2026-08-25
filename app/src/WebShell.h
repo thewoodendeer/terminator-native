@@ -48,6 +48,12 @@ class WebShell final : public juce::Component, private juce::Timer
 
     void resized() override;
 
+    /// DRAG OUT (8.6c): start an OS file drag for files the page wrote into the drag folder. Message thread,
+    /// while the mouse is down.
+    juce::var startFileDrag(const juce::var& req);
+    /// Where a drag-out file may live — nothing outside it is ever offered to the OS.
+    static juce::File dragOutDir();
+
     /// Something the OS handed the app: a `terminator://…` deep link (8.5, the browser sign-in's auth callback)
     /// or a PROJECT FILE to open (8.6, double-clicked in Finder / Explorer). True when it was handled.
     /// Message thread.

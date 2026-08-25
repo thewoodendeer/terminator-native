@@ -1766,6 +1766,26 @@ device" from a warning that skipped half the gate into an error.
   all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
   itself at a second rate.
 
+## Phase 8 — 8.6c DONE (DRAG A PAD OUT INTO YOUR DAW), 2026-08-25 nineteenth session
+
+A chop only existed inside the app: to get one into Ableton you exported a folder of stems and went looking for
+it. Now the PAD MENU is a drag source — **his call on where it lives** (2026-08-25: "put pad drag out in pad
+edit / right click menu of pad"), in both layouts.
+
+- **The item IS the drag.** `⇱ Drag out` fires on **pointerdown**, not click, because macOS builds a drag
+  session from the window's CURRENT MOUSE EVENT — by the time a click resolves, the gesture is over. Press it
+  and drag to Finder / Ableton / Logic; a plain click does nothing, and the tooltip and the help entry both say
+  so.
+- **The file is ready before the drag starts.** Opening the menu renders the pad exactly as it PLAYS (the same
+  offline render RESAMPLE uses — chop bounds, pitch, reverse, attack), encodes 24-bit WAV and writes it into a
+  drag folder in temp. The drag itself is then one bridge call, so nothing has to happen while the mouse is held.
+- **The page names a file, never a path.** `startFileDrag` only offers the OS files that are provably inside
+  that folder, and it deletes yesterday's drags on the way past (bounded cleanup, no timer nobody reads).
+- **Gates:** the whole path except the gesture — a pad renders to a real **264,644-byte** 24-bit WAV in the drag
+  folder, and `/etc/hosts` handed to `dragFiles` is refused. The drag needs a held mouse button, so THAT is
+  his to confirm: open a pad's menu, press ⇱ Drag out, drag it onto the desktop.
+- Native only (`canDragOut()`), so the Electron and web menus are unchanged.
+
 ## Phase 8 — 8.5b: SIGN-IN IS REACHABLE (Preferences → ACCOUNT), 2026-08-25 nineteenth session
 
 The licence flow landed with nothing to press: the sign-in screen only appears when the GATE is on, and the gate

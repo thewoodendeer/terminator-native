@@ -425,6 +425,8 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                         closePreferences();
                         complete(ok(true));
                     }
+                    else if (verb == "dragFiles")
+                        complete(startFileDrag(args.size() > 0 ? args[0] : juce::var()));
                     else
                         complete(ok(false, "unknown window verb '" + verb + "'"));
                 });
@@ -455,6 +457,41 @@ void WebShell::emitToAll(const juce::String& event, const juce::var& payload)
         browser_->emitEventIfBrowserIsVisible(event, payload);
     if (prefsWindow_ != nullptr && prefsReady_)
         prefsWindow_->browser().emitEventIfBrowserIsVisible(event, payload);
+}
+
+juce::File WebShell::dragOutDir()
+{
+    return juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("terminator-drag");
+}
+
+juce::var WebShell::startFileDrag(const juce::var& req)
+{
+    // DRAG OUT (8.6c): the page has already rendered the pad and written the file into the drag folder; all
+    // that is left is to hand the OS a drag. It has to happen while the mouse is still DOWN — the page calls
+    // this from the menu item's pointerdown — because macOS builds the session from the window's current mouse
+    // event. Only files inside our own drag folder are ever offered: the page names a file, never a path.
+    juce::StringArray files;
+    if (auto* arr = req.getProperty("paths", juce::var()).getArray())
+    {
+        for (const auto& v : *arr)
+        {
+            const juce::File f(v.toString());
+            if (f.existsAsFile() && f.isAChildOf(dragOutDir()))
+                files.add(f.getFullPathName());
+        }
+    }
+    if (files.isEmpty())
+        return ok(false, "nothing to drag");
+    // Yesterday's drags are litter in temp — bounded cleanup, here rather than on a timer nobody reads.
+    for (const auto& old : dragOutDir().findChildFiles(juce::File::findFiles, false))
+        if (old.getLastModificationTime() < juce::Time::getCurrentTime() - juce::RelativeTime::days(1) &&
+            !files.contains(old.getFullPathName()))
+            old.deleteFile();
+    const auto started = juce::DragAndDropContainer::performExternalDragDropOfFiles(files, false, this);
+    auto o = ok(started);
+    if (!started)
+        o.getDynamicObject()->setProperty("error", "the OS refused the drag (no mouse button down?)");
+    return o;
 }
 
 bool WebShell::handleOpenRequest(const juce::String& urlOrPath)
@@ -2233,6 +2270,10 @@ void WebShell::runProbeAsyncChecks()
                     // 8.3: the curated-playlist CACHE is not native, so its controls must not be ON SCREEN in
                     // this build — a DL PLAYLIST button that can only answer 0 of 0 is worse than no button.
                     r.playlistCacheHidden = !document.querySelector('.btn-cache-dl') && !document.querySelector('.btn-cache-del');
+                    // DRAG OUT (8.6c): a pad renders to a real WAV in the drag folder, and the shell refuses to
+                    // offer the OS anything outside it. The drag itself needs a held mouse button — a person.
+                    const dg = window.__terminatorNativeDragOut;
+                    r.dragOut = dg && dg.selfTest ? await dg.selfTest() : { error: 'no dragOut' };
                     const lic = window.__terminatorNativeLicense;
                     r.license = lic && lic.selfTest ? await lic.selfTest() : { error: 'no license' };
                     if (lic && lic.seamTest && window.__terminatorProbeLicense) r.licenseSeam = await lic.seamTest();

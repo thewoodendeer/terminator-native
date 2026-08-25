@@ -119,6 +119,11 @@ const KEY_TO_SLOT: Record<string, number> = {};
 for (let i = 0; i < KEY_SEQUENCE.length; i++) KEY_TO_SLOT[KEY_SEQUENCE[i]] = i;
 const KEY_LABELS = KEY_SEQUENCE.toUpperCase().split('');
 
+// DRAG OUT (8.6c, native only) — the pad menu's own drag source. Rendering happens when the menu OPENS so the
+// drag itself is one call; macOS builds a drag session from the window's current mouse event, so it has to be
+// asked for while the button is still down.
+import { PadDragOut, canDragOut } from '../native/dragOutNative';
+
 export function PadGrid({ state, lockedFrom = null, onTrigger, onRelease, onSelect, onFocusPad, onClear, onPitch, onDropFile, onSwapSample, captureKeyboard = true, bank: bankProp, engine, onMovePad, onResamplePad, onMakeMainTrack, onMoveTo, onImportLink, onLoadClipboardLink, onLoadFileInto, onRecordInto, mixerTracks, padRoutes, onRoutePad, chokeGroups, padChoke, onChokePad, drumPadMode = false, drumPadLabels, onFlash, selection, onCut, onCopy, onPaste, onDeletePads, onDuplicatePads }: Props) {
   const isLocked = (padIndex: number) => lockedFrom !== null && padIndex >= lockedFrom;
   const [internalBank, setInternalBank] = useState(0);
@@ -306,6 +311,14 @@ export function PadGrid({ state, lockedFrom = null, onTrigger, onRelease, onSele
   // call the parent callbacks.
   const showMenu = !!engine;
   const [padMenu, setPadMenu] = useState<{ idx: number; rect: DOMRect } | null>(null);
+  // One prepared file per open menu (reset whenever the menu moves to another pad — a stale WAV is worse than
+  // a re-render).
+  const dragOutRef = useRef(new PadDragOut());
+  const dragOutName = (idx: number): string => {
+    const own = state.padBufferMeta[idx]?.title;
+    const base = own || state.trackTitle || 'terminator';
+    return own ? `${base}` : `${base} - pad ${String(idx + 1).padStart(2, '0')}`;
+  };
   // "Mixer track ▸" sub-list open in the pad menu, and whether a pick applies
   // to the whole block. Reset when the menu closes.
   const [routeOpen, setRouteOpen] = useState(false);
@@ -314,6 +327,12 @@ export function PadGrid({ state, lockedFrom = null, onTrigger, onRelease, onSele
   const [groupOpen, setGroupOpen] = useState(false);
   const [stemsOpen, setStemsOpen] = useState(false);
   useEffect(() => { if (!padMenu) { setRouteOpen(false); setRouteBlock(false); setChokeOpen(false); setGroupOpen(false); setStemsOpen(false); } }, [padMenu]);
+  // A menu on a different pad means a different file: forget the last one and warm this pad's in the background.
+  useEffect(() => {
+    dragOutRef.current.reset();
+    if (padMenu && canDragOut() && engine && isLoadedPad(padMenu.idx))
+      void dragOutRef.current.prepare(engine as any, padMenu.idx, dragOutName(padMenu.idx));
+  }, [padMenu?.idx]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── SHIFT multi-select ─────────────────────────────────────────────────────
   // Shift+press toggles a pad in/out of the selection WITHOUT playing it, and a
   // plain click on an EMPTY pad aims the paste there. The selection and the
@@ -607,6 +626,21 @@ export function PadGrid({ state, lockedFrom = null, onTrigger, onRelease, onSele
                   title={`LOOP — the pad plays round and round between the chop's start and end. Hit it again to stop (or hold it with NOTE ON). In LOOP the waveform shows two FADE nodes at the chop's start and end — drag them so the tail fades into the head, a crossfade loop (they can cross for a full melt): a pad or a synth out of any sample${multi ? `. Sets ALL ${targets.length} selected pads` : ''}`}>
                   {mode === 'loop' ? '■ LOOP: on' : '□ LOOP: off'} <span className="pad-pop-hint">{multi ? 'all selected' : 'start ↔ end'}</span>
                 </button>
+                {/* DRAG OUT — the item IS the drag source: press it and drag to Finder or your DAW. It fires on
+                    POINTERDOWN (not click, like every other item here) because the OS builds the drag from the
+                    mouse event that is happening right then. */}
+                {!multi && canDragOut() && (
+                  <button className="pad-pop-drag" disabled={!loaded}
+                    onPointerDown={e => {
+                      if (!loaded || !engine) return;
+                      e.stopPropagation();
+                      void dragOutRef.current.startDrag(engine as any, idx, dragOutName(idx));
+                    }}
+                    onClick={e => e.stopPropagation()}
+                    title="Drag this straight into Finder, Ableton, Logic — anywhere that takes a file. It is what the pad PLAYS (the chop with its pitch, reverse and attack) as a 24-bit WAV. PRESS AND DRAG this item; a plain click does nothing">
+                    ⇱ Drag out <span className="pad-pop-hint">drag me</span>
+                  </button>
+                )}
                 {!multi && <button onClick={() => handlePadMenuAction(idx, 'resample')} disabled={!loaded} title="Print what this pad PLAYS — the chop or sample with its stem layers, pitch, reverse and attack, dry — as a lossless FLAC on the next empty pad: a fresh source you can chop again, saved with the project. It tells you which pad it landed on">Resample</button>}
                 {!multi && onMakeMainTrack && state.padBufferMeta[idx] !== undefined && (
                   <button onClick={() => handlePadMenuAction(idx, 'makemain')}

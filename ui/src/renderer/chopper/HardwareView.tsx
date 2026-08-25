@@ -27,6 +27,8 @@ import { SubscribeModal } from '../components/SubscribeModal';
 import FinishHimPortal, { FinishArrangementSection, defaultFinishSections } from '../finishhim/FinishHimPortal';
 import { ArrangerPreview } from '../arranger/ArrangerPreview';
 import { Arrangement } from '../arranger/types';
+// DRAG OUT (8.6c, native only): the pad menu is the drag source — see dragOutNative.ts for the timing rule.
+import { PadDragOut, canDragOut } from '../native/dragOutNative';
 import { isSubscribed, isDemo, recordPull, FREE_PAD_LIMIT } from '../lib/subscription';
 import { runExport, ExportFormat } from './exporters';
 import { isIOS } from '../lib/download';
@@ -488,6 +490,8 @@ export function HardwareView() {
   // Custom hardware pad grid: bank paging + per-pad menu (copy/paste/dup/move).
   const [padBank, setPadBank] = useState(0);
   const [padMenu, setPadMenu] = useState<number | null>(null);
+  // DRAG OUT: one prepared file per open menu; rendering happens when the menu opens so the drag is one call.
+  const dragOutRef = useRef(new PadDragOut());
   const [moveSource, setMoveSource] = useState<number | null>(null);
   // Clipboard is STATE (not a ref) so Paste can grey out reactively when empty.
   // An ARRAY to match the desktop's shape — the phone only ever cuts/copies one
@@ -1402,6 +1406,15 @@ export function HardwareView() {
   // close doesn't let a follow-up tap fall through to the tab bar underneath).
   // (getPadContent / setPadSlot / firstEmptyAfter and the cut/paste/duplicate
   // ops are imported from padClipboard — shared with the desktop grid.)
+  // A menu on a different pad means a different file: forget the last one and warm this pad's in the background.
+  useEffect(() => {
+    dragOutRef.current.reset();
+    if (padMenu !== null && canDragOut() && engine) {
+      const name = state.padBufferMeta[padMenu]?.title || `${state.trackTitle || 'terminator'} - pad ${String(padMenu + 1).padStart(2, '0')}`;
+      void dragOutRef.current.prepare(engine as any, padMenu, name);
+    }
+  }, [padMenu]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handlePadMenuAction = (idx: number, action: 'cut' | 'copy' | 'paste' | 'duplicate' | 'clear' | 'clearblock' | 'move' | 'record' | 'mode' | 'gate' | 'reverse') => {
     if (action === 'copy') {
       const c = getPadContent(engine, idx);
@@ -2536,6 +2549,20 @@ export function HardwareView() {
                       <button onClick={() => handlePadMenuAction(idx, 'paste')} disabled={!padClipboard?.length}
                         title="Paste the cut/copied pad onto this one">Paste</button>
                       <button onClick={() => handlePadMenuAction(idx, 'duplicate')} disabled={!filled}>Duplicate</button>
+                      {canDragOut() && (
+                        // PRESS AND DRAG this one: it fires on pointerdown, because the OS builds the drag from
+                        // the mouse event happening right then. A plain click does nothing.
+                        <button disabled={!filled}
+                          onPointerDown={e => {
+                            if (!filled) return;
+                            e.stopPropagation();
+                            const name = state.padBufferMeta[idx]?.title || `${state.trackTitle || 'terminator'} - pad ${String(idx + 1).padStart(2, '0')}`;
+                            void dragOutRef.current.startDrag(engine as any, idx, name);
+                          }}
+                          title="Drag this straight into Finder, Ableton, Logic — anywhere that takes a file. It is what the pad PLAYS (the chop with its pitch, reverse and attack) as a 24-bit WAV. PRESS AND DRAG this item; a plain click does nothing">
+                          ⇱ Drag out
+                        </button>
+                      )}
                       <button onClick={() => handlePadMenuAction(idx, 'move')}>
                         {moveSource === null ? 'Move…' : moveSource === idx ? 'Cancel move' : 'Move here'}
                       </button>

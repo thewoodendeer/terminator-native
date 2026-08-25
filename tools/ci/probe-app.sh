@@ -163,6 +163,10 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   echo "drums OK: $(grep -Eo '"drums": ?\{[^}]*\}' "$OUT")"
   # The curated-playlist cache is not native (8.3): its controls must not be on screen in this build.
   grep -Eq '"playlistCacheHidden": ?true' "$OUT" || { echo "::error::the DL PLAYLIST / DEL cache buttons are showing in the native app, where the cache does not exist"; exit 1; }
+  # DRAG OUT (8.6c): the pad menu's file is really rendered and written, and the shell will not hand the OS a
+  # path the page did not put in the drag folder. The drag gesture itself needs a held mouse button — a person.
+  grep -Eq '"dragOut": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::drag-out self-test failed (see the dragOut object above)"; exit 1; }
+  grep -Eq '"refusesOutsideFolder": ?true' "$OUT" || { echo "::error::drag-out: the shell offered the OS a file outside the drag folder"; exit 1; }
   # THE LICENCE (8.5): the bridge is installed, a callback the PAGE forges is refused, and — through the fake
   # seam — the whole round trip: locked at rest → a wrong nonce changes nothing → the nonce is single-use → a
   # matching callback stores the token in the OS store and unlocks → SIGN OUT removes it again.
