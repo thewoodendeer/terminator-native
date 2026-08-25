@@ -26,6 +26,9 @@ class MainWindow final : public juce::DocumentWindow
 
     void closeButtonPressed() override;
 
+    /// A `terminator://…` deep link (8.5, the browser sign-in callback) → the shell. True when it was ours.
+    bool handleDeepLink(const juce::String& url);
+
   private:
     Settings settings_;
     Engine engine_;

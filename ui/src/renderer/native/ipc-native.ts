@@ -22,9 +22,13 @@
  * Electron app's store, bundle bytes via readBinary/writeBinary) and YouTube pulls (the bundled yt-dlp).
  * plus STEMS (stemsNative.ts — htdemucs in process; the split takes the store key, a ready span's PCM comes
  * back through /blob/<token>, and the cache is the same stems-cache.json shape).
+ * plus THE LICENCE (licenseNative.ts — browser sign-in through `terminator://auth`, the device token in the OS
+ * store; the page only ever sees {unlocked, email}).
  * plus DRUMS (drumsNative.ts — the KCC library shipped inside the app and served at /drums/<id>.<ext>, and
  * the user's own <Sample Library>/Drums folder behind the MY DRUMS tab + Preferences → FOLDERS).
- * NOT yet native (browser-shim or undefined): menu open-with-file events, drag-out, licence, cloud presets.
+ * NOT yet native (browser-shim or undefined): menu open-with-file events, drag-out, cloud presets, the curated
+ * PLAYLIST cache (list/status/download/delete — the list itself comes off R2 in the page, so only DL PLAYLIST is
+ * missing), and the MPC-card export (dead in the shipping app too: nothing calls it).
  */
 import { installBrowserIPC } from '../ipc-browser';
 import { isNative, native, nativeBoot, onNativeEvent } from './juceBridge';
@@ -33,6 +37,7 @@ import { buildAssetKeys, installAssetsProbe, readBinaryFile, writeBinaryFile } f
 import { installExportProbe } from './exportNative';
 import { applyModelsDirSetting, buildStemsOverlay, installStemsProbe } from './stemsNative';
 import { buildDrumsOverlay, installDrumsProbe } from './drumsNative';
+import { buildLicenseOverlay, installLicenseProbe } from './licenseNative';
 import { nativeEngineShadow } from './nativeEngineShadow';
 
 type AnyRecord = Record<string, any>;
@@ -320,6 +325,11 @@ export function installNativeIPC(): void {
     const r = await native.fs({ verb: 'du', path }).catch(() => null);
     return { bytes: Number(r?.bytes) || 0, approx: !!r?.approx };
   };
+  // THE LICENCE (8.5): browser sign-in + the device token in the OS store. The five keys lib/desktopAuth.ts
+  // has always spoken; nothing about the token or the one-time code crosses into the page.
+  Object.assign(overlay, buildLicenseOverlay());
+  installLicenseProbe();
+
   // DRUMS: the bundled KCC library + the user's own folder (it lives inside the library, so it moves with it)
   const drums = buildDrumsOverlay({ libraryRoot: () => library.core.libraryRoot() });
   Object.assign(overlay, drums.keys);

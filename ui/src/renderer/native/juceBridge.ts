@@ -71,6 +71,12 @@ export const native = {
    *  endFrame, frames, planes, blob:"/blob/<token>"} (the span's PCM is FETCHED, never put in the payload) ·
    *  `terminator.stemsDone` · `terminator.stemsError` · `terminator.stemsModels`. */
   stems: lazy<AnyRecord, AnyRecord>('terminatorStems'),
+  /** Phase 8.5: THE LICENCE. `{verb:'status'}` → `{ok, unlocked, email, offline, storeAvailable}` (a server
+   *  round trip on a background thread, with the 7-day offline grace) · `{verb:'signIn'}` opens the browser
+   *  sign-in with a one-time nonce · `{verb:'signOut'}` · `{verb:'buy'}`. The DEVICE TOKEN never crosses this
+   *  boundary — it lives in the OS store (Keychain / DPAPI) and only the shell reads it.
+   *  Event: `terminator.authSignedIn` {email} when the `terminator://auth` callback completed. */
+  license: lazy<AnyRecord, AnyRecord>('terminatorLicense'),
   fs: lazy<AnyRecord, AnyRecord>('terminatorFs'),
   settings: lazy<AnyRecord, AnyRecord>('terminatorSettings'),
   window: lazy<AnyRecord, { ok: boolean; error?: string }>('terminatorWindow'),

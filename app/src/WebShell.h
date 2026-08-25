@@ -32,6 +32,7 @@
 #if TERMINATOR_STEMS
 #include "StemHub.h"
 #endif
+#include "LicenseHub.h"
 #include "ShellServices.h"
 
 namespace terminator::app
@@ -45,6 +46,10 @@ class WebShell final : public juce::Component, private juce::Timer
     ~WebShell() override;
 
     void resized() override;
+
+    /// A `terminator://…` deep link the OS handed the app (8.5: the browser sign-in's auth callback). True when
+    /// it was ours. Message thread.
+    bool handleDeepLink(const juce::String& url);
 
     /// THE MENU (8.6) — the app's menu bar forwards here, and these forward to the PAGE (it owns projects, exports
     /// and the layout; the menu is a second way in, never a second implementation).
@@ -107,6 +112,7 @@ class WebShell final : public juce::Component, private juce::Timer
     std::map<juce::String, std::shared_ptr<std::atomic<bool>>> exportCancels_;
     SampleRegistry registry_; // terminatorSamples + setPadSample/setPadLoop — the page's audio in the SampleStore
     ProcessHub processes_;    // terminatorProcess — the bundled yt-dlp as a child process (YouTube import)
+    LicenseHub license_;      // terminatorLicense — browser sign-in, the device token in the OS store (8.5)
     PluginHub plugins_;       // terminatorPlugins — the VST3/AU scan (in child processes) + the known list (6.1)
     PluginRack rack_;         // …and the loaded ones: instances, editors, state (6.2). MUST be declared after
                               // plugins_ (it holds a reference) and destroyed before the engine stops

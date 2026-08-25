@@ -209,6 +209,27 @@ turns any reply whose JSON exceeds 24 KB into `{ ok:true, __largeReply:"/blob/<t
 `lazy()` fetches it transparently, so callers never see it. Applied to `readText` and `list`; apply it to any new
 verb that can answer big (never send > ~24 KB through `complete()`/`emitEvent`).
 
+## `terminatorLicense(req)` — THE DESKTOP LICENCE (Phase 8.5)
+`verb`: `status` → `{ok, unlocked, email, offline, storeAvailable}` · `signIn` (opens the KCC browser sign-in with
+a one-time nonce) · `signOut` · `buy` · `deepLink {url}` (**probe only** — refused unless the fake seam below is
+armed, because a page that could call it could forge its own sign-in).
+- **The DEVICE TOKEN never crosses this boundary.** It is stored by the shell in the OS's own store
+  (`SecretStore`: macOS Keychain, Windows DPAPI) and the page is told `{unlocked, email}`. No OS store → the app
+  stays signed out; there is deliberately no plaintext fallback (the Electron rule, `safeStorage` there).
+- `status` runs its server call on a BACKGROUND thread and answers on the message thread; with no stored token it
+  answers immediately without touching the network. A reachable server that refuses the token (401/403) or says
+  `unlocked:false` DROPS the token; a server that cannot be reached, or answers 5xx, falls back to a **7-day
+  offline grace** off the last successful validation (`offline:true`) so a paying user keeps working.
+- The callback arrives as an OS deep link, `terminator://auth?code=…&state=…` — macOS through the bundle's
+  `CFBundleURLTypes` (app/CMakeLists.txt) and `application:openURLs:` → `anotherInstanceStarted`, Windows through
+  a second process whose command line carries the URL, plus an HKCU registration made on every launch. The
+  `state` must equal the nonce THIS run generated, and it is single-use.
+- **Event:** `terminator.authSignedIn` {email} once the code has been traded for a token.
+- **Test seam:** `TERMINATOR_LICENSE_FAKE=unlocked:<email>|locked|offline|fail` replaces both HTTP calls with a
+  canned answer, arms the `deepLink` verb and moves the credential to its OWN store entry
+  (`device-token-probe`), so a self-test can sign in and out without a KCC account, a live server, a browser, or
+  any risk to the user's real token. `TERMINATOR_LICENSE_BASE` points the two calls at another host.
+
 ## `terminatorSettings(req)` — the UI's settings
 `verb`: `get` → `{ ok, settings }` · `set` {`patch`} → shallow-merges into settings.json **`app`** (the Electron
 `terminator-settings.json` keys, verbatim — Phase 8 imports that file here), saves, emits

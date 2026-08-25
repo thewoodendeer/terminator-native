@@ -1,10 +1,33 @@
 # Terminator — the JUCE shell. A native window hosting a WebView (WKWebView / WebView2) that renders the UI,
 # with the engine + AudioIO behind it. Phase 0: a static status page + bridge v0 (engine info, live snapshot).
+# THE `terminator://` URL SCHEME (8.5): the browser sign-in hands the one-time code back through
+# `terminator://auth?code=…&state=…`, so macOS has to know this bundle owns the scheme (JUCE merges this XML
+# into the generated Info.plist). Windows has no plist — the app claims the scheme itself under HKCU on first
+# run, see registerUrlScheme() in Main.cpp.
+set(TERMINATOR_URL_SCHEME_PLIST [==[
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>Terminator sign-in</string>
+      <key>CFBundleURLSchemes</key>
+      <array><string>terminator</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
+]==])
+
 juce_add_gui_app(Terminator
     PRODUCT_NAME "Terminator"
     COMPANY_NAME "Killavic Cheat Codes"
     BUNDLE_ID "app.killaviccheatcodes.terminator"
     VERSION "${PROJECT_VERSION}"
+    PLIST_TO_MERGE "${TERMINATOR_URL_SCHEME_PLIST}"
     NEEDS_WEB_BROWSER TRUE
     NEEDS_WEBVIEW2 TRUE
     MICROPHONE_PERMISSION_ENABLED TRUE
@@ -43,6 +66,10 @@ target_sources(Terminator PRIVATE
     src/PluginRack.cpp
     src/StemHub.h
     src/StemHub.cpp
+    src/LicenseHub.h
+    src/LicenseHub.cpp
+    src/SecretStore.h
+    src/SecretStore.cpp
     src/AppMenu.h
     src/AppMenu.cpp)
 
@@ -70,7 +97,10 @@ target_link_libraries(Terminator PRIVATE
     juce::juce_audio_utils
     juce::juce_audio_processors
     juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags)
+    juce::juce_recommended_lto_flags
+    # the device token at rest: macOS Keychain Services, Windows DPAPI (SecretStore.cpp)
+    $<$<PLATFORM_ID:Darwin>:-framework\ Security>
+    $<$<PLATFORM_ID:Windows>:crypt32>)
 terminator_set_warnings(Terminator)
 
 # The built React UI (ui/dist — `cd ui && npm ci && npm run gate`) rides inside the app: macOS bundle

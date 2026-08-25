@@ -21,6 +21,10 @@ if [ ! -d "$BUNDLED_DRUMS" ]; then
 else
   echo "== drum library bundled: $(ls "$BUNDLED_DRUMS" | wc -l | tr -d ' ') file(s)"
 fi
+# THE LICENCE (8.5): the sign-in state machine is gated through the shell's FAKE seam — a gate may never depend
+# on a real KCC account, a live server or a browser. It also makes the probe use its own OS-store entry, so a
+# machine where somebody is really signed in keeps its device token.
+export TERMINATOR_LICENSE_FAKE="${TERMINATOR_LICENSE_FAKE:-unlocked:probe@terminator.test}"
 TERMINATOR_PROBE_FILE="$OUT" "$BIN" &
 PID=$!
 # 150 s: the React probe's self-test runs the sequencers in real time (≈ 25 s on a Mac, 60+ s on a starved CI runner —
@@ -111,6 +115,15 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"userWalked": ?true' "$OUT" || { echo "::error::drums self-test: the MY DRUMS walk did not find a file in a folder it filled itself"; exit 1; }
   grep -Eq '"userDirInLibrary": ?true' "$OUT" || { echo "::error::drums self-test: the user drums folder is not the Drums folder inside the sample library"; exit 1; }
   echo "drums OK: $(grep -Eo '"drums": ?\{[^}]*\}' "$OUT")"
+  # THE LICENCE (8.5): the bridge is installed, a callback the PAGE forges is refused, and — through the fake
+  # seam — the whole round trip: locked at rest → a wrong nonce changes nothing → the nonce is single-use → a
+  # matching callback stores the token in the OS store and unlocks → SIGN OUT removes it again.
+  grep -Eq '"license": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::licence self-test failed (see the license object above — bridge installed? status answering? OS store available?)"; exit 1; }
+  grep -Eq '"licenseSeam": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::licence self-test: the sign-in round trip failed (see the licenseSeam object above)"; exit 1; }
+  grep -Eq '"wrongStateStillLocked": ?true' "$OUT" || { echo "::error::licence self-test: a callback with the WRONG nonce signed the app in — that is a forgeable sign-in"; exit 1; }
+  grep -Eq '"nonceIsSingleUse": ?true' "$OUT" || { echo "::error::licence self-test: a consumed nonce could be replayed"; exit 1; }
+  grep -Eq '"signedOutLocked": ?true' "$OUT" || { echo "::error::licence self-test: SIGN OUT left the device token in place"; exit 1; }
+  echo "licence OK: $(grep -Eo '"licenseSeam": ?\{[^}]*\}' "$OUT")"
   # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and
   # when the library already holds a file the shell served it byte-complete
   # the offline exporter (4.5e): the project rendered through the real engine + mixer and a real WAV landed on disk

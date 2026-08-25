@@ -233,6 +233,7 @@ WebShell::WebShell(Engine& engine, AudioIO& audioIO, MidiHub& midi, SampleStore&
       audioError_(std::move(audioError))
 {
     plugins_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
+    license_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
 #if TERMINATOR_STEMS
     stems_.onEvent = [this](const juce::String& ev, const juce::var& payload) { emitToAll(ev, payload); };
 #endif
@@ -305,6 +306,10 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
     // (kept opt-in: a media load through the scheme handler is the one thing that can stall the page)
     // TERMINATOR_PROBE_NET=1: the library self-test also pulls one short public YouTube video through the bundled
     // yt-dlp into a TEMP root (network; never the user's library) — the end-to-end YouTube import smoke test
+    const juce::String probeLicense =
+        juce::SystemStats::getEnvironmentVariable("TERMINATOR_LICENSE_FAKE", {}).isNotEmpty()
+            ? "window.__terminatorProbeLicense = true;"
+            : "void 0;";
     const juce::String probeAudio =
         juce::String(juce::SystemStats::getEnvironmentVariable("TERMINATOR_PROBE_AUDIO", {}).isNotEmpty()
                          ? "window.__terminatorProbeAudio = true;"
@@ -321,6 +326,7 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
             .withKeepPageLoadedWhenBrowserIsHidden()
             .withUserScript(kErrorCollector)
             .withUserScript(probeAudio)
+            .withUserScript(probeLicense)
             // window.__TERMINATOR_BOOT__ = { version, settings, dirs } before any page script (sync boot reads)
             .withUserScript(services_.bootUserScript(terminator::versionString()))
             .withResourceProvider([this](const juce::String& url) { return provideResource(url); })
@@ -337,6 +343,12 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
             .withNativeFunction("terminatorRecord", [this](const juce::Array<juce::var>& args,
                                                            juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { complete(handleRecord(args.size() > 0 ? args[0] : juce::var())); })
+            // THE LICENCE (8.5): status / signIn / signOut / buy. The token never crosses this boundary — the
+            // page is answered {unlocked, email} and nothing else.
+            .withNativeFunction(
+                "terminatorLicense",
+                [this](const juce::Array<juce::var>& args, juce::WebBrowserComponent::NativeFunctionCompletion complete)
+                { license_.handle(args.size() > 0 ? args[0] : juce::var(), std::move(complete)); })
             .withNativeFunction("terminatorInfo", [this](const juce::Array<juce::var>&,
                                                          juce::WebBrowserComponent::NativeFunctionCompletion complete)
                                 { complete(engineInfo()); })
@@ -434,6 +446,13 @@ void WebShell::emitToAll(const juce::String& event, const juce::var& payload)
         browser_->emitEventIfBrowserIsVisible(event, payload);
     if (prefsWindow_ != nullptr && prefsReady_)
         prefsWindow_->browser().emitEventIfBrowserIsVisible(event, payload);
+}
+
+bool WebShell::handleDeepLink(const juce::String& url)
+{
+    // 8.5: `terminator://auth?code=…&state=…` from the browser sign-in. Everything about it — the nonce match,
+    // the token exchange, the store — belongs to the hub; the shell only routes.
+    return license_.handleDeepLink(url);
 }
 
 void WebShell::menuCommand(const juce::String& key)
@@ -2146,6 +2165,11 @@ void WebShell::runProbeAsyncChecks()
                     // path is refused; the MY DRUMS walk runs over a folder the probe fills in temp
                     const dr = window.__terminatorNativeDrums;
                     r.drums = dr && dr.selfTest ? await dr.selfTest() : { error: 'no drums' };
+                    // THE LICENCE (8.5): the bridge is there and a forged callback is refused; with the fake
+                    // seam armed (TERMINATOR_LICENSE_FAKE) the whole sign-in round trip runs too
+                    const lic = window.__terminatorNativeLicense;
+                    r.license = lic && lic.selfTest ? await lic.selfTest() : { error: 'no license' };
+                    if (lic && lic.seamTest && window.__terminatorProbeLicense) r.licenseSeam = await lic.seamTest();
                     r.done = true;
                 } catch (e) { r.error = String(e && (e.stack || e.message) || e); }
             })();

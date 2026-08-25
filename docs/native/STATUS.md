@@ -1739,6 +1739,44 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 8 — 8.5a DONE (THE LICENCE IS NATIVE — MECHANISM IN, GATE STILL OFF), 2026-08-25 nineteenth session
+
+Terminator 3.0 could not be sold: there was no sign-in, no device token, no entitlement check — `checkLicense`
+and friends were the browser shim, and ChopperView's gate has an explicit "NATIVE build: unlocked until the
+licence flow is ported" escape hatch. The MECHANISM is now native, rule for rule with the Electron app's
+`src/main/desktopLicense.ts`. **The gate itself is still off** — that flip waits until Victor has signed in on a
+real build, because a bug there locks a paying user out of his own app.
+
+- **`app/src/LicenseHub.{h,cpp}`** = the port: browser-only sign-in (no password form, no Supabase token in the
+  page), a one-time nonce per attempt held in memory, the `terminator://auth?code&state` callback traded for a
+  long-lived server-signed DEVICE TOKEN, re-validation on every launch, and the **7-day offline grace** off the
+  last good validation. A reachable server that refuses (401/403) or answers `unlocked:false` DROPS the token; a
+  server that cannot be reached, or 5xx, falls back to the grace window rather than punishing the user.
+- **`app/src/SecretStore.{h,cpp}`** = the token at rest, in the OS's own store: **macOS Keychain Services**
+  (a generic-password item) and **Windows DPAPI** (`CryptProtectData`, bound to the logged-in user). No store →
+  the app stays signed out. There is deliberately NO plaintext fallback — that is Electron's `safeStorage` rule
+  and the reason the file it writes is not a file we could have just copied.
+- **The deep link works on both platforms.** macOS: `CFBundleURLTypes` merged into the generated Info.plist
+  (`PLIST_TO_MERGE` in app/CMakeLists.txt — verified with `plutil -p` on the built bundle), delivered as
+  `application:openURLs:` → `anotherInstanceStarted`. Windows: a second process carries the URL on its command
+  line, and the app claims the scheme under HKCU on every launch (no installer step, no admin). A COLD-START
+  link (the app was not running) is buffered until the window exists.
+- **The token never reaches the page.** `terminatorLicense` answers `{unlocked, email, offline, storeAvailable}`;
+  `licenseNative.ts` is only the five keys `lib/desktopAuth.ts` has always spoken, so no renderer code changed.
+- **Gates** (`window.__terminatorNativeLicense`, asserted in tools/ci/probe-app.sh): the bridge is installed and
+  `status` answers; and through a FAKE SEAM the whole round trip — locked at rest → **a callback with the wrong
+  nonce changes nothing** → **the nonce is single-use, so even the right one cannot be replayed after it** → a
+  matching callback stores the token in the real OS store and unlocks (with the `terminator.authSignedIn` event)
+  → **SIGN OUT removes the credential**. The seam (`TERMINATOR_LICENSE_FAKE`) replaces both HTTP calls, arms the
+  probe-only `deepLink` verb and moves the credential to its own store entry, so the gate needs no KCC account,
+  no live server and no browser — and can never touch the user's real device token.
+- Measured on this Mac: `licenseSeam {startLocked, gotNonce, wrongStateStillLocked, nonceIsSingleUse,
+  signedInEvent, unlocked, signedOutLocked} all true`, `storeAvailable: true` (a real Keychain item written,
+  read and deleted inside the run, no prompt). ctest **419/419**, ui gate green.
+- **What is NOT done here:** the gate flip (ChopperView + lib/subscription.ts still return early for native),
+  the free tier's pad lock, and the EULA→Supabase insert. Phase 9.4b also needs the bundle id moved to
+  `com.terminator.audio` before the 2.x→3.0 handover — today it is `app.killaviccheatcodes.terminator`.
+
 ## Phase 8 — 8.2a DONE (THE DRUM LIBRARY IS IN THE APP, AND MY DRUMS IS REAL), 2026-08-25 nineteenth session
 
 Drums were the last thing in the native app still reaching over the NETWORK: `terminator-drums://` is an Electron
