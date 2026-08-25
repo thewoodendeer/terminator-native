@@ -211,12 +211,12 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --preset win-release --timeout 300 --output-on-failure
-      # The Windows app is LAUNCHED here — the only place it ever is. Still soft (a warning, not a red build)
-      # until it has been seen to pass a few times; what it reports is now the same engine half the mac probe
-      # runs, because TERMINATOR_NULL_AUDIO gives a runner with no sound card a real, wall-clock-paced device.
-      - name: "Smoke — launch the app, probe the WebView2 + bridge + engine (soft for now)"
+      # The Windows app is LAUNCHED here — the only place it ever is — and this is a REAL gate: it passed on
+      # 2026-08-25 with the whole engine half green (sequencer, drums, bass, mixer + its PDC plan, licence, an
+      # MP3 through the bundled lame.exe, onnxruntime loaded), so a failure from here on is a regression, not a
+      # runner quirk. TERMINATOR_NULL_AUDIO=auto is insurance for a runner that turns up without a sound card.
+      - name: "Smoke — launch the app, probe the WebView2 + bridge + engine"
         shell: pwsh
-        continue-on-error: true
         timeout-minutes: 6
         run: |
           $out = "build/probe-win.json"
@@ -224,15 +224,31 @@ jobs:
           $env:TERMINATOR_NULL_AUDIO = "auto"                              # no sound card on a runner
           $env:TERMINATOR_LICENSE_FAKE = "unlocked:probe@terminator.test"   # never a real account / server
           $p = Start-Process -FilePath "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -PassThru
-          if (-not $p.WaitForExit(240000)) { $p.Kill(); Write-Host "::warning::app did not quit in 240 s"; exit 1 }
-          if (-not (Test-Path $out)) { Write-Host "::warning::no probe file written"; exit 1 }
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); Write-Host "::error::the app did not quit in 240 s"; exit 1 }
+          if (-not (Test-Path $out)) { Write-Host "::error::no probe file written — the app never reached its final read"; exit 1 }
           Get-Content $out
-          if (-not (Select-String -Path $out -Pattern '"hasJuce": ?true' -Quiet)) { Write-Host "::warning::bridge not injected in WebView2"; exit 1 }
-          if ((Select-String -Path $out -Pattern '"uiMode": ?"react"' -Quiet) -and -not (Select-String -Path $out -Pattern '"chopperView": ?true' -Quiet)) { Write-Host "::warning::React UI served but ChopperView did not render in WebView2"; exit 1 }
-          foreach ($check in @('"enginePrepared": ?true', '"seqPageOk": ?true', '"drumPageOk": ?true', '"bassPageOk": ?true', '"mixerPageOk": ?true', '"license": ?\{[^}]*"ok": ?true')) {
-            if (-not (Select-String -Path $out -Pattern $check -Quiet)) { Write-Host "::warning::windows probe: $check did not hold" }
+          if (-not (Select-String -Path $out -Pattern '"hasJuce": ?true' -Quiet)) { Write-Host "::error::bridge not injected in WebView2"; exit 1 }
+          if ((Select-String -Path $out -Pattern '"uiMode": ?"react"' -Quiet) -and -not (Select-String -Path $out -Pattern '"chopperView": ?true' -Quiet)) { Write-Host "::error::React UI served but ChopperView did not render in WebView2"; exit 1 }
+          if (-not (Select-String -Path $out -Pattern '"errors": ?\[\]' -Quiet)) { Write-Host "::error::the page reported uncaught errors"; exit 1 }
+          $checks = @{
+            '"enginePrepared": ?true'          = 'the engine never reached a device';
+            '"seqPageOk": ?true'               = 'the page transport did not drive the native chop sequencer';
+            '"drumPageOk": ?true'              = 'the drum machine did not drive the native drum sequencer';
+            '"bassPageOk": ?true'              = 'the bass did not drive the native bass sequencer/synth';
+            '"metroPageOk": ?true'             = 'the metronome / count-in / arp did not run natively';
+            '"liveRecOk": ?true'               = 'live record did not land on the engine clock';
+            '"mixerPageOk": ?true'             = 'the page mixer did not drive the native mixer (see mixerPdcNums)';
+            '"license": ?\{[^}]*"ok": ?true'   = 'the licence bridge did not answer';
+            '"licenseSeam": ?\{[^}]*"ok": ?true' = 'the sign-in round trip failed';
+            '"export": ?\{[^}]*"ok": ?true'    = 'the offline export failed';
+            '"ortLoaded": ?true'               = 'onnxruntime did not load (stems would be unavailable)';
+            '"playlistCacheHidden": ?true'     = 'the DL PLAYLIST / DEL cache buttons are showing';
           }
-          Write-Host "PROBE OK (windows, soft)"
+          foreach ($check in $checks.Keys) {
+            if (-not (Select-String -Path $out -Pattern $check -Quiet)) { Write-Host "::error::windows probe: $($checks[$check])"; exit 1 }
+          }
+          Write-Host "perf: $((Select-String -Path $out -Pattern '"perf": \{[^}]*\}' -AllMatches).Matches.Value)"
+          Write-Host "PROBE OK (windows)"
       - name: Package app
         shell: pwsh
         run: Compress-Archive -Path "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -DestinationPath "build/Terminator-win-x64-unsigned.zip"

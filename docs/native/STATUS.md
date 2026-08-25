@@ -1739,19 +1739,24 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
-## CI CAN RUN THE ENGINE NOW — THE OFFLINE AUDIO DEVICE (2026-08-25 nineteenth session)
+## THE OFFLINE AUDIO DEVICE — insurance for a machine with no sound card (2026-08-25 nineteenth session)
 
-The finding above left a hole worth more than the two gates it fixed: **everything that needs a prepared engine
-was skipped on CI** — the chop sequencer, the drum machine, the bass, the metronome and count-in, live record,
-the whole mixer and its PDC plan — because a GitHub runner has no audio device. Roughly thirty assertions only
-ever ran when somebody probed on a real Mac.
+**CORRECTION (same day, from the first CI run that carried this):** the claim this section was written on —
+"a GitHub runner has no audio device, so the engine half is skipped on CI" — is **WRONG**. Both the macOS and
+the Windows runners come up with a real 44.1 kHz / 64-sample device, and the engine block has been running there
+all along. What was actually true is narrower and still worth having: `mixerPdcPlan` passed on CI and failed on
+a real machine because **a fresh runner has no saved settings, so PDC defaults ON, while this Mac had it saved
+OFF** — the gate never turned it on. The offline device below is therefore insurance and control, not a hole
+being filled: it removes the dependency on a runner happening to have a sound card, and it turns "no audio
+device" from a warning that skipped half the gate into an error.
 
 - `engine/src/io/NullAudioDevice.cpp` is a real `juce::AudioIODevice` that pulls blocks on its own high-priority
   thread, **paced to the wall clock** at 48 kHz / 512. The pacing is the point: the cursor and drift checks
   compare the engine's sample clock against `performance.now()`, so a device running flat out would prove
   nothing.
 - **It never appears by accident.** `TERMINATOR_NULL_AUDIO=1` selects it; `=auto` registers it and falls back to
-  it only when nothing real opens; unset — every user's app — and the type is not even registered.
+  it only when nothing real opens; unset — every user's app — and the type is not even registered. On CI it has
+  so far never been NEEDED (both runners have a device); it is the safety net for the day one does not.
   `tools/ci/probe-app.sh` sets `auto`, so a machine with an interface is completely unaffected, and "no audio
   device on this machine" is now an ERROR rather than a warning that skipped half the gate.
 - **It is never written into the user's saved setup** (`persistAudioSetup` refuses it): a test fixture in
@@ -1760,6 +1765,24 @@ ever ran when somebody probed on a real Mac.
 - Measured on the offline device: PROBE OK with `enginePrepared · seq · drums · bass · metro · liveRec · mixer`
   all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
   itself at a second rate.
+
+## THE WINDOWS BUILD HAS NOW BEEN RUN — AND IT IS A REAL GATE (2026-08-25 nineteenth session)
+
+The Windows job built the app and never launched it: its smoke step was `continue-on-error: true` and every
+failure was a warning, so "the Windows build works" was an assumption nobody had tested. It now launches with
+the engine going, and on 2026-08-25 the whole thing came back green on a runner:
+
+- `enginePrepared · seqPageOk · drumPageOk · bassPageOk · metroPageOk · liveRecOk · mixerPageOk` all true, with
+  the PDC plan at **264 samples = 6 ms at 44.1 kHz**, the cursor tracking inside tolerance and **−1.05 ms** of
+  transport drift (the Mac runner, busier, showed 166 ms);
+- the licence bridge, the full sign-in round trip and the signed-out cloud refusal;
+- an **MP3 through the bundled `lame.exe`** (90,240 bytes) and **onnxruntime 1.23.2 loaded**, so stems have
+  their runtime there;
+- perf: window 1,679 ms · engine 1,766 ms · page 9,675 ms (a slow runner), **178 MB** resident, **2.2% of a
+  core at 64 samples, 0 xruns**.
+
+So the step is now a HARD gate with named failures (twelve of them), and `continue-on-error` is gone. A red
+Windows job from here means a regression, not a runner quirk.
 
 ## THE TWO "KNOWN LOCAL PROBE FAILURES" WERE BAD GATES, NOT A BAD MACHINE (2026-08-25 nineteenth session)
 
@@ -1772,9 +1795,10 @@ has never passed on a real machine**.
   the whole time. It now switches PDC on for the measurement (and puts it back, like everything else in that
   block), and asserts the plan is **the COMP's real look-ahead** — 6 ms, 264 samples at 44.1 kHz, ±1 — instead of
   merely "> 0", which would pass on a plan that is quietly wrong.
-- **And CI never covered it.** The mixer block only runs when the engine is prepared, and CI runners have no
-  audio device — so "green in CI" meant SKIPPED in CI. `mixerPageOk` (and with it every mixer assertion) has
-  been vacuous on CI and failing everywhere else.
+- **Why it passed on CI and failed here** (checked properly afterwards — the first guess, "CI has no audio
+  device so the block is skipped", was wrong: both runners have one): a **fresh runner has no saved settings**,
+  so PDC comes up ON and the plan appeared; this Mac had PDC saved OFF. The gate depended on a user setting it
+  never touched, which is the same class of bug as depending on the machine.
 - **`prefsWindow`: the check measured FOCUS.** It read the Preferences window's visibility at the final read.
   That window is always-on-top, so macOS orders it out whenever Terminator is not frontmost — a probe running
   while somebody else uses the Mac failed for a reason that has nothing to do with the build. It now asserts the
