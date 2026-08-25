@@ -30,66 +30,88 @@ class TerminatorApplication final : public juce::JUCEApplication
             quit();
             return;
         }
-        registerUrlScheme();
+        registerOsAssociations();
         mainWindow_ = std::make_unique<MainWindow>(getApplicationName());
-        // A COLD-START deep link: the OS launched us *because* of `terminator://auth?…`, so the URL arrives on
-        // the command line (Windows) or was queued before the window existed (macOS). Deliver it now that there
-        // is something to deliver it to.
-        deliverDeepLink(commandLine);
-        if (pendingDeepLink_.isNotEmpty())
+        // A COLD START: the OS launched us *because* of a `terminator://auth?…` link or a double-clicked
+        // project, so it arrives on the command line (Windows) or was queued before the window existed
+        // (macOS). Deliver it now that there is something to deliver it to.
+        deliverOpenRequest(commandLine);
+        if (pendingOpen_.isNotEmpty())
         {
-            const auto url = pendingDeepLink_;
-            pendingDeepLink_.clear();
-            mainWindow_->handleDeepLink(url);
+            const auto pending = pendingOpen_;
+            pendingOpen_.clear();
+            mainWindow_->handleOpenRequest(pending);
         }
     }
 
     void shutdown() override { mainWindow_ = nullptr; }
     void systemRequestedQuit() override { quit(); }
-    /// A second launch — including how BOTH platforms hand over a `terminator://` link: macOS routes
-    /// `application:openURLs:` here, Windows starts a second process whose command line carries the URL. The
-    /// running instance owns the pending sign-in nonce, so the link has to reach IT, never a new process.
+    /// A second launch — and how BOTH platforms hand over a `terminator://` link or a double-clicked project:
+    /// macOS routes `application:openFile(s):` and the GetURL Apple Event here, Windows starts a second process
+    /// whose command line carries the path or URL. The running instance owns the open project and the pending
+    /// sign-in nonce, so the hand-over has to reach IT, never a new process.
     void anotherInstanceStarted(const juce::String& commandLine) override
     {
-        deliverDeepLink(commandLine);
+        deliverOpenRequest(commandLine);
         if (mainWindow_ != nullptr)
             mainWindow_->toFront(true);
     }
 
   private:
-    /// WINDOWS ONLY: claim `terminator://` for this executable under HKCU (no admin, no installer step — the
-    /// same place electron-builder's NSIS script writes it). macOS learns the scheme from the bundle's
-    /// Info.plist instead (app/CMakeLists.txt), so there is nothing to do there. Cheap enough to re-assert on
-    /// every launch, which also fixes the association after the app is moved.
-    static void registerUrlScheme()
+    /// WINDOWS ONLY: claim `terminator://` and the two project extensions for this executable under HKCU (no
+    /// admin, no installer step — the same place electron-builder's NSIS script writes them). macOS learns both
+    /// from the bundle's Info.plist instead (app/CMakeLists.txt), so there is nothing to do there. Cheap enough
+    /// to re-assert on every launch, which also fixes the associations after the app is moved.
+    static void registerOsAssociations()
     {
 #if JUCE_WINDOWS
         const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getFullPathName();
-        const auto key = juce::String("HKEY_CURRENT_USER\\Software\\Classes\\terminator\\");
-        juce::WindowsRegistry::setValue(key, "URL:Terminator Protocol");
-        juce::WindowsRegistry::setValue(key + "URL Protocol", "");
-        juce::WindowsRegistry::setValue(key + "shell\\open\\command\\", "\"" + exe + "\" \"%1\"");
+        const auto open = juce::String("\"") + exe + "\" \"%1\"";
+        const auto classes = juce::String("HKEY_CURRENT_USER\\Software\\Classes\\");
+
+        juce::WindowsRegistry::setValue(classes + "terminator\\", "URL:Terminator Protocol");
+        juce::WindowsRegistry::setValue(classes + "terminator\\URL Protocol", "");
+        juce::WindowsRegistry::setValue(classes + "terminator\\shell\\open\\command\\", open);
+
+        // .tproj / .tprojz → one ProgId each, so Explorer shows a real name and double-click opens THIS app.
+        const auto assoc = [&](const char* ext, const char* progId, const char* label)
+        {
+            juce::WindowsRegistry::setValue(classes + ext + "\\", progId);
+            juce::WindowsRegistry::setValue(classes + progId + "\\", label);
+            juce::WindowsRegistry::setValue(classes + progId + "\\DefaultIcon\\", exe + ",0");
+            juce::WindowsRegistry::setValue(classes + progId + "\\shell\\open\\command\\", open);
+        };
+        assoc(".tproj", "Terminator.Project", "Terminator Project");
+        assoc(".tprojz", "Terminator.ProjectBundle", "Terminator Project Bundle");
 #endif
     }
 
-    /// Pull a `terminator://…` URL out of a command line / open-URL string and hand it to the window (or hold
-    /// it until there is one).
-    void deliverDeepLink(const juce::String& text)
+    /// Is this token something the app should OPEN? A `terminator://` link (the sign-in callback) or a project
+    /// file the OS handed us (double-click in Finder / Explorer, or "open with").
+    static bool isOpenable(const juce::String& t)
+    {
+        return t.startsWithIgnoreCase("terminator://") || t.endsWithIgnoreCase(".tproj") ||
+               t.endsWithIgnoreCase(".tprojz");
+    }
+
+    /// Pull an openable token out of a command line / open-file / open-URL string and hand it to the window (or
+    /// hold it until there is one — a COLD start arrives before `initialise()` has built anything).
+    void deliverOpenRequest(const juce::String& text)
     {
         for (const auto& token : juce::StringArray::fromTokens(text, true))
         {
             const auto t = token.unquoted();
-            if (!t.startsWithIgnoreCase("terminator://"))
+            if (!isOpenable(t))
                 continue;
             if (mainWindow_ != nullptr)
-                mainWindow_->handleDeepLink(t);
+                mainWindow_->handleOpenRequest(t);
             else
-                pendingDeepLink_ = t; // the window is not up yet (cold start) — initialise() delivers it
+                pendingOpen_ = t; // the window is not up yet — initialise() delivers it
             return;
         }
     }
 
-    juce::String pendingDeepLink_;
+    juce::String pendingOpen_;
     std::unique_ptr<MainWindow> mainWindow_;
 };
 

@@ -108,9 +108,9 @@ void MainWindow::closeButtonPressed()
     juce::JUCEApplication::getInstance()->systemRequestedQuit();
 }
 
-bool MainWindow::handleDeepLink(const juce::String& url)
+bool MainWindow::handleOpenRequest(const juce::String& urlOrPath)
 {
-    return shell_ != nullptr && shell_->handleDeepLink(url);
+    return shell_ != nullptr && shell_->handleOpenRequest(urlOrPath);
 }
 
 } // namespace terminator::app

@@ -47,9 +47,10 @@ class WebShell final : public juce::Component, private juce::Timer
 
     void resized() override;
 
-    /// A `terminator://…` deep link the OS handed the app (8.5: the browser sign-in's auth callback). True when
-    /// it was ours. Message thread.
-    bool handleDeepLink(const juce::String& url);
+    /// Something the OS handed the app: a `terminator://…` deep link (8.5, the browser sign-in's auth callback)
+    /// or a PROJECT FILE to open (8.6, double-clicked in Finder / Explorer). True when it was handled.
+    /// Message thread.
+    bool handleOpenRequest(const juce::String& urlOrPath);
 
     /// THE MENU (8.6) — the app's menu bar forwards here, and these forward to the PAGE (it owns projects, exports
     /// and the layout; the menu is a second way in, never a second implementation).
@@ -143,6 +144,8 @@ class WebShell final : public juce::Component, private juce::Timer
     double calibrationResultSamples_ = -1.0;
     double calibrationResultMs_ = -1.0;
     int calibrationReportedSamples_ = 0;
+    /// A project the OS handed us before the page was ready (cold-start double-click) — flushed by pageLoaded.
+    juce::String pendingOpenFile_;
     juce::File probeFile_;
     juce::File uiDir_;        // invalid = no built UI present → the embedded Phase-1 static page is served
     bool pageReady_ = false;  // no events to the page before it has loaded (window.__JUCE__ is injected with it)

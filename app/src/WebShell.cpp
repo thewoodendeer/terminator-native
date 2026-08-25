@@ -448,11 +448,26 @@ void WebShell::emitToAll(const juce::String& event, const juce::var& payload)
         prefsWindow_->browser().emitEventIfBrowserIsVisible(event, payload);
 }
 
-bool WebShell::handleDeepLink(const juce::String& url)
+bool WebShell::handleOpenRequest(const juce::String& urlOrPath)
 {
     // 8.5: `terminator://auth?code=…&state=…` from the browser sign-in. Everything about it — the nonce match,
     // the token exchange, the store — belongs to the hub; the shell only routes.
-    return license_.handleDeepLink(url);
+    if (urlOrPath.startsWithIgnoreCase("terminator://"))
+        return license_.handleDeepLink(urlOrPath);
+    // 8.6: a double-clicked project. It rides the contract the page has always had for "open this file" (the
+    // one Open Recent uses), so a file from Finder and a file from the menu take exactly the same path in.
+    const juce::File f(urlOrPath);
+    if (!f.existsAsFile())
+        return false;
+    // A COLD start hands the file over while the page is still loading, and an event emitted then reaches
+    // nobody — so hold it until the page says it is ready (pageLoaded flushes it).
+    if (!pageReady_)
+    {
+        pendingOpenFile_ = f.getFullPathName();
+        return true;
+    }
+    menuOpenRecent(f.getFullPathName());
+    return true;
 }
 
 void WebShell::menuCommand(const juce::String& key)
@@ -2100,6 +2115,13 @@ void WebShell::handlePads(const juce::var& req, juce::WebBrowserComponent::Nativ
 void WebShell::pageLoaded(const juce::String& url)
 {
     pageReady_ = true;
+    // A project the OS asked us to open before the page existed (8.6, a double-clicked .tproj on a cold start).
+    if (pendingOpenFile_.isNotEmpty())
+    {
+        const auto path = pendingOpenFile_;
+        pendingOpenFile_.clear();
+        menuOpenRecent(path);
+    }
     if (probeFile_ != juce::File())
         std::cerr << "probe: page loaded " << url << std::endl;
     if (probeFile_ != juce::File() && !probeArmed_)

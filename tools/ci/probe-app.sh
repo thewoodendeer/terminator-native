@@ -25,6 +25,17 @@ fi
 # on a real KCC account, a live server or a browser. It also makes the probe use its own OS-store entry, so a
 # machine where somebody is really signed in keeps its device token.
 export TERMINATOR_LICENSE_FAKE="${TERMINATOR_LICENSE_FAKE:-unlocked:probe@terminator.test}"
+# WHAT THE OS HANDS THE APP (8.5 / 8.6): the built BUNDLE has to declare the `terminator://` scheme (the browser
+# sign-in's callback) and the two project document types (a double-clicked .tproj / .tprojz). These live in a
+# plist JUCE generates, which is exactly the kind of thing that goes missing in a CMake edit and is invisible
+# until a user double-clicks a file and nothing happens.
+INFO_PLIST="$(cd "$(dirname "$BIN")" && pwd)/../Info.plist"
+if [ -f "$INFO_PLIST" ] && command -v plutil >/dev/null 2>&1; then
+  plutil -p "$INFO_PLIST" | grep -q '"terminator"' || { echo "::error::the bundle does not claim the terminator:// URL scheme — the browser sign-in callback would go nowhere"; exit 1; }
+  plutil -p "$INFO_PLIST" | grep -q '"tproj"' || { echo "::error::the bundle does not claim .tproj — double-clicking a project would not open it"; exit 1; }
+  plutil -p "$INFO_PLIST" | grep -q '"tprojz"' || { echo "::error::the bundle does not claim .tprojz — double-clicking a project bundle would not open it"; exit 1; }
+  echo "== bundle claims terminator:// + .tproj + .tprojz"
+fi
 TERMINATOR_PROBE_FILE="$OUT" "$BIN" &
 PID=$!
 # 150 s: the React probe's self-test runs the sequencers in real time (≈ 25 s on a Mac, 60+ s on a starved CI runner —

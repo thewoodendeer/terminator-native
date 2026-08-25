@@ -1739,6 +1739,29 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 8 — 8.6b DONE (DOUBLE-CLICK A PROJECT AND IT OPENS), 2026-08-25 nineteenth session
+
+The 2.x app registers `.tproj` / `.tprojz` with the OS; 3.0 registered nothing, so a double-clicked project
+opened the old app (or nothing). Both platforms now claim them, and the file rides the contract the page has
+always had for "open this file" — the same one Open Recent uses, so Finder and the menu take the identical path
+in and there is no second implementation to drift.
+
+- **macOS**: `CFBundleDocumentTypes` for both extensions (Role Editor, `LSHandlerRank` Owner) merged into the
+  generated Info.plist beside the `terminator://` scheme; JUCE routes `application:openFile(s):` and the GetURL
+  Apple Event to `anotherInstanceStarted`, which is where Main.cpp already listens.
+- **Windows**: one ProgId per extension under `HKCU\Software\Classes` (name, icon, open command) plus the URL
+  scheme, re-asserted on every launch — no admin, no installer step, and it fixes the association after the app
+  is moved. Same place electron-builder's NSIS script writes them.
+- **A COLD start is the case that breaks this** and it is handled twice over: the OS hands the file over before
+  `initialise()` has built a window (buffered in Main.cpp) and again before the PAGE has loaded, where an
+  emitted event reaches nobody — so the shell holds it until `pageLoaded` and flushes it then.
+- **Gate**: probe-app.sh reads the BUILT bundle's Info.plist and refuses a build that does not claim
+  `terminator://`, `.tproj` and `.tprojz`. That is exactly the kind of thing a CMake edit drops silently, and it
+  is invisible until a user double-clicks a file and nothing happens. The event path itself is already gated
+  (`menuReachedPage`), since it is the same one.
+- ctest **419/419**, probe green (chopperView, no page errors, drums · licence · sign-in seam · the hidden
+  playlist cache all still true).
+
 ## Phase 8 — 8.5a DONE (THE LICENCE IS NATIVE — MECHANISM IN, GATE STILL OFF), 2026-08-25 nineteenth session
 
 Terminator 3.0 could not be sold: there was no sign-in, no device token, no entitlement check — `checkLicense`

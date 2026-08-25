@@ -1,10 +1,14 @@
 # Terminator — the JUCE shell. A native window hosting a WebView (WKWebView / WebView2) that renders the UI,
 # with the engine + AudioIO behind it. Phase 0: a static status page + bridge v0 (engine info, live snapshot).
-# THE `terminator://` URL SCHEME (8.5): the browser sign-in hands the one-time code back through
-# `terminator://auth?code=…&state=…`, so macOS has to know this bundle owns the scheme (JUCE merges this XML
-# into the generated Info.plist). Windows has no plist — the app claims the scheme itself under HKCU on first
-# run, see registerUrlScheme() in Main.cpp.
-set(TERMINATOR_URL_SCHEME_PLIST [==[
+# WHAT THE OS HANDS THIS APP (JUCE merges this XML into the generated Info.plist):
+#  - the `terminator://` URL SCHEME (8.5) — the browser sign-in hands its one-time code back through
+#    `terminator://auth?code=…&state=…`, so macOS has to know this bundle owns the scheme;
+#  - the PROJECT DOCUMENT TYPES (8.6) — `.tproj` / `.tprojz`, so a double-click in Finder opens Terminator, the
+#    same two extensions electron-builder registers for the 2.x app.
+# Both arrive as `anotherInstanceStarted` (JUCE routes application:openFile(s): and the GetURL Apple Event
+# there) and are handled in Main.cpp. Windows has no plist — the app claims all three under HKCU on every
+# launch, see registerOsAssociations() in Main.cpp.
+set(TERMINATOR_OS_TYPES_PLIST [==[
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -18,6 +22,29 @@ set(TERMINATOR_URL_SCHEME_PLIST [==[
       <array><string>terminator</string></array>
     </dict>
   </array>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Terminator Project</string>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>tproj</string></array>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Terminator Project Bundle</string>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>tprojz</string></array>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+    </dict>
+  </array>
 </dict>
 </plist>
 ]==])
@@ -27,7 +54,7 @@ juce_add_gui_app(Terminator
     COMPANY_NAME "Killavic Cheat Codes"
     BUNDLE_ID "app.killaviccheatcodes.terminator"
     VERSION "${PROJECT_VERSION}"
-    PLIST_TO_MERGE "${TERMINATOR_URL_SCHEME_PLIST}"
+    PLIST_TO_MERGE "${TERMINATOR_OS_TYPES_PLIST}"
     NEEDS_WEB_BROWSER TRUE
     NEEDS_WEBVIEW2 TRUE
     MICROPHONE_PERMISSION_ENABLED TRUE
