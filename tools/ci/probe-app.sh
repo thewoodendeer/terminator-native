@@ -113,6 +113,14 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   else
     echo "::warning::the real stems split did not run (set TERMINATOR_PROBE_STEMS=1 with htdemucs on the machine)"
   fi
+  # PERF (9.3): the point of the native build, printed on every run — startup marks, idle memory and what the
+  # audio callback costs. REPORTED, not gated: a CI runner's clock is not a user's machine. The one thing that
+  # is worth a warning is a startup that has fallen off a cliff.
+  echo "perf: $(grep -Eo '"perf": ?\{[^}]*\}' "$OUT")"
+  MS_TO_PAGE="$(grep -Eo '"msToPage": ?[0-9]+' "$OUT" | grep -Eo '[0-9]+' | head -1)"
+  if [ -n "$MS_TO_PAGE" ] && [ "$MS_TO_PAGE" -gt 5000 ]; then
+    echo "::warning::the UI took ${MS_TO_PAGE} ms to be usable — it is normally well under a second"
+  fi
   # DRUMS (8.2): the library shipped inside the app is served byte-complete at /drums/<id>.<ext>, a path that is
   # not a bare 16-hex id is refused, and MY DRUMS walks a folder the self-test fills in temp (audio only).
   grep -Eq '"drums": ?\{[^}]*"ok": ?true' "$OUT" || { echo "::error::drums self-test failed (see the drums object above)"; exit 1; }

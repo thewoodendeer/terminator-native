@@ -1,6 +1,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include "MainWindow.h"
+#include "Perf.h"
 #include "PluginHub.h"
 #include "terminator/Version.h"
 
@@ -32,6 +33,7 @@ class TerminatorApplication final : public juce::JUCEApplication
         }
         registerOsAssociations();
         mainWindow_ = std::make_unique<MainWindow>(getApplicationName());
+        perf::mark(perf::Mark::window); // the window exists — the first thing a user can see
         // A COLD START: the OS launched us *because* of a `terminator://auth?…` link or a double-clicked
         // project, so it arrives on the command line (Windows) or was queued before the window existed
         // (macOS). Deliver it now that there is something to deliver it to.
@@ -126,6 +128,12 @@ class TerminatorApplication final : public juce::JUCEApplication
 // On Windows JUCE owns the entry point (WinMain, because this is a GUI subsystem app), so the child there takes
 // the `initialise()` path above — Windows has no activation policy to get wrong.
 #if JUCE_WINDOWS
+// Windows: JUCE owns the entry point, so the clock starts as the application object is constructed instead.
+struct TerminatorPerfStart
+{
+    TerminatorPerfStart() { terminator::app::perf::start(); }
+};
+static TerminatorPerfStart terminatorPerfStart;
 START_JUCE_APPLICATION(terminator::app::TerminatorApplication)
 #else
 juce::JUCEApplicationBase* juce_CreateApplication();
@@ -136,6 +144,7 @@ juce::JUCEApplicationBase* juce_CreateApplication()
 
 int main(int argc, char* argv[])
 {
+    terminator::app::perf::start(); // everything the probe reports about startup is measured from here
     for (int i = 1; i + 2 < argc; ++i)
     {
         if (juce::String(argv[i]) != "--scan-plugin")

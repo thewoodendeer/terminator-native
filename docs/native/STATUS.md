@@ -1739,6 +1739,32 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 9 — 9.3a: WHAT THE NATIVE BUILD ACTUALLY COSTS (measured, 2026-08-25 nineteenth session)
+
+The whole premise of 3.0 is that a native app starts fast, sits light and leaves the CPU to the music — and
+nobody had measured any of it. `app/src/Perf.{h,cpp}` puts three marks on one clock (from the top of `main()`
+to: the WINDOW exists · the PAGE is usable · the ENGINE is running on a real device) and reads the process's
+resident memory from the OS (mach `task_info` / `GetProcessMemoryInfo`). The app probe reports the lot.
+
+**Release build, M1 Max, this machine (2026-08-25):**
+| | |
+|---|---|
+| on screen (window) | **548 ms** |
+| making sound (engine on the device) | **611 ms** |
+| usable (page loaded, ChopperView rendered) | **852 ms** |
+| resident memory at that moment | **227 MB** |
+| audio callback | **2.9% of one core at a 16-sample buffer** (0.36 ms blocks, 44.1 kHz) |
+
+The 16-sample buffer is what this machine's saved audio setup was on — an extreme setting, and the engine still
+sat at 3%. Debug numbers for comparison: 584 / 730 / 875 ms, 16% CPU at the same buffer.
+
+REPORTED, NEVER GATED — a CI runner's clock is not a user's machine — but the numbers print on every probe run,
+so a change that doubles startup shows up in a build instead of in somebody's day. The one automatic reaction is
+a WARNING when the UI takes over 5 s to be usable.
+
+Still to do in 9.3: the same numbers on Windows, memory after a long session (a leak shows up there, not here),
+and a like-for-like startup comparison against the shipping Electron app.
+
 ## Phase 8 — 8.6b DONE (DOUBLE-CLICK A PROJECT AND IT OPENS), 2026-08-25 nineteenth session
 
 The 2.x app registers `.tproj` / `.tprojz` with the OS; 3.0 registered nothing, so a double-clicked project

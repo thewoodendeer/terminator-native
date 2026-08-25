@@ -98,7 +98,9 @@ target_sources(Terminator PRIVATE
     src/SecretStore.h
     src/SecretStore.cpp
     src/AppMenu.h
-    src/AppMenu.cpp)
+    src/AppMenu.cpp
+    src/Perf.h
+    src/Perf.cpp)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1

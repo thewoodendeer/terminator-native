@@ -5,6 +5,7 @@
 #include <thread>
 #include <iostream>
 
+#include "Perf.h"
 #include "WebResources.h"
 #include "terminator/Version.h"
 #include "terminator/model/ProjectModel.h"
@@ -2115,6 +2116,7 @@ void WebShell::handlePads(const juce::var& req, juce::WebBrowserComponent::Nativ
 void WebShell::pageLoaded(const juce::String& url)
 {
     pageReady_ = true;
+    perf::mark(perf::Mark::page); // the UI is on screen and can be used
     // A project the OS asked us to open before the page existed (8.6, a double-clicked .tproj on a cold start).
     if (pendingOpenFile_.isNotEmpty())
     {
@@ -2363,6 +2365,21 @@ void WebShell::runProbe()
                 auto parsed = juce::JSON::parse(v->toString());
                 if (auto* o = parsed.getDynamicObject())
                 {
+                    // PERF (9.3): what the native build is for. Reported, never gated — a CI runner's clock is
+                    // not a user's machine — but a change that doubles startup shows up here in the build.
+                    auto* pf = new juce::DynamicObject();
+                    pf->setProperty("msToWindow", juce::roundToInt(perf::markMs(perf::Mark::window)));
+                    pf->setProperty("msToPage", juce::roundToInt(perf::markMs(perf::Mark::page)));
+                    pf->setProperty("msToEngine", juce::roundToInt(perf::markMs(perf::Mark::engine)));
+                    pf->setProperty("msNow", juce::roundToInt(perf::sinceStartMs()));
+                    pf->setProperty("rssAtPageMb", juce::roundToInt(perf::residentAtPageMb()));
+                    pf->setProperty("rssMb", juce::roundToInt(perf::residentMb()));
+                    const auto dev = audioIO_.currentDevice();
+                    pf->setProperty("cpuLoad", juce::roundToInt(dev.cpuLoad * 1000.0) / 10.0); // %, one decimal
+                    pf->setProperty("bufferSize", dev.bufferSize);
+                    pf->setProperty("sampleRate", dev.sampleRate);
+                    pf->setProperty("xruns", static_cast<int>(dev.xruns));
+                    o->setProperty("perf", juce::var(pf));
                     o->setProperty("prefsWindow", prefsWindow_ != nullptr && prefsWindow_->isVisible());
                     o->setProperty("prefsReady", prefsReady_);
                     o->setProperty("registryKeys", static_cast<int>(registry_.keyCount()));
@@ -2438,6 +2455,10 @@ void WebShell::timerCallback()
         }
     }
 
+    // The engine is only "running" once it is on a real device and pulling blocks — that is the moment the app
+    // can make a sound, and the one worth measuring.
+    if (perf::markMs(perf::Mark::engine) < 0.0 && audioIO_.currentDevice().open)
+        perf::mark(perf::Mark::engine);
     samples_.collect(engine_.snapshot());
     finishCalibration();
     // A PUNCH-OUT fired (5.1c): the audio thread stopped capturing on its own frame, so the file is closed here and
