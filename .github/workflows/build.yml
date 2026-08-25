@@ -45,7 +45,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party/.tools-cache
-          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+          key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: Configure
         run: cmake --preset mac-release-universal
       - name: Build
@@ -107,7 +107,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party/.tools-cache
-          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+          key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: Configure
         run: cmake --preset mac-release
       - name: Build
@@ -140,7 +140,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party/.tools-cache
-          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+          key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: Configure (RTSan)
         run: cmake --preset mac-rtsan
       - name: Build
@@ -177,7 +177,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: third_party/.tools-cache
-          key: tools-mac-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+          key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
       - name: WebView2 SDK (NuGet → JUCE's default search path)
         shell: pwsh
         run: |
@@ -211,20 +211,28 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --preset win-release --timeout 300 --output-on-failure
-      - name: "Smoke — launch the app, probe the WebView2 + bridge + engine (soft — runner may lack WebView2/audio)"
+      # The Windows app is LAUNCHED here — the only place it ever is. Still soft (a warning, not a red build)
+      # until it has been seen to pass a few times; what it reports is now the same engine half the mac probe
+      # runs, because TERMINATOR_NULL_AUDIO gives a runner with no sound card a real, wall-clock-paced device.
+      - name: "Smoke — launch the app, probe the WebView2 + bridge + engine (soft for now)"
         shell: pwsh
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 6
         run: |
           $out = "build/probe-win.json"
           $env:TERMINATOR_PROBE_FILE = $out
+          $env:TERMINATOR_NULL_AUDIO = "auto"                              # no sound card on a runner
+          $env:TERMINATOR_LICENSE_FAKE = "unlocked:probe@terminator.test"   # never a real account / server
           $p = Start-Process -FilePath "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -PassThru
-          if (-not $p.WaitForExit(60000)) { $p.Kill(); Write-Host "::warning::app did not quit in 60 s"; exit 1 }
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); Write-Host "::warning::app did not quit in 240 s"; exit 1 }
           if (-not (Test-Path $out)) { Write-Host "::warning::no probe file written"; exit 1 }
           Get-Content $out
           if (-not (Select-String -Path $out -Pattern '"hasJuce": ?true' -Quiet)) { Write-Host "::warning::bridge not injected in WebView2"; exit 1 }
           if ((Select-String -Path $out -Pattern '"uiMode": ?"react"' -Quiet) -and -not (Select-String -Path $out -Pattern '"chopperView": ?true' -Quiet)) { Write-Host "::warning::React UI served but ChopperView did not render in WebView2"; exit 1 }
-          Write-Host "PROBE OK"
+          foreach ($check in @('"enginePrepared": ?true', '"seqPageOk": ?true', '"drumPageOk": ?true', '"bassPageOk": ?true', '"mixerPageOk": ?true', '"license": ?\{[^}]*"ok": ?true')) {
+            if (-not (Select-String -Path $out -Pattern $check -Quiet)) { Write-Host "::warning::windows probe: $check did not hold" }
+          }
+          Write-Host "PROBE OK (windows, soft)"
       - name: Package app
         shell: pwsh
         run: Compress-Archive -Path "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -DestinationPath "build/Terminator-win-x64-unsigned.zip"
