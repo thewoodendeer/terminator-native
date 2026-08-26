@@ -79,6 +79,7 @@ class WebShell final : public juce::Component, private juce::Timer
     void timerCallback() override;
     void pageLoaded(const juce::String& url);
     void runProbe();
+    void readWhenAsyncChecksDone();
     void runProbeAsyncChecks();
     std::optional<juce::WebBrowserComponent::Resource> provideResource(const juce::String& url);
     /// Where the built React UI lives (ui/dist copied into the bundle at build time, or TERMINATOR_UI_DIR).
@@ -177,6 +178,11 @@ class WebShell final : public juce::Component, private juce::Timer
     bool prefsReady_ = false; // the Preferences page has loaded (events may be sent to it)
     bool probeArmed_ = false;
     int probeCountdown_ = 0;
+    // The final read WAITS for the async checks to say `done` instead of trusting a fixed delay. That delay was
+    // a guess that held until the licence gate added a sign-in round trip to the front of the block and the read
+    // landed mid-flight, reporting `licenseSeam: null` — a check that had not failed, but had not been made.
+    int probeAsyncWaits_ = 0;
+    bool probeReadPending_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(WebShell)
 };

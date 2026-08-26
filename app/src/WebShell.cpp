@@ -2243,6 +2243,13 @@ void WebShell::runProbeAsyncChecks()
                         r.duBytes = du && du.ok ? du.bytes : -1;
                         await window.__terminatorNativeIpc.fs({ verb: 'trash', path: duDir });
                     } catch (e) { r.duBytes = -1; }
+                    // THE LICENCE GATE IS ON (8.5c), so this run starts as a FREE-TIER app: three pads, no
+                    // export, no Beat Finisher. Every check below would then be measuring the paywall instead
+                    // of the engine. Sign in through the fake seam FIRST — the same round trip a person makes —
+                    // and assert the gate really lifted before anything else is read.
+                    const lic0 = window.__terminatorNativeLicense;
+                    if (lic0 && lic0.probeUnlock && window.__terminatorProbeLicense)
+                        r.probeUnlock = await lic0.probeUnlock();
                     // the native-engine shadow (ui/src/renderer/native/nativeEngineShadow.ts): upload a synthetic
                     // buffer through terminatorSamples, bind + trigger a pad, read the engine back
                     const sh = window.__terminatorNativeShadow;
@@ -2414,6 +2421,37 @@ juce::var WebShell::probeRecordArm()
     o->setProperty("frames", handleRecord(juce::var(stop)).getProperty("frames", -1.0));
     f.deleteFile();
     return juce::var(o);
+}
+
+// The final read is driven by COMPLETION, not by a clock: `window.__terminatorProbeAsync.done` is set by the
+// last line of the async block. A fixed delay was fine until the licence gate put a sign-in round trip in front
+// of that block and the read landed mid-flight — reporting `licenseSeam: null`, which reads as "no failure" and
+// is really "no check". Bounded, so a stalled page still produces a report (and the outer probe cap still fires).
+void WebShell::readWhenAsyncChecksDone()
+{
+    if (probeReadPending_)
+        return;
+    constexpr int kMaxWaits = 60; // 60 s of grace on top of the normal budget
+    probeReadPending_ = true;
+    browser_->evaluateJavascript(
+        "(function(){ var a = window.__terminatorProbeAsync; return (a && a.done) ? '1' : '0'; })()",
+        [this](const juce::WebBrowserComponent::EvaluationResult& r)
+        {
+            probeReadPending_ = false;
+            const bool done = r.getResult() != nullptr && r.getResult()->toString() == "1";
+            if (!done && probeAsyncWaits_ < kMaxWaits)
+            {
+                if (probeAsyncWaits_ == 0)
+                    std::cerr << "probe: waiting for the async checks to finish" << std::endl;
+                ++probeAsyncWaits_;
+                probeCountdown_ = 20; // look again in a second
+                return;
+            }
+            if (!done)
+                std::cerr << "probe: the async checks never reported done — reading anyway" << std::endl;
+            std::cerr << "probe: final read" << std::endl;
+            runProbe();
+        });
 }
 
 void WebShell::runProbe()
@@ -2614,8 +2652,7 @@ void WebShell::timerCallback()
             }
             else
             {
-                std::cerr << "probe: final read" << std::endl;
-                runProbe();
+                readWhenAsyncChecksDone();
             }
         }
     }

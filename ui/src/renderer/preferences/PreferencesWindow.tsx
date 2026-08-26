@@ -500,6 +500,7 @@ function AccountPane() {
     startBrowserSignIn?: () => Promise<void>;
     signOut?: () => Promise<void>;
     openBuyPage?: () => Promise<void>;
+    openAccountPage?: () => Promise<void>;
     onAuthSignedIn?: (h: (info: { email: string }) => void) => () => void;
   } | undefined;
   const [state, setState] = useState<{ unlocked: boolean; email: string } | null>(null);
@@ -543,12 +544,21 @@ function AccountPane() {
               onClick={() => { void bridge?.signOut?.().then(refresh); }}>SIGN OUT</button>
           )}
           <button style={btnSm} disabled={busy} title="Check with the server again right now" onClick={() => void refresh()}>RE-CHECK</button>
-          <button style={btnSm} title="Open the Terminator page in your browser" onClick={() => { void bridge?.openBuyPage?.(); }}>BUY / MY ACCOUNT</button>
+          {/* Two people, two destinations. Somebody signed in wants killaviccheatcodes.app/account — their
+              purchases and downloads. Somebody signed out wants the page where they can buy it. One button that
+              sent everybody to the product page told an existing owner nothing they needed. */}
+          {signedIn ? (
+            <button style={btnSm} title="Open your Killavic Cheat Codes account in your browser"
+              onClick={() => { void bridge?.openAccountPage?.(); }}>MY ACCOUNT</button>
+          ) : (
+            <button style={btnSm} title="Open the Terminator page in your browser"
+              onClick={() => { void bridge?.openBuyPage?.(); }}>GET TERMINATOR</button>
+          )}
         </div>
         <div style={{ ...hint, marginTop: 8 }}>
-          Terminator 3 is in alpha and runs UNLOCKED whether you sign in or not — nothing here can lock you out
-          of the app. Signing in is what the CLOUD tab of the OPEN dialog needs to find the projects saved to
-          your account.
+          Signing in is what unlocks Terminator on this machine — signed out you get the free tier (3 pads, 10
+          sample pulls). It is also what the CLOUD tab of the OPEN dialog needs to find the projects saved to
+          your account. If the server cannot be reached, a week of working offline changes nothing.
         </div>
       </div>
     </>

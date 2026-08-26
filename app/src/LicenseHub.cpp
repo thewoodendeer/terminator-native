@@ -25,8 +25,25 @@ juce::String env(const char* name)
 }
 /// The probe seam: `unlocked:<email>` · `locked` (entitlement refused — drops the token) · `offline` (the server
 /// could not be reached at all) · `fail` (reachable, 5xx). Empty = talk to the real server.
+///
+/// ARMED BY THE ENVIRONMENT, ONLY. `TERMINATOR_LICENSE_FAKE` is what decides whether this app is running a gate
+/// at all; a real launch never sets it, and nothing the page can do turns it on.
+bool seamArmed()
+{
+    return env("TERMINATOR_LICENSE_FAKE").isNotEmpty();
+}
+/// Within an ARMED run the probe may move between seam states (see the `setFake` verb): the licence gate now
+/// LOCKS the app, so a gate has to prove both sides — locked really locks, the offline grace really unlocks —
+/// and the seam is read from the environment, which one process cannot change for itself.
+juce::String& fakeOverride()
+{
+    static juce::String value;
+    return value;
+}
 juce::String fakeMode()
 {
+    if (seamArmed() && fakeOverride().isNotEmpty())
+        return fakeOverride();
     return env("TERMINATOR_LICENSE_FAKE");
 }
 /// Which OS-store entry this run reads and writes. A probe run gets its OWN account, so a self-test can sign in,
@@ -237,11 +254,38 @@ void LicenseHub::handle(const juce::var& req, Completion complete)
         complete(o);
         return;
     }
-    if (verb == "buy")
+    if (verb == "buy" || verb == "account")
     {
-        juce::URL(baseUrl() + "/terminator").launchInDefaultBrowser();
+        // Two different destinations for two different people: somebody who does not own it yet goes to the
+        // product page, somebody who does goes to their KCC account. Both open in the OS browser — the session
+        // cookie lives there, and the app must never navigate away from itself.
+        const auto path = verb == "account" ? "/account" : "/terminator";
+        juce::URL(baseUrl() + path).launchInDefaultBrowser();
         auto o = obj();
         put(o, "ok", true);
+        put(o, "url", baseUrl() + path);
+        complete(o);
+        return;
+    }
+    if (verb == "setFake")
+    {
+        // TEST SEAM: move this run between seam states. Refused outright unless the ENVIRONMENT already armed
+        // the seam, so a page can never switch a real app onto a fake licence — and it can never switch the
+        // seam OFF either (an empty mode is refused), because that would point this run at the USER's real
+        // device token instead of the probe's own.
+        auto o = obj();
+        const auto mode = req.getProperty("mode", juce::var()).toString();
+        const auto known = mode.startsWith("unlocked") || mode == "locked" || mode == "offline" || mode == "fail";
+        if (!seamArmed() || !known)
+        {
+            put(o, "ok", false);
+            put(o, "error", seamArmed() ? "unknown seam mode" : "setFake is a probe-only verb");
+            complete(o);
+            return;
+        }
+        fakeOverride() = mode;
+        put(o, "ok", true);
+        put(o, "mode", mode);
         complete(o);
         return;
     }

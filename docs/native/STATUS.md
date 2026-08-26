@@ -1739,6 +1739,70 @@ host's window-server state (the machine slept mid-session), not a shipped bug �
 "same check every run = real" needs the companion clause: real to THIS MACHINE. Cross-check CI before believing a
 local-only failure.** If it ever fails on CI it is BUG E territory (a window that cannot come to the front).
 
+## Phase 8 — 8.5c DONE (THE LICENCE IS ENFORCED — AN ACCOUNT UNLOCKS IT), 2026-08-25 twentieth session
+
+His call (2026-08-25: "it should unlock with an account. just like terminator electron"). The mechanism landed
+in 8.5a and was deliberately never armed: `isSubscribed()` returned `true` unconditionally in the native build
+and `checkLicenseGate` never showed the overlay, so every native build was the complete app, free, to anyone who
+ran it. Both escape hatches are gone. Native now takes the SAME path as Electron — the device token in the OS
+keychain, `/api/terminator-check` on every launch, the 7-day offline grace, free tier (3 pads, 10 pulls) until
+an account signs in.
+
+**Flipping it exposed four things that were only ever dead code behind the hatch**, all of which a paying
+customer would have hit within a minute of seeing the paywall:
+- **The popup offered "Download the desktop app" to somebody already running the desktop app** (his report). On
+  desktop that button is now **"Already own it? Sign in →"**, which is what an existing owner actually needs.
+  The "install it on your Mac or PC" pitch and the "NEW · NOW ON macOS & WINDOWS" badge are dropped there too.
+- **GET TERMINATOR — $40 could not work.** It POSTs to a same-origin `/api/checkout/terminator-lifetime`, and
+  the app is served by the SHELL, not by KCC — so the fetch could only ever fail with a network error. On
+  desktop the purchase opens in the BROWSER, where the session cookie lives.
+- **SEE THE SUITE would have navigated the app away from itself.** `location.href` in the shell's WebView
+  replaces Terminator with a web page and there is no back button to a native window; `window.open` silently
+  does nothing there. Every outward link on desktop now goes to the OS browser through the bridge.
+- **Preferences → ACCOUNT still said the app "runs UNLOCKED whether you sign in or not"** — true yesterday, a
+  lie today. It says what the tiers are now.
+
+**ACCOUNT vs BUY are two buttons now** (his call: the KCC account page is `killaviccheatcodes.app/account`). One
+button sending everybody to the product page told an existing owner nothing: signed in → **MY ACCOUNT**
+(`/account`), signed out → **GET TERMINATOR** (`/terminator`). New shell verb `account` beside `buy`, so the URL
+lives where the base URL already does and `TERMINATOR_LICENSE_BASE` still redirects both for testing.
+
+**THE GATE IS ASSERTED FROM BOTH SIDES, because getting this wrong locks him out of his own app.**
+- `probeUnlock` (new): the probe now signs in through the seam BEFORE anything else is measured, and asserts the
+  gate was UP first (`gatedBeforeSignIn`) and LIFTED after (`overlayGone`). It had to: with the gate on, a probe
+  that never signs in is a free-tier app, and the first run measured the paywall instead of the engine —
+  `syncTrigger: false`, `midiMirrored: false`, `triggers: 0`, `menuReachedPage: false`. That is the failure a
+  user would call "the pads stopped working".
+- The seam test grew the two checks its own docstring had been claiming: **`offlineGraceUnlocks` + `offlineFlagTrue`**
+  (an unreachable server keeps a paying user unlocked — the promise that matters most now) and **`refusedLocks`
+  + `refusedDropsToFreeTier`** (a REACHABLE server that refuses the entitlement really does drop the token). It
+  also signs back in at the end, so nothing after it measures the free tier.
+- A **probe-only `setFake` verb** makes that possible in one launch. Refused unless the ENVIRONMENT already
+  armed the seam, and an empty mode is refused too — so a page can never switch a real app onto a fake licence,
+  nor switch the seam OFF and point the run at the user's real device token.
+- **Mid-session re-gating is NOT claimed.** A refusal drops to the free tier immediately; the sign-in overlay is
+  a launch-time decision. Electron has never thrown a modal over somebody mid-beat because a server answered
+  oddly, and this build does not start. The gate asserts what the app actually does.
+
+**THE PROBE'S FINAL READ IS DRIVEN BY COMPLETION NOW, NOT BY A CLOCK.** The 30-second delay was a guess that
+held until the sign-in round trip went in front of the async block; the read then landed mid-flight and reported
+`licenseSeam: null` — which reads as "no failure" and is really "no check". `readWhenAsyncChecksDone()` polls
+the block's own `done` flag (bounded, 60 s of grace) and says so when it waits.
+
+**.tproj / .tprojz CARRY THE TERMINATOR LOGO IN FINDER** (his call). `CFBundleTypeIconFile AppIcon` on both
+document types — the 2.x app's `tproj-icon.icns` is BYTE-IDENTICAL to its app icon (md5-checked), so pointing at
+the icns JUCE already generates from `resources/icon.png` is exact parity with no second copy of the artwork in
+the repo. The probe asserts the key and the file.
+
+**Gates:** mac-debug 0 new warnings · ctest 419/419 · `ui` gate green (tsc 5 = baseline, 0 new; library 39,
+clock 23, bass-theory ok) · clang-format clean · **PROBE OK** with `probeUnlock {ok:true}` and the full
+`licenseSeam {ok:true}`.
+**His pass:** launch it signed out — you should get the free tier and the sign-in overlay; sign in via browser
+and it should unlock without a restart; Preferences → ACCOUNT → MY ACCOUNT should open `/account` in your
+browser; a folder of `.tproj` files should show the Terminator logo. **NOTE:** quit any other Terminator first —
+it is single-instance, so double-clicking the app while a probe run is alive hands you the PROBE's window
+(fake audio device, fake licence). That is what the 2026-08-25 "Offline (no hardware)" screenshot was.
+
 ## Phase 9 — 9.1/9.2 (Mac): THE APP IS SIGNED, NOTARISED AND CAN UPDATE ITSELF, 2026-08-25 twentieth session
 
 Nineteen sessions of features, and none of them could reach a person: there was no packaging at all — no DMG,

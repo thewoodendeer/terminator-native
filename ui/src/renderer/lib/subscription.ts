@@ -10,9 +10,8 @@
  *
  * Subscribers ignore all limits.
  *
- * Standalone Electron / local-dev builds default to "subscribed" so they
- * aren't accidentally crippled. The gate only fires when running under
- * the KCC web wrapper.
+ * Local-dev builds default to "subscribed" so they aren't accidentally crippled. A PACKAGED desktop build —
+ * Electron or the native 3.0 shell — is gated by the server-validated device licence, exactly alike.
  */
 
 import { getLicense } from './desktopAuth';
@@ -44,10 +43,13 @@ export function isSubscribed(): boolean {
     // dev sign-in flow can't complete. Packaged builds load the BUILT bundle
     // where import.meta.env.DEV is false, so production is untouched.
     if ((import.meta as any).env?.DEV) return true;
-    // NATIVE (Terminator 3.0, JUCE shell): unlocked until Phase 8/9 ports the desktop licence flow to the
-    // native shell (device token in the OS keychain, /api/terminator-check) — recorded in docs/native/STATUS.md.
-    if (typeof __TERMINATOR_NATIVE__ !== 'undefined' && __TERMINATOR_NATIVE__) return true;
-    // Electron desktop: ONLY the server-validated device license unlocks. This
+    // NATIVE (Terminator 3.0, JUCE shell) behaves EXACTLY like Electron here — same rule, same source of
+    // truth. The escape hatch that returned true unconditionally while the licence was only OBSERVED is gone
+    // (Phase 8.5c): the shell now holds the device token in the OS keychain, re-validates against
+    // /api/terminator-check each launch, and falls back to a 7-day offline grace rather than locking anyone
+    // out when the server cannot be reached.
+    //
+    // Electron desktop AND native: ONLY the server-validated device license unlocks. This
     // is an in-memory cache the main process populates via checkLicense() each
     // launch (no localStorage — nothing to flip). null (pre-check / signed out)
     // = free tier; the sign-in gate is shown over the app until it resolves.
@@ -99,18 +101,19 @@ export function recordPull(): boolean {
  *  iframe). Falls back to opening pricing in a new tab if cross-frame
  *  navigation is blocked for any reason. */
 export function goToPricing(): void {
-  const url = 'https://killaviccheatcodes.app/pricing';
-  try {
-    if (window.top && window.top !== window.self) {
-      window.top.location.href = url;
-      return;
-    }
-  } catch { /* cross-origin, fall through */ }
-  window.open(url, '_blank');
+  navTopUrl('https://killaviccheatcodes.app/pricing');
 }
 
 /** Top-window navigation (we're usually in an iframe). */
+/** ON THE DESKTOP APP a link may never NAVIGATE: the app IS the page, so setting location.href replaces
+ *  Terminator with a website and there is no back button to a native window. `window.open` is no better — the
+ *  shell's WebView has no handler for it, so it silently does nothing. Every outward link therefore goes to the
+ *  OS browser through the bridge. On the web this function is the behaviour it always had. */
 function navTopUrl(url: string): void {
+  if (!isWeb) {
+    try { void (window as any).terminator?.openExternal?.(url); } catch { /* no bridge — nothing sensible to do */ }
+    return;
+  }
   try {
     if (window.top && window.top !== window.self) { window.top.location.href = url; return; }
   } catch { /* cross-origin, fall through */ }
@@ -126,7 +129,12 @@ export function goToDesktopDownload(): void { navTopUrl(TERMINATOR_DOWNLOAD_URL)
 /** Buy the $40 lifetime license: same-origin checkout API (cookie session).
  *  401 → sign-in first, back to /terminator after. Resolves to an error text
  *  (or null when the browser is being redirected). */
+export const TERMINATOR_BUY_URL = 'https://killaviccheatcodes.app/terminator';
+
 export async function buyLifetime(): Promise<string | null> {
+  // DESKTOP: there is no same-origin `/api/...` to POST to — the app is served from the shell, not from KCC —
+  // so a checkout can only happen in the browser, where the session cookie lives. Hand it over and stop.
+  if (!isWeb) { navTopUrl(TERMINATOR_BUY_URL); return null; }
   try {
     const r = await fetch('/api/checkout/terminator-lifetime', { method: 'POST', credentials: 'include' });
     if (r.status === 401) { navTopUrl('https://killaviccheatcodes.app/signin?next=/terminator'); return null; }

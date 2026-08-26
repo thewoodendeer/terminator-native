@@ -95,7 +95,7 @@ import OpenProjectModal from './OpenProjectModal';
 import { TransferModal } from './transfer/TransferModal';
 import { EulaModal } from './EulaModal';
 import { SignInModal } from './SignInModal';
-import { refreshLicense, getLicense, signOutDesktop, onAuthSignedIn } from '../lib/desktopAuth';
+import { refreshLicense, getLicense, signOutDesktop, onAuthSignedIn, openBuyPage } from '../lib/desktopAuth';
 import { r2AudioUrl, loadManifest, listPlaylistsForRenderer, fetchR2Audio, looksLikeR2Id } from '../r2';
 import { libraryBridgeFromWindow, libFileUrl, LIB_ID_PREFIX } from './libraryBridge';
 import { useIsPhone } from '../lib/useIsPhone';
@@ -655,16 +655,10 @@ export function ChopperView() {
   const checkLicenseGate = async () => {
     // DEV Electron runs unlocked (see isSubscribed) — no sign-in overlay either.
     if ((import.meta as any).env?.DEV) { setShowSignIn(false); return; }
-    // NATIVE build (Terminator 3.0): the licence is OBSERVED but not ENFORCED yet. The shell can sign in and
-    // re-validate (8.5), and cloud presets need to know whether we are signed in — so refresh the cache — but
-    // the app is never locked and the sign-in overlay never shows, because a bug in a gate that is not finished
-    // would lock a paying user out of his own app. lib/subscription.ts keeps the same escape hatch.
-    if (typeof __TERMINATOR_NATIVE__ !== 'undefined' && __TERMINATOR_NATIVE__) {
-      setShowSignIn(false);
-      await refreshLicense().catch(() => null);
-      forceLicenseRerender((n) => n + 1);
-      return;
-    }
+    // NATIVE build (Terminator 3.0) takes the SAME path as Electron below (Phase 8.5c). It used to refresh the
+    // cache and never gate, because a bug in an unfinished gate would lock a paying user out of his own app;
+    // the mechanism is finished now — the device token lives in the OS keychain, every launch re-validates, and
+    // an unreachable server falls back to the 7-day offline grace instead of locking anybody.
     await refreshLicense();
     if (getLicense()?.unlocked) {
       setShowSignIn(false);
@@ -4753,6 +4747,10 @@ export function ChopperView() {
   };
   const handleBuyLifetime = async () => {
     if (buyingLifetime) return;
+    // DESKTOP: there is no same-origin `/api/checkout/...` here — the app is served by the shell, not by KCC —
+    // so this fetch could only ever fail with a network error, and navigating to Stripe would replace the app
+    // with a web page. The purchase happens in the BROWSER, where the session cookie lives; the shell opens it.
+    if (!isWeb) { openBuyPage(); return; }
     setBuyingLifetime(true);
     try {
       const r = await fetch('/api/checkout/terminator-lifetime', {

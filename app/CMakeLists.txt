@@ -4,7 +4,10 @@
 #  - the `terminator://` URL SCHEME (8.5) — the browser sign-in hands its one-time code back through
 #    `terminator://auth?code=…&state=…`, so macOS has to know this bundle owns the scheme;
 #  - the PROJECT DOCUMENT TYPES (8.6) — `.tproj` / `.tprojz`, so a double-click in Finder opens Terminator, the
-#    same two extensions electron-builder registers for the 2.x app.
+#    same two extensions electron-builder registers for the 2.x app. `CFBundleTypeIconFile AppIcon` gives those
+#    files the Terminator logo in Finder instead of a blank page: the 2.x app's tproj-icon.icns is BYTE-IDENTICAL
+#    to its app icon (checked), so pointing at the icns JUCE already generates from resources/icon.png is exact
+#    parity with no second copy of the artwork in the repo.
 # Both arrive as `anotherInstanceStarted` (JUCE routes application:openFile(s): and the GetURL Apple Event
 # there) and are handled in Main.cpp. Windows has no plist — the app claims all three under HKCU on every
 # launch, see registerOsAssociations() in Main.cpp.
@@ -29,6 +32,8 @@ set(TERMINATOR_OS_TYPES_PLIST [==[
       <string>Terminator Project</string>
       <key>CFBundleTypeExtensions</key>
       <array><string>tproj</string></array>
+      <key>CFBundleTypeIconFile</key>
+      <string>AppIcon</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
@@ -39,6 +44,8 @@ set(TERMINATOR_OS_TYPES_PLIST [==[
       <string>Terminator Project Bundle</string>
       <key>CFBundleTypeExtensions</key>
       <array><string>tprojz</string></array>
+      <key>CFBundleTypeIconFile</key>
+      <string>AppIcon</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>

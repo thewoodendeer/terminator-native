@@ -39,7 +39,11 @@ if [ -f "$INFO_PLIST" ] && command -v plutil >/dev/null 2>&1; then
   plutil -p "$INFO_PLIST" | grep -q '"terminator"' || { echo "::error::the bundle does not claim the terminator:// URL scheme — the browser sign-in callback would go nowhere"; exit 1; }
   plutil -p "$INFO_PLIST" | grep -q '"tproj"' || { echo "::error::the bundle does not claim .tproj — double-clicking a project would not open it"; exit 1; }
   plutil -p "$INFO_PLIST" | grep -q '"tprojz"' || { echo "::error::the bundle does not claim .tprojz — double-clicking a project bundle would not open it"; exit 1; }
-  echo "== bundle claims terminator:// + .tproj + .tprojz"
+  # The project files' Finder icon. It is one plist key, it is invisible until somebody looks at a folder of
+  # projects, and without it every .tproj is a blank page.
+  plutil -p "$INFO_PLIST" | grep -q '"CFBundleTypeIconFile" => "AppIcon"' || { echo "::error::.tproj/.tprojz carry no document icon — they would show as blank pages in Finder"; exit 1; }
+  [ -f "$(dirname "$INFO_PLIST")/Resources/AppIcon.icns" ] || { echo "::error::the bundle has no AppIcon.icns — the app AND its documents would show a generic icon"; exit 1; }
+  echo "== bundle claims terminator:// + .tproj + .tprojz (with the Terminator icon)"
 fi
 TERMINATOR_PROBE_FILE="$OUT" "$BIN" &
 PID=$!
@@ -70,6 +74,16 @@ fi
 # build, so this can only mean anything on a packaged app; and when it DOES fail there, the failure is
 # otherwise completely silent (users just stop getting versions). Automatic checks are off in this mode, so
 # nothing here touches the network.
+# THE LICENCE GATE (8.5c). It is ENFORCED now — an unsigned-in app really is the free tier — so both sides get
+# asserted: the gate was UP before the probe signed in, it LIFTED when it did, and (in the seam test) an
+# unreachable server keeps a paying user unlocked while a REFUSED entitlement locks and puts the gate back.
+if grep -q '"probeUnlock"' "$OUT"; then
+  PU="$(grep -o '"probeUnlock": {[^}]*}' "$OUT" || true)"
+  echo "$PU" | grep -Eq '"gatedBeforeSignIn": ?true' || { echo "::error::the licence gate was NOT up before sign-in — this build ships unlocked to everybody: $PU"; exit 1; }
+  echo "$PU" | grep -Eq '"ok": ?true' || { echo "::error::signing in did not unlock the app — a paying customer could not get in: $PU"; exit 1; }
+  echo "== licence gate OK (locked before sign-in, unlocked after): $PU"
+fi
+
 if [ "${TERMINATOR_PROBE_UPDATER:-}" = "1" ]; then
   # Read the updater OBJECT, not the whole file: `"started"` and `"attempted"` are common key names elsewhere
   # in this payload, and a grep over the lot would pass on somebody else's true.

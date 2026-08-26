@@ -211,8 +211,10 @@ verb that can answer big (never send > ~24 KB through `complete()`/`emitEvent`).
 
 ## `terminatorLicense(req)` — THE DESKTOP LICENCE (Phase 8.5)
 `verb`: `status` → `{ok, unlocked, email, offline, storeAvailable}` · `signIn` (opens the KCC browser sign-in with
-a one-time nonce) · `signOut` · `buy` · `deepLink {url}` (**probe only** — refused unless the fake seam below is
-armed, because a page that could call it could forge its own sign-in).
+a one-time nonce) · `signOut` · `buy` (the product page, `/terminator`) · `account` (**8.5c** — the KCC account
+page, `/account`: an existing owner sent to a product page is told nothing they need) · `deepLink {url}` and
+`setFake {mode}` (**probe only** — refused unless the fake seam below is armed, because a page that could call
+them could forge its own sign-in or put a real app on a fake licence).
 - **The DEVICE TOKEN never crosses this boundary.** It is stored by the shell in the OS's own store
   (`SecretStore`: macOS Keychain, Windows DPAPI) and the page is told `{unlocked, email}`. No OS store → the app
   stays signed out; there is deliberately no plaintext fallback (the Electron rule, `safeStorage` there).
@@ -229,6 +231,12 @@ armed, because a page that could call it could forge its own sign-in).
   canned answer, arms the `deepLink` verb and moves the credential to its OWN store entry
   (`device-token-probe`), so a self-test can sign in and out without a KCC account, a live server, a browser, or
   any risk to the user's real token. `TERMINATOR_LICENSE_BASE` points the two calls at another host.
+  Within an ALREADY-ARMED run, `setFake {mode}` moves between seam states, so ONE launch can prove the whole
+  promise: locked really locks, an unreachable server keeps a paying user unlocked (the grace), and a refused
+  entitlement really drops the token. An empty mode is refused — that would point the run at the user's real
+  device token instead of the probe's.
+- **The gate is ENFORCED as of 8.5c** (it was observed-only before): signed out is the free tier — 3 pads, 10
+  sample pulls — exactly as in the Electron app. `isSubscribed()` reads the same `{unlocked}` on both.
 
 ## `terminatorCloud(req)` — CLOUD PRESETS on the KCC account (Phase 8.1)
 `verb`: `list` · `save {preset}` · `remove {id}` → `{ok, data}` or `{ok:false, status, error}`.

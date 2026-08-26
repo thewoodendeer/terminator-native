@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { goToPricing, buyLifetime, goToDesktopDownload, FREE_PAD_LIMIT, FREE_PULL_LIMIT } from '../lib/subscription';
+import { startBrowserSignIn } from '../lib/desktopAuth';
 
 interface Props {
   open: boolean;
@@ -15,7 +16,14 @@ interface Props {
 /** The purchase popup. Free-tier users land here when they hit the pull cap or
  *  a locked pad. Two ways in — LIFETIME ($40, one-time) or the KCC SUITE
  *  subscription — and both include the desktop
- *  app for macOS + Windows, which is new and gets said up top. */
+ *  app for macOS + Windows, which is new and gets said up top.
+ *
+ *  ON THE DESKTOP APP the web copy is wrong in three places, and one of them was actively unhelpful: it offered
+ *  "Download the desktop app" to somebody already running it. Someone who owns Terminator and is looking at this
+ *  popup on their Mac needs to SIGN IN, not download anything — so that is the button they get, and the
+ *  "install it on your Mac or PC" pitch is dropped for a line that tells them what to do next. */
+const IS_DESKTOP = (import.meta as any).env?.MODE !== 'web';
+
 export function SubscribeModal({ open, onClose, onBuyLifetime, demo }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -35,12 +43,15 @@ export function SubscribeModal({ open, onClose, onBuyLifetime, demo }: Props) {
         <button className="sub-modal-close" onClick={onClose} aria-label="Close">×</button>
         <div className="sub-modal-eyebrow">
           <span className="sub-modal-brand">TERMINATOR</span>
-          <span className="sub-modal-new">NEW · NOW ON macOS &amp; WINDOWS</span>
+          {!IS_DESKTOP && <span className="sub-modal-new">NEW · NOW ON macOS &amp; WINDOWS</span>}
         </div>
         <h2 className="sub-modal-title">{demo ? 'WANT TO EXPLORE MORE?' : 'UNLOCK THE FULL MACHINE'}</h2>
         <p className="sub-modal-sub">
           {demo ? (
             <>This is the demo — the whole machine to play, {FREE_PULL_LIMIT} samples to pull. Saving, recording, exporting, the Beat Finisher and the rest of the themes are in the real thing: Terminator, in your browser <em>and</em> as a desktop app for Mac and Windows.</>
+          ) : IS_DESKTOP ? (
+            <>You're on the free tier — {FREE_PAD_LIMIT} pads, {FREE_PULL_LIMIT} sample pulls. Already bought Terminator?
+            Sign in below with that account and everything unlocks.</>
           ) : (
             <>You're on the free tier — {FREE_PAD_LIMIT} pads, {FREE_PULL_LIMIT} sample pulls. Everything below is one click away,
             in this browser <em>and</em> as a desktop app you install on your Mac or PC.</>
@@ -85,7 +96,11 @@ export function SubscribeModal({ open, onClose, onBuyLifetime, demo }: Props) {
           <li><b>EXPORT</b> — master, stems, MPC project, Drum Rack</li>
         </ul>
         <div className="sub-modal-footrow">
-          <button className="sub-modal-link" onClick={goToDesktopDownload}>Already own it? Download the desktop app →</button>
+          {IS_DESKTOP ? (
+            <button className="sub-modal-link" onClick={() => void startBrowserSignIn()}>Already own it? Sign in →</button>
+          ) : (
+            <button className="sub-modal-link" onClick={goToDesktopDownload}>Already own it? Download the desktop app →</button>
+          )}
           <button className="sub-modal-dismiss" onClick={onClose}>Not now</button>
         </div>
       </div>
