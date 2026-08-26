@@ -432,13 +432,26 @@ juce::WebBrowserComponent::Options WebShell::makeOptions()
                         complete(ok(false, "unknown window verb '" + verb + "'"));
                 });
 #if JUCE_WINDOWS
+    // THE WEBVIEW'S USER DATA IS USER DATA, NOT SCRATCH. This folder is where the PAGE's `localStorage` lives,
+    // and the page keeps real things there: the FREE-TIER PULL COUNTER (`terminator.free-pulls`), the colour
+    // theme, the hardware palette, FINISH, the layout, UI size and tooltips. It used to sit in %TEMP%, which
+    // Windows is entitled to empty whenever it likes — so a free user's ten pulls came back forever, and a
+    // paying user's whole look reset without explanation. It belongs beside settings.json, with everything else
+    // the app remembers about this person.
+    const auto webViewData = settings_.file().getParentDirectory().getChildFile("WebView2");
+    webViewData.createDirectory();
+    webViewDataDir_ = webViewData.getFullPathName();
+    // One-time carry-over for anyone who ran an earlier build: move the old temp folder across rather than
+    // silently starting them from nothing. Best-effort — a failure here just means a fresh profile.
+    const auto legacy = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("TerminatorWebView2");
+    if (legacy.isDirectory() && webViewData.getNumberOfChildFiles(juce::File::findFilesAndDirectories) == 0)
+        legacy.moveFileTo(webViewData);
+
     opts = opts.withBackend(juce::WebBrowserComponent::Options::Backend::webview2)
-               .withWinWebView2Options(
-                   juce::WebBrowserComponent::Options::WinWebView2{}
-                       .withUserDataFolder(
-                           juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("TerminatorWebView2"))
-                       .withStatusBarDisabled()
-                       .withBackgroundColour(juce::Colours::black));
+               .withWinWebView2Options(juce::WebBrowserComponent::Options::WinWebView2{}
+                                           .withUserDataFolder(webViewData)
+                                           .withStatusBarDisabled()
+                                           .withBackgroundColour(juce::Colours::black));
 #endif
     return opts;
 }
@@ -2534,6 +2547,11 @@ void WebShell::runProbe()
 #else
                     o->setProperty("menuInstalled", true);
 #endif
+                    // 9.1: WHERE THE PAGE'S localStorage LIVES. It holds the free-tier pull counter and every
+                    // look-and-feel preference, so a build that puts it back under %TEMP% would quietly hand
+                    // every Windows user unlimited free pulls and reset their theme on the next disk cleanup.
+                    // Empty on macOS (WKWebView's own persistent store, which is already per-app).
+                    o->setProperty("webViewDataDir", webViewDataDir_);
                     {
                         // 9.1: THE UPDATER. A shipped app whose Sparkle refuses to start never tells anybody —
                         // the user simply stops getting versions. `TERMINATOR_PROBE_UPDATER=1` (which

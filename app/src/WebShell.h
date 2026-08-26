@@ -114,6 +114,9 @@ class WebShell final : public juce::Component, private juce::Timer
     SampleStore& samples_;
     SampleLoader& loader_;
     Settings& settings_;
+    /// Windows: where WebView2 keeps the page's localStorage (the free-pull counter, theme, palette, layout).
+    /// Reported to the probe so a regression back into %TEMP% is caught by CI rather than by a user.
+    juce::String webViewDataDir_;
     ShellServices services_; // terminatorFs / terminatorSettings — the window.terminator shim's backend
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true); // export threads outlive us
     /// Cancel flags for exports in flight, by the page's job id. Message thread only; the render thread reads its
