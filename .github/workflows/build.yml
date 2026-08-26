@@ -69,10 +69,26 @@ jobs:
           done
           # the Intel slice of the CLI must run under Rosetta on this arm64 runner
           arch -x86_64 "$CLI" --version
+      # THE PROBE MAKES REAL-TIME TIMING ASSERTIONS, AND THIS RUNNER IS SHARED. Three consecutive runs went red
+      # here on three DIFFERENT checks — the bass cursor by 2 ticks, the count-in by one click, the bass cursor
+      # again by 1 tick — each time with 27-58 xruns and 245-680 ms of transport drift in the same report, and
+      # each time the Intel and Windows runners passed the identical commit. Those two were real probe bugs and
+      # are fixed (they sampled on a clock where they should have waited on a condition); what is left is simply
+      # a machine too busy to judge millisecond timing.
+      #
+      # So the STEP is retried once, and nothing inside it is loosened. Widening the tolerance by the measured
+      # drift was the obvious alternative and it is WRONG: at 240 BPM, 680 ms of drift is 68% of the bass loop,
+      # so the check would pass on anything. A second attempt costs ~100 s and only when the first fails; two
+      # failures in a row is a real one.
       - name: Smoke — launch the app, probe the WebView + bridge + engine
         env:
           TERMINATOR_PROBE_NET: "1" # + one real YouTube pull through the bundled yt-dlp + qjs (a network miss is a warning)
-        run: tools/ci/probe-app.sh "build/mac-release-universal/app/Terminator_artefacts/Release/Terminator.app/Contents/MacOS/Terminator" build/probe-mac.json
+        run: |
+          BIN="build/mac-release-universal/app/Terminator_artefacts/Release/Terminator.app/Contents/MacOS/Terminator"
+          if tools/ci/probe-app.sh "$BIN" build/probe-mac.json; then exit 0; fi
+          echo "::warning::the probe failed once on this runner — retrying before calling it a regression"
+          sleep 10
+          tools/ci/probe-app.sh "$BIN" build/probe-mac.json
       - name: Package app
         run: |
           cd build/mac-release-universal/app/Terminator_artefacts/Release
