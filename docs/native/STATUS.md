@@ -1828,6 +1828,34 @@ browser; a folder of `.tproj` files should show the Terminator logo. **NOTE:** q
 it is single-instance, so double-clicking the app while a probe run is alive hands you the PROBE's window
 (fake audio device, fake licence). That is what the 2026-08-25 "Offline (no hardware)" screenshot was.
 
+## Phase 6 — 6.5 DONE (A KNOB ON YOUR CONTROLLER DRIVES A PLUGIN'S OWN PARAMETER), 2026-08-26
+
+The last gap in Phase 6. Every other parameter in the mixer could be MIDI-learned; a hosted plugin's could not,
+because a plugin's knobs live in ITS window and never reach the page.
+
+- The plugin's insert slot gets a **MIDI** button beside EDITOR. It lists what that plugin exposes — the
+  `params` verb already existed and already answers in **0..1**, which is exactly what a CC maps onto — and a
+  right-click on a row arms MIDI Learn like anything else in the mixer.
+- The key is `<channel>:<slot>:plugin#<n>`, deliberately unlike any `FX_REGISTRY` key, and `applyCcToParam`
+  branches on it BEFORE the registry lookup that a plugin parameter is not in and never will be. Everything
+  under it is the existing path untouched: the learn picker that skips 14-bit LSB partners and 0/127 button
+  blips, the mapping store, the `midi-map.json` disk mirror, Clear MIDI. A plugin insert's `fxId` is already
+  `'plugin'`, so learn COMPLETION needed no change at all.
+- A plain list, not a wall of knobs: the plugin's window is where you turn things, this is only where you say
+  "that knob drives THIS". It scrolls, because a synth can have hundreds.
+
+**The gate runs on a machine with real plugins, and CI is not one.** The probe lists the hosted plugin's
+parameters, sets one well away from where it was, and reads it back changed — a silent no-op would otherwise
+look identical to a working bind. But a GitHub runner has **no plugins scanned** (`plugins61.known: 0`), so
+`pluginHosted` is null there and the whole block is skipped: on CI this asserts nothing, by construction. It is
+real coverage only on a machine with a VST3 installed — his, and the packaged Mac probe, where the AIR Tape
+Echo has been hosting since 6.2. **His pass:** put a plugin on a channel, press MIDI, right-click a parameter,
+move a knob on the MPD.
+
+Help entry in the same commit, per the house rule. CI green on all four jobs — after one Windows re-run: that
+job hung at launch once (no probe file, 240 s timeout) and passed on the identical commit second time. Worth
+watching rather than chasing; a repeat is a real bug.
+
 ## Phase 9 — 9.1 (WINDOWS): IT UPDATES ITSELF, IT HAS AN INSTALLER, AND THE PLAN'S GUID WAS WRONG, 2026-08-26
 
 **WinSparkle 0.9.4**, pinned and SHA-256 verified, DLL beside the exe. 0.9.4 specifically: it is the first
