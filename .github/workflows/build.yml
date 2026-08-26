@@ -295,6 +295,21 @@ jobs:
           }
           Write-Host "perf: $((Select-String -Path $out -Pattern '"perf": \{[^}]*\}' -AllMatches).Matches.Value)"
           Write-Host "PROBE OK (windows)"
+      # COMPILE THE REAL INSTALLER. Not to ship it — this runner cannot sign, and the payload here has no drum
+      # library — but because tools/release/installer/terminator.nsi is the file that has to work perfectly ONCE,
+      # on the day an installed 2.2.3 auto-updates into 3.0. Left uncompiled until someone sits at the Windows
+      # machine, a typo in it would be found at exactly the wrong moment. makensis is on the GitHub runner image.
+      - name: Compile the NSIS installer (not shipped — proves the script builds)
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path "build/win-release/CMakeCache.txt" -Pattern '^TERMINATOR_VERSION_STRING:STRING=(.*)$').Matches.Groups[1].Value
+          $payload = (Resolve-Path "build/win-release/app/Terminator_artefacts/Release").Path
+          New-Item -ItemType Directory -Force -Path "build/installer" | Out-Null
+          $out = (Resolve-Path "build/installer").Path + "\Terminator-Setup-$ver.exe"
+          & makensis /DVERSION="$ver" /DPAYLOAD="$payload" /DOUTFILE="$out" "tools/release/installer/terminator.nsi"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed to compile the installer"; exit 1 }
+          if (-not (Test-Path $out)) { Write-Host "::error::makensis reported success but produced no installer"; exit 1 }
+          Write-Host "installer: $out ($((Get-Item $out).Length) bytes)"
       - name: Package app
         shell: pwsh
         run: Compress-Archive -Path "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -DestinationPath "build/Terminator-win-x64-unsigned.zip"
