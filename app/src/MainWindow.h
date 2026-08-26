@@ -11,6 +11,7 @@
 #include "terminator/io/Settings.h"
 
 #include "AppMenu.h"
+#include "Updater.h"
 
 namespace terminator::app
 {
@@ -41,6 +42,9 @@ class MainWindow final : public juce::DocumentWindow
     // THE MENU (8.6): every item forwards to the page, and the command manager owns the key equivalents.
     juce::ApplicationCommandManager commands_;
     std::unique_ptr<AppMenu> menu_;
+    // THE UPDATER (9.1). Constructed before the menu, because whether it actually started is what decides
+    // if the Check for Updates item exists at all.
+    Updater updater_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
 };

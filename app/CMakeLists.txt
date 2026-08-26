@@ -49,18 +49,66 @@ set(TERMINATOR_OS_TYPES_PLIST [==[
 </plist>
 ]==])
 
+# THE UPDATE FEED (Phase 9.1). Sparkle reads these three keys out of the app's own Info.plist at launch.
+#   * SUFeedURL   — the appcast under the app's OWN R2 prefix. `terminator-native/` is a different channel from
+#                   the Electron app's `terminator-electron/`, so a 3.0 release can never corrupt the 2.x feed.
+#                   Mac and Windows get SEPARATE files for the same reason (RELEASE-CYCLES rule: never touch the
+#                   other platform's feed).
+#   * SUPublicEDKey — the PUBLIC half of the EdDSA key pair. The private half lives only in the release Mac's
+#                   login keychain and is what `sign_update` uses; Sparkle refuses any download whose signature
+#                   this key does not verify. Publishing the public half is the point of it.
+#   * automatic checks daily, but never an automatic INSTALL — the user is told and chooses, exactly as the
+#                   Electron app behaves today ("Restart now / Later").
+set(TERMINATOR_APPCAST_URL
+    "https://pub-17b3d7f0dae24aa8b32405d12d43a870.r2.dev/terminator-native/appcast-mac.xml"
+    CACHE STRING "Sparkle appcast URL baked into the app")
+set(TERMINATOR_SPARKLE_PUBLIC_KEY "qHRGkAicXqX+lOZgKNI4VnflnE3374jf1WCVWfxZFto="
+    CACHE STRING "Public EdDSA key Sparkle verifies downloads against (the private half is keychain-only)")
+
+set(TERMINATOR_UPDATER_PLIST "")
+if(TERMINATOR_SPARKLE_FOUND)
+    set(TERMINATOR_UPDATER_PLIST "  <key>SUFeedURL</key>
+  <string>${TERMINATOR_APPCAST_URL}</string>
+  <key>SUPublicEDKey</key>
+  <string>${TERMINATOR_SPARKLE_PUBLIC_KEY}</string>
+  <key>SUEnableAutomaticChecks</key>
+  <true/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>86400</integer>
+  <key>SUAutomaticallyUpdate</key>
+  <false/>
+")
+    string(REPLACE "</dict>\n</plist>" "${TERMINATOR_UPDATER_PLIST}</dict>\n</plist>"
+           TERMINATOR_OS_TYPES_PLIST "${TERMINATOR_OS_TYPES_PLIST}")
+endif()
+
+# THE BUNDLE ID IS A RELEASE DECISION, NOT A CONSTANT (plan 9.4b). The installed Electron app is
+# `com.terminator.audio`, and Squirrel.Mac only swaps a downloaded bundle into an installed one when the two
+# ids MATCH — so the 3.0.0 that crosses over from 2.2.4 must carry the ELECTRON id, not this one. While 3.0 is
+# in alpha the two apps deliberately differ so both can live on the same Mac without fighting over the
+# `terminator://` scheme and the .tproj association. `tools/release/package-mac.sh` refuses to package a
+# non-alpha version under the alpha id, so the switch cannot be forgotten.
+set(TERMINATOR_BUNDLE_ID "app.killaviccheatcodes.terminator" CACHE STRING
+    "macOS/Windows bundle identifier. The 3.0.0 HANDOVER release must use com.terminator.audio — see plan 9.4b.")
+
 juce_add_gui_app(Terminator
     PRODUCT_NAME "Terminator"
     COMPANY_NAME "Killavic Cheat Codes"
-    BUNDLE_ID "app.killaviccheatcodes.terminator"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 Killavic Cheat Codes"
+    COMPANY_WEBSITE "https://killaviccheatcodes.app"
+    BUNDLE_ID "${TERMINATOR_BUNDLE_ID}"
     VERSION "${PROJECT_VERSION}"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.png"
     PLIST_TO_MERGE "${TERMINATOR_OS_TYPES_PLIST}"
     NEEDS_WEB_BROWSER TRUE
     NEEDS_WEBVIEW2 TRUE
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Terminator records samples from your audio interface."
     HARDENED_RUNTIME_ENABLED TRUE
-    HARDENED_RUNTIME_OPTIONS "com.apple.security.cs.allow-unsigned-executable-memory;com.apple.security.device.audio-input")
+    # `disable-library-validation` is what PLUGIN HOSTING needs and nothing else: a hardened process refuses to
+    # load a dylib signed by another team, and every VST3/AU a user owns is signed by someone else. Without it
+    # Phase 6 works in a dev build and dies in the SIGNED one — a failure no unsigned run can show.
+    HARDENED_RUNTIME_OPTIONS "com.apple.security.cs.allow-unsigned-executable-memory;com.apple.security.device.audio-input;com.apple.security.cs.disable-library-validation")
 
 # Web resources served to the WebView through the resource provider: our static page + JUCE's official
 # @juce-framework/webview JS (ESM) taken straight from the fetched JUCE tree — never hand-rolled plumbing.
@@ -102,7 +150,9 @@ target_sources(Terminator PRIVATE
     src/AppMenu.h
     src/AppMenu.cpp
     src/Perf.h
-    src/Perf.cpp)
+    src/Perf.cpp
+    src/Updater.h
+    src/Updater.mm)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1
@@ -116,7 +166,10 @@ target_compile_definitions(Terminator PRIVATE
     $<$<PLATFORM_ID:Windows>:JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1>
     # STEMS (Phase 7): compiled in only where onnxruntime was provisioned. The runtime itself is dlopen'd at the
     # first split, never linked (cmake/Onnxruntime.cmake explains why).
-    $<$<BOOL:${TERMINATOR_ORT_FOUND}>:TERMINATOR_STEMS=1>)
+    $<$<BOOL:${TERMINATOR_ORT_FOUND}>:TERMINATOR_STEMS=1>
+    # THE UPDATER (Phase 9.1): compiled in only where Sparkle was provisioned (macOS). Updater.mm compiles to a
+    # do-nothing stub otherwise, so nothing else in the app is conditional.
+    $<$<BOOL:${TERMINATOR_SPARKLE_FOUND}>:TERMINATOR_HAS_SPARKLE=1>)
 
 target_link_libraries(Terminator PRIVATE
     # terminator::stems already carries terminator::engine (PUBLIC) — naming both makes ld see the same static
@@ -218,4 +271,28 @@ if(TERMINATOR_ORT_FOUND AND TERMINATOR_ORT_RUNTIME_LIB)
                     "${_terminator_ort_dest}/libonnxruntime.dylib"
             VERBATIM)
     endif()
+endif()
+
+# SPARKLE (Phase 9.1) rides in Contents/Frameworks like any other embedded framework.
+# `ditto` and not `cmake -E copy_directory`: a framework is a tree of SYMLINKS (Versions/Current and every
+# top-level entry), and CMake's copy DEREFERENCES them — the result is twice the size and does not load.
+# The framework carries its own nested Updater.app and two XPC services; `tools/release/package-mac.sh` signs
+# those as BUNDLES, which is why that script signs nested bundles as units rather than file by file.
+if(TERMINATOR_SPARKLE_FOUND)
+    cmake_path(GET TERMINATOR_SPARKLE_FRAMEWORK PARENT_PATH _terminator_sparkle_search)
+    target_compile_options(Terminator PRIVATE "-F${_terminator_sparkle_search}")
+    target_link_options(Terminator PRIVATE "-F${_terminator_sparkle_search}")
+    target_link_libraries(Terminator PRIVATE "-framework Sparkle")
+    # Sparkle's install name is @rpath-relative, so the app has to say where its frameworks live.
+    set_target_properties(Terminator PROPERTIES
+        BUILD_RPATH   "@executable_path/../Frameworks"
+        INSTALL_RPATH "@executable_path/../Frameworks")
+    add_custom_command(TARGET Terminator POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Frameworks"
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf
+                "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Frameworks/Sparkle.framework"
+        COMMAND ditto "${TERMINATOR_SPARKLE_FRAMEWORK}"
+                "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Frameworks/Sparkle.framework"
+        COMMENT "Embedding Sparkle ${TERMINATOR_SPARKLE_VERSION} (the updater)"
+        VERBATIM)
 endif()

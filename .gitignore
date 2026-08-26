@@ -31,12 +31,18 @@ drums-flac/
 # provisioned onnxruntime (cmake/Onnxruntime.cmake)
 third_party/.ort-cache/
 
+# provisioned Sparkle, the macOS updater (cmake/Sparkle.cmake)
+third_party/.sparkle-cache/
+
 # never
 .env
 .env.*
 Secrets.*
 *.p8
 *.p12
+# an exported Sparkle private key — it belongs OUTSIDE the repo, never in it
+*.pem
+sparkle_priv*
 *.cer
 *.mobileprovision
 
@@ -47,3 +53,6 @@ third_party/_fetched/
 # local build/test logs + probe outputs
 *.log
 probe*.json
+
+# release artefacts (tools/release/package-mac.sh) — ROOT-anchored: tools/release/ holds the scripts
+/release/

@@ -29,6 +29,13 @@ documented in `ui/README.md`; CMake bundles `ui/dist` into the app when it exist
   **The runtime is dlopen'd, never linked** (`StemModel::ensureRuntime`): every prebuilt ORT for macOS is built
   against 13.3+, and linking it would raise the app's own floor from macOS 12 to 13.4. Nothing in the build may
   add a link-time dependency on it — `otool -L` on the app must have no onnxruntime line.
+- **Sparkle** (the macOS updater) is pinned in `cmake/Sparkle.cmake` — the 2.9.6 binary distribution, SHA-256
+  verified, into `third_party/.sparkle-cache` (gitignored). Fetched only for a macOS app build;
+  `-DTERMINATOR_UPDATER=OFF` skips it and `Updater.mm` compiles to a stub. Extracted with `tar`, never
+  `file(ARCHIVE_EXTRACT)`: a framework is a tree of symlinks and CMake's extractor dereferences them.
+- **Packaging is a script, not a recipe**: `tools/release/package-mac.sh` (build → sign → notarise → staple →
+  DMG + zip, uploads nothing). It is the ONLY way a build reaches anybody; the runbook and every gate it
+  enforces are in `docs/native/RELEASE-CYCLES-NATIVE.md`.
 - JUCE licence: **Starter (free, ≤ $20k revenue)** until Terminator 3.0 sells; upgrade to Indie at Phase 9.1b.
 
 ## Presets (CMakePresets.json) — `cmake --preset X && cmake --build --preset X && ctest --preset X`

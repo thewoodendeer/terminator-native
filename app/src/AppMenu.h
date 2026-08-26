@@ -19,8 +19,11 @@ class AppMenu final : public juce::MenuBarModel, public juce::ApplicationCommand
 {
   public:
     /// `onCommand(key)` = the page's `onShortcut` key; `onOpenRecent(path)` = a file from the Recent submenu.
+    /// `onCheckForUpdates` is EMPTY when this build has no working updater (every dev run, every unsigned
+    /// build) — the item is then left out of the menu entirely rather than shown doing nothing.
     AppMenu(std::function<void(const juce::String&)> onCommand, std::function<void(const juce::String&)> onOpenRecent,
-            std::function<juce::StringArray()> recentFiles, std::function<void()> onPreferences);
+            std::function<juce::StringArray()> recentFiles, std::function<void()> onPreferences,
+            std::function<void()> onCheckForUpdates = {});
     ~AppMenu() override;
 
     /// The manager owns the KEY EQUIVALENTS (⌘S and friends). On macOS a menu key equivalent is handled before the
@@ -40,7 +43,7 @@ class AppMenu final : public juce::MenuBarModel, public juce::ApplicationCommand
   private:
     std::function<void(const juce::String&)> onCommand_, onOpenRecent_;
     std::function<juce::StringArray()> recentFiles_;
-    std::function<void()> onPreferences_;
+    std::function<void()> onPreferences_, onCheckForUpdates_;
     juce::StringArray recentSnapshot_;                   // the last Recent submenu, so an id maps back to a path
     juce::ApplicationCommandManager* manager_ = nullptr; // set by attachTo (the key equivalents live there)
 };

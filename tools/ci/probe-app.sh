@@ -64,6 +64,25 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"errors": ?\[\]' "$OUT" || { echo "::error::the page reported uncaught errors"; exit 1; }
   # Phase 8.6: the app's MENU reaches the page — the shell fired its HELP item and the page opened its help window
   grep -Eq '"menuReachedPage": ?true' "$OUT" || { echo "::error::the app menu did not reach the page (see menuReachedPage)"; exit 1; }
+fi
+# THE UPDATER (9.1). Only asserted when this run asked for it — `TERMINATOR_PROBE_UPDATER=1`, which
+# tools/release/package-mac.sh sets on the SIGNED, STAPLED bundle. Sparkle refuses to start in an unsigned dev
+# build, so this can only mean anything on a packaged app; and when it DOES fail there, the failure is
+# otherwise completely silent (users just stop getting versions). Automatic checks are off in this mode, so
+# nothing here touches the network.
+if [ "${TERMINATOR_PROBE_UPDATER:-}" = "1" ]; then
+  # Read the updater OBJECT, not the whole file: `"started"` and `"attempted"` are common key names elsewhere
+  # in this payload, and a grep over the lot would pass on somebody else's true.
+  UP="$(grep -o '"updater": {[^}]*}' "$OUT" || true)"
+  [ -n "$UP" ] || { echo "::error::TERMINATOR_PROBE_UPDATER=1 but the probe reported no updater block at all"; exit 1; }
+  echo "$UP" | grep -Eq '"attempted": ?true' || { echo "::error::the app never tried to start the updater: $UP"; exit 1; }
+  echo "$UP" | grep -Eq '"started": ?true' || {
+    echo "::error::the updater did NOT start in this bundle — a shipped build like this would never update anybody: $UP"; exit 1; }
+  echo "$UP" | grep -Eq '"feed": ?"https://' || {
+    echo "::error::the bundle carries no https SUFeedURL — the updater has nowhere to look: $UP"; exit 1; }
+  echo "== updater OK: $UP"
+fi
+if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   # PREFERENCES: the FEATURE is "openPreferences() opened the window and its page ran". It used to assert
   # `prefsWindow` — the window's VISIBILITY at the final read — which measures the machine's focus, not the app:
   # the Preferences window is always-on-top, so macOS orders it out whenever Terminator is not frontmost, and a

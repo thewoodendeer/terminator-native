@@ -80,7 +80,11 @@ MainWindow::MainWindow(const juce::String& name)
         {
             if (shell_ != nullptr)
                 shell_->openPreferencesFromMenu();
-        });
+        },
+        // THE UPDATER (9.1): an EMPTY callback when it did not start (a dev build, a probe run, a missing feed),
+        // and AppMenu then leaves the item out. A menu item that cannot work is worse than no menu item.
+        updater_.isRunning() ? std::function<void()>([this] { updater_.checkForUpdatesNow(); })
+                             : std::function<void()>{});
     menu_->attachTo(commands_);
     addKeyListener(commands_.getKeyMappings()); // Windows: the window carries the key equivalents
 #if !JUCE_MAC

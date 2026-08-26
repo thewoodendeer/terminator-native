@@ -17,15 +17,16 @@ enum MenuId
     idRearrange,
     idResetLayout,
     idHelp,
+    idCheckForUpdates,
     idRecentFirst = 1000
 };
 } // namespace
 
 AppMenu::AppMenu(std::function<void(const juce::String&)> onCommand,
                  std::function<void(const juce::String&)> onOpenRecent, std::function<juce::StringArray()> recentFiles,
-                 std::function<void()> onPreferences)
+                 std::function<void()> onPreferences, std::function<void()> onCheckForUpdates)
     : onCommand_(std::move(onCommand)), onOpenRecent_(std::move(onOpenRecent)), recentFiles_(std::move(recentFiles)),
-      onPreferences_(std::move(onPreferences))
+      onPreferences_(std::move(onPreferences)), onCheckForUpdates_(std::move(onCheckForUpdates))
 {
 #if JUCE_MAC
     // On macOS the menu belongs to the APPLICATION, and Preferences belongs in the app menu with its own ⌘,
@@ -52,6 +53,12 @@ void AppMenu::attachTo(juce::ApplicationCommandManager& manager)
 #if JUCE_MAC
     // On macOS the menu belongs to the APPLICATION, and Preferences belongs in the app menu with its own ⌘,
     juce::PopupMenu appMenu;
+    // macOS convention: Check for Updates sits in the APP menu, above Preferences.
+    if (onCheckForUpdates_)
+    {
+        appMenu.addCommandItem(manager_, idCheckForUpdates);
+        appMenu.addSeparator();
+    }
     appMenu.addCommandItem(manager_, idPreferences);
     juce::MenuBarModel::setMacMainMenu(this, &appMenu);
 #endif
@@ -61,6 +68,8 @@ void AppMenu::getAllCommands(juce::Array<juce::CommandID>& commands)
 {
     commands.addArray(
         {idNew, idOpen, idSave, idSaveAs, idExport, idPreferences, idPlayStop, idRearrange, idResetLayout, idHelp});
+    if (onCheckForUpdates_)
+        commands.add(idCheckForUpdates);
 }
 
 void AppMenu::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -105,6 +114,9 @@ void AppMenu::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& i
     case idHelp:
         set("Terminator Help", "Help", juce::KeyPress::F1Key, {});
         break;
+    case idCheckForUpdates: // no key equivalent: nothing should reach the network by a slip of the hand
+        set("Check for Updates...", "Application", 0, {});
+        break;
     default:
         break;
     }
@@ -141,6 +153,8 @@ juce::PopupMenu AppMenu::getMenuForIndex(int index, const juce::String&)
         m.addCommandItem(manager_, idExport);
 #if !JUCE_MAC
         m.addSeparator();
+        if (onCheckForUpdates_)
+            m.addCommandItem(manager_, idCheckForUpdates);
         m.addCommandItem(manager_, idPreferences);
 #endif
     }
@@ -169,6 +183,12 @@ void AppMenu::menuItemSelected(int itemId, int)
     {
         if (onPreferences_)
             onPreferences_();
+        return;
+    }
+    if (itemId == idCheckForUpdates)
+    {
+        if (onCheckForUpdates_)
+            onCheckForUpdates_();
         return;
     }
     if (!onCommand_)

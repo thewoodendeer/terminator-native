@@ -8,6 +8,7 @@
 #include "terminator/io/NullAudioDevice.h"
 
 #include "Perf.h"
+#include "Updater.h"
 #include "WebResources.h"
 #include "terminator/Version.h"
 #include "terminator/model/ProjectModel.h"
@@ -2495,6 +2496,21 @@ void WebShell::runProbe()
 #else
                     o->setProperty("menuInstalled", true);
 #endif
+                    {
+                        // 9.1: THE UPDATER. A shipped app whose Sparkle refuses to start never tells anybody —
+                        // the user simply stops getting versions. `TERMINATOR_PROBE_UPDATER=1` (which
+                        // tools/release/package-mac.sh sets on the SIGNED bundle) makes the app really start it
+                        // with automatic checks off, and `started` here is that answer. A plain probe run
+                        // reports `attempted:false` and asserts nothing.
+                        const auto st = Updater::status();
+                        auto* up = new juce::DynamicObject();
+                        up->setProperty("compiledIn", st.compiledIn);
+                        up->setProperty("attempted", st.attempted);
+                        up->setProperty("started", st.started);
+                        up->setProperty("detail", st.detail);
+                        up->setProperty("feed", st.feed);
+                        o->setProperty("updater", juce::var(up));
+                    }
                     {
                         // 6.1: the plugin list over the real handler (a SCAN is not run — that is minutes of other
                         // people's code; what the probe proves is that the hub loaded and answers).
