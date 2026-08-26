@@ -224,12 +224,36 @@ export class NativeBassShadow {
       // the live playhead (beats) vs the snapshot's tick, with the DERIVED tolerance (the snapshot is snapshotAgeMs old
       // and is the RENDERED position; the playhead is what is HEARD)
       const tickDur = 60 / Math.max(20, this.currentBpm()) / PPQ;
-      const cur1 = Math.floor(this.bass.getPlayheadBeats() * PPQ), nat1 = Number(sp1?.bassTick), age1 = this.host.snapshotAgeMs(), tol1 = this.host.cursorToleranceSteps(tickDur);
-      await new Promise((res) => setTimeout(res, 300));
-      const sp2 = this.host.latestSnapshot();
-      const cur2 = Math.floor(this.bass.getPlayheadBeats() * PPQ), nat2 = Number(sp2?.bassTick), age2 = this.host.snapshotAgeMs(), tol2 = this.host.cursorToleranceSteps(tickDur);
-      const loop = Number(sp2?.bassLoopTicks) || 384;
+      const loop = Number(sp1?.bassLoopTicks) || 384;
       const close = (a: number, b: number, tol: number) => { const dd = Math.abs(a - b); return Math.min(dd, loop - dd) <= tol; };
+      const skew = (s: { cur: number; nat: number }) => { const dd = Math.abs(s.cur - s.nat); return Math.min(dd, loop - dd); };
+      // ONE SAMPLE ON A STARVED MACHINE MEASURES THE STALL, NOT THE APP. The tolerance is derived from the
+      // snapshot's age, but that age is read AFTER both halves of the pair — so a stall BETWEEN reading the
+      // page's playhead and reading the engine's tick is invisible to it and the tolerance comes out too small.
+      // A loaded arm64 CI runner failed here by 2 ticks out of 242 (age 174 ms against a 68-tick tolerance)
+      // while the Intel and Windows runners passed the identical build, with 55 xruns and 507 ms of transport
+      // drift in the same report — i.e. the runner, not the bass. So the pair is sampled as tightly as possible
+      // and RETRIED, keeping the closest attempt, exactly as the live-record check already does.
+      const sampleCursor = () => {
+        const cur = Math.floor(this.bass.getPlayheadBeats() * PPQ);
+        const nat = Number(this.host.latestSnapshot()?.bassTick);
+        return { cur, nat, age: this.host.snapshotAgeMs(), tol: this.host.cursorToleranceSteps(tickDur) };
+      };
+      const bestOf = async (attempts: number) => {
+        let best = sampleCursor();
+        for (let a = 1; a < attempts && !close(best.cur, best.nat, best.tol); a++) {
+          await new Promise((res) => setTimeout(res, 120));
+          const next = sampleCursor();
+          if (skew(next) - next.tol < skew(best) - best.tol) best = next;
+        }
+        return best;
+      };
+      const s1 = await bestOf(3);
+      await new Promise((res) => setTimeout(res, 300));
+      const s2 = await bestOf(3);
+      const sp2 = this.host.latestSnapshot();
+      const cur1 = s1.cur, nat1 = s1.nat, age1 = s1.age, tol1 = s1.tol;
+      const cur2 = s2.cur, nat2 = s2.nat, age2 = s2.age, tol2 = s2.tol;
       r.bassPageCursor = { cur1, nat1, cur2, nat2 };
       r.bassPageCursorAgeMs = { age1, age2, tol1, tol2 };
       r.cursorTracks = close(cur1, nat1, tol1) && close(cur2, nat2, tol2);
