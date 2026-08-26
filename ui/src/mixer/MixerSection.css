@@ -266,6 +266,32 @@
 .mx-plugin-editor:hover { background: rgba(53, 255, 105, 0.12); }
 .mx-plugin-editor.on { color: #050508; background: var(--hw-accent, #35ff69); }
 
+/* PLUGIN PARAMETERS (6.5) — the hosted plugin's OWN parameters, listed so a MIDI control can be bound to one.
+   Deliberately a plain list and not a wall of knobs: the plugin's window is where you turn things, this is only
+   where you say "that knob on my controller drives THIS". Scrolls, because a synth can have hundreds. */
+.mx-plugin-params {
+  width: 100%; max-height: 168px; overflow-y: auto; margin: 0 0 6px 0;
+  border: 1px solid rgba(53, 255, 105, 0.25); border-radius: 3px;
+}
+.mx-plugin-param {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 3px 7px; cursor: context-menu;
+  font: 500 10px/1.35 var(--font-mono, monospace);
+  color: var(--hw-fg, #cfe8d6);
+  border-bottom: 1px solid rgba(53, 255, 105, 0.10);
+}
+.mx-plugin-param:last-child { border-bottom: 0; }
+.mx-plugin-param:hover { background: rgba(53, 255, 105, 0.07); }
+.mx-plugin-param-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx-plugin-param-cc { flex: none; font-weight: 700; color: var(--hw-accent, #35ff69); letter-spacing: 0.5px; }
+.mx-plugin-param.mapped { color: var(--hw-accent, #35ff69); }
+.mx-plugin-param.learning { background: rgba(53, 255, 105, 0.18); }
+.mx-plugin-param.learning .mx-plugin-param-cc { animation: mx-learn-blink 0.9s steps(2, start) infinite; }
+@keyframes mx-learn-blink { 50% { opacity: 0.25; } }
+.mx-plugin-param-empty {
+  padding: 5px 7px; font: 500 10px/1.35 var(--font-mono, monospace); color: var(--hw-muted, #7f9c88);
+}
+
 .mx-fx-add {
   width: 100%;
   height: 16px;

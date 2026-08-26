@@ -282,6 +282,7 @@ jobs:
             '"gatedBeforeSignIn": ?true'       = 'with no account the sign-in gate did not appear';
             '"probeUnlock": ?\{[^}]*"ok": ?true' = 'signing in did not unlock the app';
             '"updater": ?\{[^}]*"started": ?true' = 'the WINDOWS updater did not start — a shipped build like this would never update anybody';
+            '"pluginParamsOk": ?true|"pluginHosted": ?null' = 'MIDI learn on plugin params: the hosted plugin exposed no parameters, or setting one did not move it';
           }
           # The page's localStorage holds the FREE-TIER PULL COUNTER and every look-and-feel preference. Under
           # %TEMP% Windows may empty it whenever it likes — free pulls come back forever and a paying user's

@@ -48,6 +48,27 @@ export async function openPluginEditor(channel: string, slot: number): Promise<{
   return { ok: !!r?.ok, error: r?.error };
 }
 
+export type PluginParam = { index: number; name: string; value: number; text: string; label: string };
+
+/** THE HOSTED PLUGIN'S OWN PARAMETERS (6.5). A plugin's knobs live in ITS window, not ours — so this is the only
+ *  way the page can see them, and it is what MIDI learn binds to. `value` is 0..1 in the format's own
+ *  normalisation, which is exactly what a CC (0..127) maps onto. */
+export async function listPluginParams(channel: string, slot: number): Promise<PluginParam[]> {
+  const strip = stripIndex(channel);
+  if (!isNative() || strip < 0) return [];
+  const r: any = await native.plugins({ verb: 'params', strip, slot }).catch(() => null);
+  return Array.isArray(r?.params) ? (r.params as PluginParam[]) : [];
+}
+
+/** Drive one of those parameters, 0..1. Fire-and-forget: this is on the path of a hardware knob being turned,
+ *  so it must not await anything — the app coalesces onto the audio thread on its side. */
+export function setPluginParam(channel: string, slot: number, index: number, value01: number): void {
+  const strip = stripIndex(channel);
+  if (!isNative() || strip < 0) return;
+  void native.plugins({ verb: 'setParam', strip, slot, index, value: Math.max(0, Math.min(1, value01)) })
+    .catch(() => null);
+}
+
 /** Is this plugin an instrument? (the picker labels it, and the shadow loads it differently) */
 export function isInstrumentId(id: string): boolean {
   return cachedPlugins().some(p => p.id === id && p.isInstrument);

@@ -1389,6 +1389,28 @@ class NativeEngineShadow {
               r.pluginId = first.id;
               r.pluginSlot = pslot;
               r.pluginHosted = await waitFor(hosted);
+              // 6.5: MIDI LEARN ON PLUGIN PARAMS — the exact path a turned knob takes, without any MIDI
+              // hardware. The CC layer is the page's existing mixer learn (already covered); what is new and
+              // worth gating is the two bridge calls under it: LIST the hosted plugin's own parameters, SET one,
+              // and see the value actually move. A silent no-op here would look identical to a working bind.
+              if (r.pluginHosted) {
+                const ps: any = await native.plugins({ verb: 'params', strip: sampleIdx, slot: pslot }).catch(() => null);
+                const list = Array.isArray(ps?.params) ? ps.params : [];
+                r.pluginParamCount = list.length;
+                const target = list.find((q: any) => Number.isFinite(Number(q?.value)));
+                if (target) {
+                  const before = Number(target.value);
+                  // Aim well away from where it already is, so "it moved" cannot be rounding.
+                  const want = before > 0.5 ? 0.1 : 0.9;
+                  await native.plugins({ verb: 'setParam', strip: sampleIdx, slot: pslot, index: target.index, value: want }).catch(() => null);
+                  const after: any = await native.plugins({ verb: 'params', strip: sampleIdx, slot: pslot }).catch(() => null);
+                  const now = Number((after?.params ?? []).find((q: any) => q.index === target.index)?.value ?? before);
+                  r.pluginParamName = String(target.name ?? '');
+                  r.pluginParamMoved = Math.abs(now - before) > 0.05;
+                  r.pluginParamSetOk = Math.abs(now - want) < 0.2;   // some plugins quantise; this is "it took"
+                }
+                r.pluginParamsOk = r.pluginParamCount > 0 && r.pluginParamMoved === true;
+              }
               ch.removeFx(pslot);
               r.pluginUnhosted = await waitFor(async () => !(await hosted()));
             }
@@ -1399,7 +1421,7 @@ class NativeEngineShadow {
         r.mixerLoudnessOk = !!lo && typeof lo.m === 'number' && typeof lo.hops === 'number' && typeof mixerOf()?.fxGr === 'object' && mx.master.updateLoudness().worklet === true;
         r.mixerFxCmdErrors = this.stats.commandErrors - cmdErrBefore - expectedCmdErrs;
         r.mixerFxRejected = Number(mixerOf()?.fxRejected ?? -1);
-        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerRestoreParams && r.mixerRestoreCleared && r.mixerEnumByValue && r.mixerEnumBogusRefused && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0 && r.pluginHosted !== false && r.pluginUnhosted !== false;
+        r.mixerPageOk = r.mixerStripsLive && r.mixerSources && r.mixerFaderDown && r.mixerFaderUp && r.mixerMuteOn && r.mixerMuteOff && r.mixerOrderValid && r.mixerRejected === 0 && r.mixerPadStrip !== false && r.mixerFxAdded && r.mixerFxRemoved && r.mixerFxHeavyAdded && r.mixerFxHeavyRemoved && r.mixerRestoreParams && r.mixerRestoreCleared && r.mixerEnumByValue && r.mixerEnumBogusRefused && r.mixerConsoleOn && r.mixerConsoleOff && r.mixerLimiterOn && r.mixerLoudnessOk && r.mixerPdcPlan && r.mixerPdcOff && r.mixerPdcOn && r.mixerPdcCleared && r.mixerFxCmdErrors === 0 && r.mixerFxRejected === 0 && r.pluginHosted !== false && r.pluginUnhosted !== false && r.pluginParamsOk !== false;
       } else r.mixerPageOk = null;
       mark('p8mixer');
 

@@ -11,11 +11,16 @@ import { FX_REGISTRY, FX_ORDER, FxId, ParamSpec, WET_PARAM_KEYS } from './fx';
 // PLUGINS (6.2): the picker's options and the EDITOR button. Outside the Terminator 3.0 shell this module is inert
 // and the `plugin` insert is not offered at all — a browser has nothing to host a VST3 with.
 import { isNative } from '../renderer/native/juceBridge';
-import { cachedPlugins, listPlugins, openPluginEditor, setInstrumentMidi } from '../renderer/native/pluginSlots';
+import { cachedPlugins, listPlugins, listPluginParams, openPluginEditor, setInstrumentMidi, setPluginParam, type PluginParam } from '../renderer/native/pluginSlots';
 import { MidiMapTarget } from '../renderer/chopper/MidiMap';
 import type { HwPalette } from '../renderer/chopper/hwPalettes';
 import { LoudnessPopup } from './LoudnessPopup';
 import { LearnPicker } from '../renderer/chopper/midiLearnPick.mts';
+
+/** 6.5: how a HOSTED PLUGIN's own parameter is named inside a mixer param key — `<channel>:<slot>:plugin#<n>`.
+ *  Distinct from every FX_REGISTRY key on purpose: `applyCcToParam` branches on it before the registry lookup,
+ *  which a plugin parameter is not in and never will be. */
+const PLUGIN_PARAM_PREFIX = 'plugin#';
 import './MixerSection.css';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -541,6 +546,9 @@ function MixerSectionImpl({ engine, clip, onClip, palette, transportOn }: {
   type MidiMapping = { midiCh: number; cc: number; fxId?: FxId };
 const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
   const midiMappings = useRef<Map<string, MidiMapping>>(new Map());
+  // 6.5: which plugin slot has its parameter list open, and what that list is. `${channel}:${slot}`.
+  const [pluginParamsFor, setPluginParamsFor] = useState<string | null>(null);
+  const [pluginParams, setPluginParams] = useState<PluginParam[]>([]);
   const midiMapLoaded = useRef(false);
   if (!midiMapLoaded.current) {
     midiMapLoaded.current = true;
@@ -800,6 +808,14 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
     const ch = parts[0]; const fxIdx = Number(parts[1]); const param = parts.slice(2).join(':');
     const strip = ch === 'master' ? engine.master : engine.getChannel(ch as ChannelName);
     if (strip.fxIds[fxIdx] !== expectFxId) return;                 // stale: FX removed / replaced
+    // 6.5: a HOSTED PLUGIN's own parameter. Its knobs live in the plugin's window, not in FX_REGISTRY, so it
+    // never reaches the lookup below — the value goes straight over the bridge, 0..1, the normalisation both
+    // a CC and every plugin format already speak.
+    if (param.startsWith(PLUGIN_PARAM_PREFIX)) {
+      const pi = Number(param.slice(PLUGIN_PARAM_PREFIX.length));
+      if (Number.isFinite(pi)) setPluginParam(ch, fxIdx, pi, val127 / 127);
+      return;
+    }
     // Honour the send-channel WET lock (UI + addFx force WET=100 on aux returns).
     if (SEND_CHANNELS.includes(ch as ChannelName) && WET_PARAM_KEYS.has(param)) return;
     const spec = FX_REGISTRY[expectFxId].params.find(p => p.key === param);
@@ -1246,6 +1262,18 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                     <>
                       <button className="mx-plugin-editor" title="Open the plugin's own window"
                         onClick={e => { e.stopPropagation(); void openPluginEditor(ch, idx); }}>EDITOR</button>
+                      {/* 6.5: MIDI LEARN on the plugin's OWN parameters. They live in the plugin's window, so
+                          this is the only place the page can see them — right-click a row and move a knob on
+                          your controller, exactly like every other param in this mixer. */}
+                      <button className={`mx-plugin-editor${pluginParamsFor === `${ch}:${idx}` ? ' on' : ''}`}
+                        title="Bind a knob on your MIDI controller to one of this plugin's own parameters"
+                        onClick={e => {
+                          e.stopPropagation();
+                          const k = `${ch}:${idx}`;
+                          if (pluginParamsFor === k) { setPluginParamsFor(null); setPluginParams([]); return; }
+                          setPluginParamsFor(k); setPluginParams([]);
+                          void listPluginParams(ch, idx).then(ps => { setPluginParamsFor(cur => (cur === k ? k : cur)); setPluginParams(ps); });
+                        }}>MIDI</button>
                       {/* 6.3: an INSTRUMENT plays INTO this strip. MIDI notes keep playing the pads unless you say
                           otherwise here — that is the standing rule, so this is off until you turn it on. */}
                       {pluginList.some(p => p.id === String(fx.params.PLUGIN ?? '') && p.isInstrument) && (
@@ -1254,6 +1282,26 @@ const MIDI_MAP_LS = 'terminator.mixer.midiMap.v1';
                           onClick={e => { e.stopPropagation(); setInstMidi(v => { setInstrumentMidi(!v); return !v; }); }}>
                           {instMidi ? 'MIDI IN ✓' : 'MIDI IN'}
                         </button>
+                      )}
+                      {pluginParamsFor === `${ch}:${idx}` && (
+                        <div className="mx-plugin-params">
+                          {pluginParams.length === 0 && <div className="mx-plugin-param-empty">no parameters</div>}
+                          {pluginParams.map(pp => {
+                            const pk = `${ch}:${idx}:${PLUGIN_PARAM_PREFIX}${pp.index}`;
+                            const pm = midiMappings.current.get(pk);
+                            return (
+                              <div key={pp.index}
+                                className={`mx-plugin-param${learnTarget === pk ? ' learning' : ''}${pm ? ' mapped' : ''}`}
+                                title={`${pp.name}${pp.text ? ` — ${pp.text}${pp.label ? ' ' + pp.label : ''}` : ''}\nRight-click to bind a MIDI control`}
+                                onContextMenu={e => { e.preventDefault(); e.stopPropagation(); setMidiMenu({ x: e.clientX, y: e.clientY, paramKey: pk }); }}>
+                                <span className="mx-plugin-param-name">{pp.name}</span>
+                                <span className="mx-plugin-param-cc">
+                                  {learnTarget === pk ? 'MOVE A KNOB…' : pm ? `CC ${pm.cc}` : ''}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </>
                   )}
