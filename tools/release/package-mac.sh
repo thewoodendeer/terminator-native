@@ -151,6 +151,26 @@ step "signing the nested code (bundles as units, deepest first)"
 # children invalidates the parent.
 # `--preserve-metadata=entitlements` keeps whatever entitlements the vendor shipped (Sparkle's XPC services
 # have needed them in the past); our own binaries have none, so it is a no-op for them.
+# EVERY signature here is timestamped, and a timestamp is a round trip to timestamp.apple.com — 110+ of them,
+# back to back. Apple's TSA throttles under exactly that load, and a throttled call fails the whole package run
+# on a file that signs perfectly a second later (observed 2026-08-25 on one of yt-dlp's Cryptodome .so files).
+# So a FAILURE IS RETRIED, three times with a short backoff, and the real error is printed when it finally
+# gives up — the same rule the pinned-tool downloads already follow: a transient timeout is retried, a wrong
+# identity is not (codesign fails on a bad identity the same way every attempt, and still stops the build).
+sign_one() { # <path> [extra codesign args...]
+  local target="$1"; shift
+  local attempt out
+  for attempt in 1 2 3; do
+    if out="$(codesign --force --timestamp --options runtime --preserve-metadata=entitlements \
+                       --sign "$IDENTITY" "$@" "$target" 2>&1)"; then
+      return 0
+    fi
+    [ "$attempt" -lt 3 ] && sleep $((attempt * 3))
+  done
+  printf '   codesign failed 3x on %s\n%s\n' "$target" "$out" >&2
+  return 1
+}
+
 BUNDLES=()
 while IFS= read -r d; do BUNDLES+=("$d"); done < <(
   find "$APP" -mindepth 1 -type d \( -name "*.framework" -o -name "*.app" -o -name "*.xpc" -o -name "*.bundle" \) \
@@ -176,8 +196,7 @@ while IFS= read -r f; do
   case "$f" in "$APP/Contents/MacOS/Terminator") continue ;; esac
   covered_by_bundle "$f" && continue
   file -b "$f" | grep -q "Mach-O" || continue
-  codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$IDENTITY" "$f" \
-    >/dev/null 2>&1 || die "codesign failed on $f"
+  sign_one "$f" || die "codesign failed on $f (see the error above)"
   loose=$((loose + 1))
 done < <(find "$APP" -type f | awk '{print gsub(/\//,"/") "\t" $0}' | sort -rn | cut -f2-)
 
@@ -187,8 +206,7 @@ for b in ${BUNDLES+"${BUNDLES[@]}"}; do
   target="$b"
   case "$b" in *.framework) [ -d "$b/Versions/B" ] && target="$b/Versions/B"
                             [ -d "$b/Versions/A" ] && target="$b/Versions/A" ;; esac
-  codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$IDENTITY" "$target" \
-    >/dev/null 2>&1 || die "codesign failed on the nested bundle $target"
+  sign_one "$target" || die "codesign failed on the nested bundle $target (see the error above)"
 done
 echo "   ${loose} loose binaries + ${#BUNDLES[@]} nested bundle(s) signed · updater: ${UPDATER}"
 [ "$loose" -gt 100 ] || die "only ${loose} loose binaries found — the bundled tools (yt-dlp/qjs/lame) or

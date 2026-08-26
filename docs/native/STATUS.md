@@ -1880,6 +1880,13 @@ executables in that directory by hash but leaves their EXISTING signature alone,
 back **Invalid**: "The binary is not signed with a valid Developer ID certificate", once per architecture.
 Sparkle's own documented recipe signs `Autoupdate` explicitly for exactly this reason.
 
+**AND A SIGNING RUN IS 110 ROUND TRIPS TO APPLE.** Every signature is timestamped, and a timestamp is a call to
+`timestamp.apple.com` — back to back, Apple's TSA throttles, and a throttled call failed the whole package run
+on one of yt-dlp's Cryptodome `.so` files that signed perfectly a second later. `sign_one` retries three times
+with a backoff and PRINTS the real error when it finally gives up (the original swallowed codesign's stderr, so
+the first failure said only "codesign failed on <path>"). Same rule the pinned-tool downloads already follow: a
+transient timeout is retried, a wrong identity is not.
+
 **NEW GATE — EVERY MACH-O IS OURS, CHECKED LOCALLY.** The reason that reached Apple at all is that
 `codesign --verify --deep --strict` PASSES on a bundle whose nested binaries are validly signed by somebody
 else — it was happy, and the rejection arrived ten minutes later. The script now asks the question Apple asks:
