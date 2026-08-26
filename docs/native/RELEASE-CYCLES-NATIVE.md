@@ -156,11 +156,39 @@ downloads a 404. This has happened on the Electron feeds; do not repeat it here.
 Re-point the appcast at the last known-good version immediately; every minute the bad item is live is another
 user pulled into it. Then fix, bump a patch version, and run the whole cycle including the probe.
 
+## Windows — the installer
+
+```
+pwsh tools/release/package-win.ps1
+```
+
+From an **x64 Native Tools** shell, with NSIS installed. Build → assert the payload → smoke-test the built app
+→ compile `release\win\Terminator-Setup-<version>.exe`. It uploads nothing, and it **cannot sign** — there is
+no Windows certificate yet (9.2), so the installer is SmartScreen-unsigned exactly like the 2.x builds.
+
+`tools/release/installer/terminator.nsi` is not a generic installer: it has to REPLACE an electron-builder
+install of 2.2.3 **in place**, because that is how existing Windows users cross to 3.0 — electron-updater
+downloads this `.exe` from the 2.x feed and runs it with `--updated /S --force-run`. Four things must match what
+electron-builder did, or the crossing leaves two Terminators on the machine:
+
+| | value | why |
+|---|---|---|
+| uninstall GUID | `{57BAB645-AFD8-5C3D-8FD0-03C8A1FC01D8}` | UUID v5 of `com.terminator.audio` in electron-builder's OWN namespace `50e065bc-3134-11e6-9bab-38c9862bdaf3` (`NsisTarget.js:26`), computed with its own `UUID.v5`. **A stock RFC-4122 helper gives a different, wrong answer — that is how the plan carried `{F9C641D4-…}` for months.** Confirm on a real installed 2.2.3 before shipping the handover: `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall" /s /f Terminator` |
+| install dir | `%LOCALAPPDATA%\Programs\Terminator` | electron-builder's default one-click per-user path |
+| shortcuts | `Terminator` (Start menu + desktop) | so pinned taskbar / Start items keep working |
+| arguments | `/S` silent · `--force-run` relaunch · `--updated` no welcome | exactly what electron-updater passes |
+
+It also waits for a running copy to quit before replacing files (electron-updater runs it *while* the old app
+is closing), and clears the previous payload's folders first — an Electron install otherwise leaves an entire
+`resources` tree and its own runtime behind in the user's profile for ever. The user's data is deliberately
+untouched by an uninstall: `%APPDATA%\terminator` and `%APPDATA%\Terminator3` survive, so a reinstall finds
+every project where it was.
+
+**CI compiles this installer on every Windows run** — not to ship it (the runner cannot sign, and its payload
+has no drum library), but because this is the file that has to work perfectly ONCE, on the day somebody's 2.2.3
+updates itself into 3.0. Measured 2026-08-26: `Terminator-Setup-3.0.0-alpha.0.exe`, 33,299,442 bytes.
+
 ## Still owed at Phase 9
-- **Windows: the INSTALLER.** The updater itself is in and gated (WinSparkle starts on the CI runner and the
-  probe asserts it), but there is no packaging — no NSIS installer, no `appcast-win.xml` generator, no signed
-  artefact. Target = an NSIS installer that honours `/S --force-run --updated` and upgrades IN PLACE (plan 9.4b
-  has the registry GUID and paths). Building it needs the Windows machine.
 - **9.2** a Windows signing certificate (Mac is signed + notarised; Windows would be SmartScreen-unsigned).
 - **9.4b THE HANDOVER**: the bundle-id switch, and the drill — install a real 2.2.4 from the live feed, point it
   at a STAGING feed carrying 3.0.0, confirm it swaps, relaunches native, finds every project, and then updates

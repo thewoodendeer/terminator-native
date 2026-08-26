@@ -1828,6 +1828,58 @@ browser; a folder of `.tproj` files should show the Terminator logo. **NOTE:** q
 it is single-instance, so double-clicking the app while a probe run is alive hands you the PROBE's window
 (fake audio device, fake licence). That is what the 2026-08-25 "Offline (no hardware)" screenshot was.
 
+## Phase 9 — 9.1 (WINDOWS): IT UPDATES ITSELF, IT HAS AN INSTALLER, AND THE PLAN'S GUID WAS WRONG, 2026-08-26
+
+**WinSparkle 0.9.4**, pinned and SHA-256 verified, DLL beside the exe. 0.9.4 specifically: it is the first
+release with `win_sparkle_set_eddsa_public_key`, so **both platforms verify downloads against the SAME key
+pair** — one `sign_update`, one thing to back up. Windows has no Info.plist, so the feed, the app details and
+the key are handed over at runtime in `app/src/Updater.cpp`, from the same two CMake values the macOS plist is
+built from. Separate appcast FILES per platform (`appcast-mac.xml` / `appcast-win.xml`): Sparkle can serve both
+from one, and one file is exactly the arrangement in which a Mac release breaks Windows.
+
+**`Updater.mm` was being compiled by MSVC and it happened to work** — MSVC treats an unknown extension as C++,
+and every line of Objective-C sat behind `TERMINATOR_HAS_SPARKLE`. Luck, not design: the first `@interface`
+outside the guard would have broken the Windows build for a reason nobody would guess from the error. It is
+Apple-only now, with `Updater.cpp` everywhere else.
+
+**THE PLAN'S UNINSTALL GUID WAS WRONG, AND IT IS LOAD-BEARING.** Plan 9.4b carried
+`{F9C641D4-BE56-5228-B95C-A6C4E8B7E310}` as "computed, not guessed" — but computed with a stock RFC-4122 helper.
+electron-builder uses **its own namespace** (`50e065bc-3134-11e6-9bab-38c9862bdaf3`, `NsisTarget.js:26`) and its
+own `UUID.v5`; running that code against `com.terminator.audio` gives **`{57BAB645-AFD8-5C3D-8FD0-03C8A1FC01D8}`**.
+The old value appears nowhere in any real build output. An installer built on it would have written a
+stranger's uninstall key: **two Terminator entries in Add/Remove Programs and no upgrade in place** — found only
+after shipping the one release that has to work. Plan corrected, with the `reg query` that confirms it against a
+real installed 2.2.3.
+
+**The installer** (`tools/release/installer/terminator.nsi` + `tools/release/package-win.ps1`) honours
+electron-updater's exact arguments, installs to the same per-user path under the same shortcut names, waits for
+a running copy to quit before replacing files, and clears the previous payload's folders (an Electron install
+otherwise leaves a whole `resources` tree behind for ever). Uninstall leaves `%APPDATA%\terminator` and
+`%APPDATA%\Terminator3` alone, so projects survive. **CI compiles it on every Windows run** — measured
+2026-08-26: **33,299,442 bytes**. It cannot be signed yet (9.2, no certificate), so it is SmartScreen-unsigned
+like 2.x.
+
+**THE WEBVIEW'S USER DATA WAS IN %TEMP%, AND THAT WAS A HOLE IN THE PAYWALL.** `WebShell.cpp` put the WebView2
+user-data folder in temp — which is where the PAGE's `localStorage` lives, and the page keeps the **free-tier
+pull counter** there along with the theme, palette, FINISH, layout, UI size and tooltips. Windows may empty temp
+whenever it likes, so a free user's ten pulls came back for ever and a paying user's whole look reset without
+explanation. It lives beside `settings.json` now (verified on the CI runner:
+`C:\Users\runneradmin\AppData\Roaming\Terminator3\WebView2`), with a one-time carry-over from the old
+folder, and the Windows smoke step FAILS if it is ever under `\Temp\` again. macOS was never affected.
+
+**THREE RED CI RUNS ON THE macOS arm64 RUNNER, TWO OF THEM REAL PROBE BUGS.** Different check each time — the
+bass cursor by 2 ticks, the count-in by one click, the bass cursor again by 1 tick — always with 27-58 xruns and
+245-680 ms of transport drift in the same report, and always with Intel and Windows green on the identical
+commit. Both fixed checks had the same shape: **they sampled on a clock where they should have waited on a
+condition** (a flat 150 ms sleep before a final snapshot read; a single cursor pair). What remained is a machine
+too busy to judge millisecond timing, so the STEP is retried once and nothing inside it is loosened. The obvious
+alternative — widen the tolerance by the measured drift — was tried and thrown away: at 240 BPM, 680 ms of drift
+is 68% of the bass loop, so the check would have passed on anything.
+
+**Gates:** all four CI jobs green on `54576c2`, including the compiled installer.
+**Still owed on Windows:** the signing certificate (9.2), an `appcast-win.xml` generator, and the handover drill
+itself from a real installed 2.2.3.
+
 ## Phase 9 — 9.1/9.2 (Mac): THE APP IS SIGNED, NOTARISED AND CAN UPDATE ITSELF, 2026-08-25 twentieth session
 
 Nineteen sessions of features, and none of them could reach a person: there was no packaging at all — no DMG,
