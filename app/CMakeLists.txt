@@ -318,10 +318,16 @@ if(TERMINATOR_ORT_FOUND AND TERMINATOR_ORT_RUNTIME_LIB)
 endif()
 
 # The two version keys, stamped onto the plist JUCE generated (juceaide writes it from `project(VERSION)`, and
-# there is no juce_add_gui_app argument for these two separately). POST_BUILD, so it happens after the plist
-# exists and before anything is signed.
+# there is no juce_add_gui_app argument for these two separately).
+#
+# AN `ALL` TARGET, NOT A POST_BUILD ON THE APP — and that distinction is the whole point. A POST_BUILD command
+# runs only when its target RELINKS, while the Info.plist is regenerated whenever the project is re-configured.
+# Re-configure without touching a source file and the plist comes back unstamped: CFBundleVersion falls back to
+# "3.0.0", every pre-release advertises the same number, and the updater silently offers nobody anything. That
+# is not hypothetical — it is what `tools/release/package-mac.sh` caught on its own `cmake --preset` step, which
+# is why that gate exists. `plutil -replace` is idempotent, so running on every build costs nothing.
 if(APPLE)
-    add_custom_command(TARGET Terminator POST_BUILD
+    add_custom_target(TerminatorStampVersion ALL
         # `plutil -replace` rather than PlistBuddy Set/Add: it inserts a key that is not there and overwrites one
         # that is, so this is idempotent across incremental rebuilds either way.
         # LSMinimumSystemVersion is not a nicety: without it Sparkle GUESSES the floor (it guesses 10.13) and
@@ -334,6 +340,7 @@ if(APPLE)
                 "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
         COMMENT "Stamping CFBundleVersion ${TERMINATOR_BUNDLE_VERSION} (${TERMINATOR_VERSION_STRING}), macOS ${CMAKE_OSX_DEPLOYMENT_TARGET}+"
         VERBATIM)
+    add_dependencies(TerminatorStampVersion Terminator)
 endif()
 
 # SPARKLE (Phase 9.1) rides in Contents/Frameworks like any other embedded framework.

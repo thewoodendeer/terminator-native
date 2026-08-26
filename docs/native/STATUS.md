@@ -1784,6 +1784,15 @@ lives where the base URL already does and `TERMINATOR_LICENSE_BASE` still redire
   a launch-time decision. Electron has never thrown a modal over somebody mid-beat because a server answered
   oddly, and this build does not start. The gate asserts what the app actually does.
 
+**THE VERSION STAMP RODE ON THE WRONG THING, AND THE GATE CAUGHT IT.** `package-mac.sh` refused its own first
+run after the licence work: `CFBundleVersion is '3.0.0' — the POST_BUILD stamp did not run`. A POST_BUILD command
+fires only when its target RELINKS, but the Info.plist is regenerated on every **re-configure** — which is the
+first thing the release script does. Re-configure without touching a source file and the plist came back
+unstamped, so every pre-release would have advertised "3.0.0" and the updater would have offered nobody
+anything, silently. The stamp is an `ALL` custom target depending on `Terminator` now (`plutil -replace` is
+idempotent, so running every build costs nothing), verified against the exact failing case: a bare
+reconfigure + build with nothing changed still stamps.
+
 **THE PROBE'S FINAL READ IS DRIVEN BY COMPLETION NOW, NOT BY A CLOCK.** The 30-second delay was a guess that
 held until the sign-in round trip went in front of the async block; the read then landed mid-flight and reported
 `licenseSeam: null` — which reads as "no failure" and is really "no check". `readWhenAsyncChecksDone()` polls
