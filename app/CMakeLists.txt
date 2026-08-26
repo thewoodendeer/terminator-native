@@ -69,8 +69,11 @@ set(TERMINATOR_OS_TYPES_PLIST [==[
 set(TERMINATOR_APPCAST_URL
     "https://pub-17b3d7f0dae24aa8b32405d12d43a870.r2.dev/terminator-native/appcast-mac.xml"
     CACHE STRING "Sparkle appcast URL baked into the app")
+set(TERMINATOR_APPCAST_URL_WIN
+    "https://pub-17b3d7f0dae24aa8b32405d12d43a870.r2.dev/terminator-native/appcast-win.xml"
+    CACHE STRING "WinSparkle appcast URL baked into the Windows app")
 set(TERMINATOR_SPARKLE_PUBLIC_KEY "qHRGkAicXqX+lOZgKNI4VnflnE3374jf1WCVWfxZFto="
-    CACHE STRING "Public EdDSA key Sparkle verifies downloads against (the private half is keychain-only)")
+    CACHE STRING "Public EdDSA key BOTH platforms verify downloads against (the private half is keychain-only)")
 
 # THE BUILD NUMBER — what SPARKLE actually compares.
 # JUCE writes `project(VERSION)` (3.0.0) into BOTH CFBundleVersion and CFBundleShortVersionString, which means
@@ -196,7 +199,10 @@ target_sources(Terminator PRIVATE
     src/Perf.h
     src/Perf.cpp
     src/Updater.h
-    src/Updater.mm)
+    # macOS drives Sparkle from Objective-C++; every other platform gets the plain-C++ file (WinSparkle on
+    # Windows, a stub elsewhere). Compiling the .mm on MSVC "worked" only because it treats an unknown
+    # extension as C++ and the Objective-C sits behind an #if — luck, not design.
+    $<IF:$<PLATFORM_ID:Darwin>,src/Updater.mm,src/Updater.cpp>)
 
 target_compile_definitions(Terminator PRIVATE
     JUCE_WEB_BROWSER=1
@@ -213,7 +219,12 @@ target_compile_definitions(Terminator PRIVATE
     $<$<BOOL:${TERMINATOR_ORT_FOUND}>:TERMINATOR_STEMS=1>
     # THE UPDATER (Phase 9.1): compiled in only where Sparkle was provisioned (macOS). Updater.mm compiles to a
     # do-nothing stub otherwise, so nothing else in the app is conditional.
-    $<$<BOOL:${TERMINATOR_SPARKLE_FOUND}>:TERMINATOR_HAS_SPARKLE=1>)
+    $<$<BOOL:${TERMINATOR_SPARKLE_FOUND}>:TERMINATOR_HAS_SPARKLE=1>
+    $<$<BOOL:${TERMINATOR_WINSPARKLE_FOUND}>:TERMINATOR_HAS_WINSPARKLE=1>
+    # Windows has no Info.plist, so WinSparkle is told the feed and the key at runtime — from the SAME two
+    # values the macOS plist is built from, so the platforms can never drift apart.
+    TERMINATOR_APPCAST_URL="${TERMINATOR_APPCAST_URL_WIN}"
+    TERMINATOR_SPARKLE_PUBLIC_KEY="${TERMINATOR_SPARKLE_PUBLIC_KEY}")
 
 target_link_libraries(Terminator PRIVATE
     # terminator::stems already carries terminator::engine (PUBLIC) — naming both makes ld see the same static
@@ -345,6 +356,15 @@ if(APPLE)
         COMMENT "Stamping CFBundleVersion ${TERMINATOR_BUNDLE_VERSION} (${TERMINATOR_VERSION_STRING}), macOS ${CMAKE_OSX_DEPLOYMENT_TARGET}+"
         VERBATIM)
     add_dependencies(TerminatorStampVersion Terminator)
+endif()
+
+# WINSPARKLE (Phase 9.1) is a DLL that ships beside the exe, and nothing more — no bundle, no plist.
+if(TERMINATOR_WINSPARKLE_FOUND)
+    target_link_libraries(Terminator PRIVATE winsparkle::winsparkle)
+    add_custom_command(TARGET Terminator POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${TERMINATOR_WINSPARKLE_DLL}" "$<TARGET_FILE_DIR:Terminator>"
+        COMMENT "Bundling WinSparkle ${TERMINATOR_WINSPARKLE_VERSION} (the updater)"
+        VERBATIM)
 endif()
 
 # SPARKLE (Phase 9.1) rides in Contents/Frameworks like any other embedded framework.

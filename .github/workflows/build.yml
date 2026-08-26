@@ -188,6 +188,11 @@ jobs:
         with:
           path: third_party/.tools-cache
           key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+      - name: Cache WinSparkle (the Windows updater — pinned, cmake/WinSparkle.cmake)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.winsparkle-cache
+          key: winsparkle-${{ hashFiles('cmake/WinSparkle.cmake') }}
       - name: WebView2 SDK (NuGet → JUCE's default search path)
         shell: pwsh
         run: |
@@ -233,6 +238,10 @@ jobs:
           $env:TERMINATOR_PROBE_FILE = $out
           $env:TERMINATOR_NULL_AUDIO = "auto"                              # no sound card on a runner
           $env:TERMINATOR_LICENSE_FAKE = "unlocked:probe@terminator.test"   # never a real account / server
+          # THE UPDATER (9.1). Unlike Sparkle, WinSparkle does not need a signed build to start, so CI can prove
+          # the Windows updater really comes up. Automatic checks are off in this mode — the gate never reaches
+          # the network; what it asserts is that the feed and the shared EdDSA key were accepted.
+          $env:TERMINATOR_PROBE_UPDATER = "1"
           $p = Start-Process -FilePath "build/win-release/app/Terminator_artefacts/Release/Terminator.exe" -PassThru
           if (-not $p.WaitForExit(240000)) { $p.Kill(); Write-Host "::error::the app did not quit in 240 s"; exit 1 }
           if (-not (Test-Path $out)) { Write-Host "::error::no probe file written — the app never reached its final read"; exit 1 }
@@ -253,6 +262,10 @@ jobs:
             '"export": ?\{[^}]*"ok": ?true'    = 'the offline export failed';
             '"ortLoaded": ?true'               = 'onnxruntime did not load (stems would be unavailable)';
             '"playlistCacheHidden": ?true'     = 'the DL PLAYLIST / DEL cache buttons are showing';
+            '"lockedWithoutAccount": ?true'    = 'with no account the app was still unlocked — this build ships free to everybody';
+            '"gatedBeforeSignIn": ?true'       = 'with no account the sign-in gate did not appear';
+            '"probeUnlock": ?\{[^}]*"ok": ?true' = 'signing in did not unlock the app';
+            '"updater": ?\{[^}]*"started": ?true' = 'the WINDOWS updater did not start — a shipped build like this would never update anybody';
           }
           foreach ($check in $checks.Keys) {
             if (-not (Select-String -Path $out -Pattern $check -Quiet)) { Write-Host "::error::windows probe: $($checks[$check])"; exit 1 }

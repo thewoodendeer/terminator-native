@@ -12,12 +12,12 @@ feed; rollback first, diagnose second.
 | bucket | `terminator-samples` |
 | prefix | `terminator-native/` — a DIFFERENT channel from the Electron app's `terminator-electron/` |
 | Mac feed | `terminator-native/appcast-mac.xml` (Sparkle 2.9.6) |
-| Windows feed | `terminator-native/appcast-win.xml` (WinSparkle) — **not built yet** |
+| Windows feed | `terminator-native/appcast-win.xml` (WinSparkle 0.9.4) |
 | base URL | `https://pub-17b3d7f0dae24aa8b32405d12d43a870.r2.dev/` |
 | version | `TERMINATOR_VERSION_STRING` + `project(VERSION)` in the root `CMakeLists.txt`, bumped together |
 | signing | Developer ID Application: victor borges (**S7QVJJHXJ4**) |
 | notarising | notarytool keychain profile (default `KCC_EXTRACTOR_NOTARY` — the API key covers the whole team) |
-| update signature | EdDSA. The PUBLIC half is `TERMINATOR_SPARKLE_PUBLIC_KEY` in `app/CMakeLists.txt` and lands in the app's Info.plist; the PRIVATE half exists only in this Mac's login keychain |
+| update signature | EdDSA, **the same key pair on both platforms** — one `sign_update`, one thing to back up. The PUBLIC half is `TERMINATOR_SPARKLE_PUBLIC_KEY` in `app/CMakeLists.txt`; macOS reads it from the Info.plist, Windows is handed it at runtime (`win_sparkle_set_eddsa_public_key`, which is why WinSparkle is pinned at 0.9.4 — the first release with it). The PRIVATE half exists only in this Mac's login keychain |
 
 **Mac and Windows are separate files on purpose.** Sparkle can serve both platforms from one appcast, and that
 is exactly the arrangement in which a Mac release breaks Windows. Two files, one per platform, same rule as the
@@ -157,8 +157,10 @@ Re-point the appcast at the last known-good version immediately; every minute th
 user pulled into it. Then fix, bump a patch version, and run the whole cycle including the probe.
 
 ## Still owed at Phase 9
-- **Windows**: no installer, no WinSparkle, no `appcast-win.xml` yet. Target = an NSIS installer that honours
-  `/S --force-run --updated` and upgrades IN PLACE (plan 9.4b has the registry GUID and paths).
+- **Windows: the INSTALLER.** The updater itself is in and gated (WinSparkle starts on the CI runner and the
+  probe asserts it), but there is no packaging — no NSIS installer, no `appcast-win.xml` generator, no signed
+  artefact. Target = an NSIS installer that honours `/S --force-run --updated` and upgrades IN PLACE (plan 9.4b
+  has the registry GUID and paths). Building it needs the Windows machine.
 - **9.2** a Windows signing certificate (Mac is signed + notarised; Windows would be SmartScreen-unsigned).
 - **9.4b THE HANDOVER**: the bundle-id switch, and the drill — install a real 2.2.4 from the live feed, point it
   at a STAGING feed carrying 3.0.0, confirm it swaps, relaunches native, finds every project, and then updates

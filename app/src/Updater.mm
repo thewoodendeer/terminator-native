@@ -1,5 +1,10 @@
 // Updater.mm — the Sparkle side of Updater.h. Objective-C++ because Sparkle is an Objective-C framework; this
 // is the ONLY .mm in the app, and nothing outside this file knows Sparkle exists.
+//
+// APPLE ONLY — app/CMakeLists.txt compiles this file on macOS and Updater.cpp everywhere else. It used to be
+// compiled on Windows too and happened to work, because MSVC treats an unknown extension as C++ and every line
+// of Objective-C here sits behind TERMINATOR_HAS_SPARKLE. That is luck, not design: the first `@interface`
+// written outside the guard would have broken the Windows build for a reason nobody would guess from the error.
 #include "Updater.h"
 
 #include <juce_core/juce_core.h>
@@ -127,28 +132,4 @@ Updater::Status Updater::status() noexcept
 
 } // namespace terminator::app
 
-#else // no Sparkle in this build
-
-namespace terminator::app
-{
-struct Updater::Impl
-{
-};
-Updater::Updater() = default;
-Updater::~Updater() = default;
-bool Updater::isRunning() const noexcept
-{
-    return false;
-}
-void Updater::checkForUpdatesNow() {}
-bool Updater::available() noexcept
-{
-    return false;
-}
-Updater::Status Updater::status() noexcept
-{
-    return {};
-}
-} // namespace terminator::app
-
-#endif
+#endif // TERMINATOR_HAS_SPARKLE
