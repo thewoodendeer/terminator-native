@@ -46,6 +46,11 @@ jobs:
         with:
           path: third_party/.tools-cache
           key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+      - name: Cache Sparkle (the macOS updater — pinned, cmake/Sparkle.cmake)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.sparkle-cache
+          key: sparkle-mac-${{ hashFiles('cmake/Sparkle.cmake') }}
       - name: Configure
         run: cmake --preset mac-release-universal
       - name: Build
@@ -108,6 +113,11 @@ jobs:
         with:
           path: third_party/.tools-cache
           key: tools-${{ runner.os }}-${{ hashFiles('cmake/ProvisionTools.cmake') }}
+      - name: Cache Sparkle (the macOS updater — pinned, cmake/Sparkle.cmake)
+        uses: actions/cache@v4
+        with:
+          path: third_party/.sparkle-cache
+          key: sparkle-mac-${{ hashFiles('cmake/Sparkle.cmake') }}
       - name: Configure
         run: cmake --preset mac-release
       - name: Build
