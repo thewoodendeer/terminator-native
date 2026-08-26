@@ -1768,11 +1768,18 @@ button sending everybody to the product page told an existing owner nothing: sig
 lives where the base URL already does and `TERMINATOR_LICENSE_BASE` still redirects both for testing.
 
 **THE GATE IS ASSERTED FROM BOTH SIDES, because getting this wrong locks him out of his own app.**
-- `probeUnlock` (new): the probe now signs in through the seam BEFORE anything else is measured, and asserts the
-  gate was UP first (`gatedBeforeSignIn`) and LIFTED after (`overlayGone`). It had to: with the gate on, a probe
-  that never signs in is a free-tier app, and the first run measured the paywall instead of the engine —
-  `syncTrigger: false`, `midiMirrored: false`, `triggers: 0`, `menuReachedPage: false`. That is the failure a
-  user would call "the pads stopped working".
+- `probeUnlock` (new): the probe now signs in through the seam BEFORE anything else is measured, and asserts
+  both halves — with NO account the app is the free tier (`lockedWithoutAccount`) and the gate appears
+  (`gatedBeforeSignIn`); after signing in it unlocks (`overlayGone`, `subscribedAfterSignIn`). It had to: with
+  the gate on, a probe that never signs in is a free-tier app, and the first run measured the paywall instead of
+  the engine — `syncTrigger: false`, `midiMirrored: false`, `triggers: 0`, `menuReachedPage: false`. That is the
+  failure a user would call "the pads stopped working".
+- **That check was WRONG on its first real use, in the way this repo keeps re-learning.** It read the overlay as
+  it happened to be AT MOUNT, which passed against the unsigned build and failed against the PACKAGED one —
+  because the signed app could read a probe token an earlier run had left in the Keychain and came up already
+  unlocked. A gate that depends on leftover state on the machine, exactly like the old `mixerPdcPlan` and
+  `prefsWindow` checks. It now SIGNS OUT first, re-runs the LAUNCH-TIME gate decision itself (a page-side seam
+  exposed only when the shell armed the licence seam) and asserts the result — so it measures the build.
 - The seam test grew the two checks its own docstring had been claiming: **`offlineGraceUnlocks` + `offlineFlagTrue`**
   (an unreachable server keeps a paying user unlocked — the promise that matters most now) and **`refusedLocks`
   + `refusedDropsToFreeTier`** (a REACHABLE server that refuses the entitlement really does drop the token). It

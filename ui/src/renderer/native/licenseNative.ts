@@ -93,8 +93,21 @@ export function installLicenseProbe(): void {
     probeUnlock: async (): Promise<AnyRecord> => {
       const out: AnyRecord = {};
       try {
-        // The gate must be UP before we sign in — otherwise "it unlocked" proves nothing.
-        out.gatedBeforeSignIn = !!document.querySelector('.signin-modal');
+        // START FROM NO ACCOUNT, always. Reading the overlay as it happens to be at mount measures whatever
+        // token was left in the OS store by an earlier run, not this build — the packaged app read a leftover
+        // probe token and came up already unlocked, which is the same "gate depends on the machine" mistake as
+        // the old mixerPdcPlan and prefsWindow checks. So: sign out, re-run THE LAUNCH-TIME GATE DECISION
+        // itself, and assert both halves of what a person without an account sees.
+        await native.license({ verb: 'signOut' });
+        await refreshLicense();
+        out.lockedWithoutAccount = isSubscribed() === false;
+        const recheck = (window as any).__terminatorProbeCheckGate;
+        if (typeof recheck === 'function') {
+          await recheck();
+          for (let i = 0; i < 40 && !document.querySelector('.signin-modal'); i++)
+            await new Promise(r => setTimeout(r, 50));
+          out.gatedBeforeSignIn = !!document.querySelector('.signin-modal');
+        }
         const signIn = await native.license({ verb: 'signIn' });
         const nonce = String(signIn?.nonce ?? '');
         await native.license({ verb: 'deepLink', url: `terminator://auth?code=probe&state=${nonce}` });
@@ -104,7 +117,10 @@ export function installLicenseProbe(): void {
           await new Promise(r => setTimeout(r, 50));
         out.overlayGone = !document.querySelector('.signin-modal');
         out.unlocked = (await native.license({ verb: 'status' }))?.unlocked === true;
-        out.ok = out.overlayGone === true && out.unlocked === true;
+        await refreshLicense();
+        out.subscribedAfterSignIn = isSubscribed() === true;
+        out.ok = out.lockedWithoutAccount === true && out.gatedBeforeSignIn === true
+          && out.overlayGone === true && out.unlocked === true && out.subscribedAfterSignIn === true;
       } catch (e: any) {
         out.error = String(e?.message ?? e);
         out.ok = false;

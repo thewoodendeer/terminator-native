@@ -667,6 +667,16 @@ export function ChopperView() {
       setShowSignIn(true);
     }
   };
+  // TEST SEAM (8.5c): the LAUNCH-TIME gate decision, callable again. Whether the sign-in overlay appears is
+  // decided once, at mount — so a probe cannot otherwise prove "with no account, the app gates" without a second
+  // launch, and asserting the overlay's presence AT mount measures whatever token happened to be left on the
+  // machine rather than the build. Exposed only when the shell armed the licence seam (a probe run); a real
+  // launch never sets that flag, so this hook does not exist there.
+  useEffect(() => {
+    if (!(window as any).__terminatorProbeLicense) return;
+    (window as any).__terminatorProbeCheckGate = () => checkLicenseGate();
+    return () => { delete (window as any).__terminatorProbeCheckGate; };
+  }, []);
   useEffect(() => {
     // Electron-only gate. The web build NEVER shows the EULA/Sign-In modals —
     // web access is handled entirely by the outer KCC page + ?sub=1. (The web
