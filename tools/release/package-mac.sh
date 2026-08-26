@@ -22,6 +22,8 @@ APP_SRC="${BUILD_DIR}/app/Terminator_artefacts/Release/Terminator.app"
 OUT_DIR="release/mac"
 IDENTITY="${TERMINATOR_SIGN_IDENTITY:-Developer ID Application: victor borges (S7QVJJHXJ4)}"
 PROFILE="${TERMINATOR_NOTARY_PROFILE:-KCC_EXTRACTOR_NOTARY}"
+# The team the signature must belong to, taken from the identity itself — "Developer ID Application: name (TEAM)".
+TEAM_ID="${TERMINATOR_TEAM_ID:-}"
 DO_BUILD=1
 DO_NOTARIZE=1
 
@@ -36,6 +38,10 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -z "$TEAM_ID" ]; then
+  TEAM_ID="$(printf '%s' "$IDENTITY" | sed -n 's/.*(\([A-Z0-9]*\))$/\1/p')"
+fi
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[31mFAILED: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -93,8 +99,12 @@ lipo -info "$APP_SRC/Contents/MacOS/Terminator" | grep -q "x86_64" \
 
 # ── 3. sign, deepest first ──────────────────────────────────────────────────────────────────────────────────
 # A staging copy, so a re-run never signs an already-signed tree and the build output stays pristine.
-rm -rf "$OUT_DIR"
+# Clear the ARTEFACTS rather than the directory: `rm -rf release/mac` loses a race with Finder whenever that
+# folder is open in a window (Finder rewrites .DS_Store mid-delete and rm reports "Directory not empty"), and
+# it would also throw away an appcast generated beside them. What must be pristine is the app copy itself.
 mkdir -p "$OUT_DIR"
+rm -rf "$OUT_DIR/Terminator.app" "$OUT_DIR/.dmg-stage" "$OUT_DIR/notarize-app.zip"
+find "$OUT_DIR" -maxdepth 1 \( -name 'Terminator-*.dmg' -o -name 'Terminator-*.zip' -o -name 'notary-*.log' \) -delete
 APP="$OUT_DIR/Terminator.app"
 ditto "$APP_SRC" "$APP"
 
@@ -146,9 +156,16 @@ while IFS= read -r d; do BUNDLES+=("$d"); done < <(
   find "$APP" -mindepth 1 -type d \( -name "*.framework" -o -name "*.app" -o -name "*.xpc" -o -name "*.bundle" \) \
     | awk '{print gsub(/\//,"/") "\t" $0}' | sort -rn | cut -f2-)
 
-inside_bundle() { # is $1 inside one of the nested bundles we sign as a unit?
+# A file is covered by a nested bundle's own signature only when that bundle is an .app / .xpc / .bundle — those
+# seal their Contents/MacOS/… themselves. A .framework does NOT: signing `Sparkle.framework/Versions/B` seals
+# the loose helper executables in that directory by hash but leaves their EXISTING signature alone, so
+# `Versions/B/Autoupdate` shipped carrying the Sparkle project's certificate. Apple rejected the whole app for
+# it — "The binary is not signed with a valid Developer ID certificate", twice, once per architecture. Sparkle's
+# own documented recipe signs Autoupdate explicitly for exactly this reason.
+covered_by_bundle() {
   local f="$1" b
   for b in ${BUNDLES+"${BUNDLES[@]}"}; do
+    case "$b" in *.framework) continue ;; esac
     case "$f" in "$b"/*) return 0 ;; esac
   done
   return 1
@@ -157,7 +174,7 @@ inside_bundle() { # is $1 inside one of the nested bundles we sign as a unit?
 loose=0
 while IFS= read -r f; do
   case "$f" in "$APP/Contents/MacOS/Terminator") continue ;; esac
-  inside_bundle "$f" && continue
+  covered_by_bundle "$f" && continue
   file -b "$f" | grep -q "Mach-O" || continue
   codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$IDENTITY" "$f" \
     >/dev/null 2>&1 || die "codesign failed on $f"
@@ -180,6 +197,30 @@ echo "   ${loose} loose binaries + ${#BUNDLES[@]} nested bundle(s) signed · upd
 step "signing the app"
 codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | sed 's/^/   /'
+
+# EVERY Mach-O, OURS. `codesign --verify --deep --strict` passes on a bundle whose nested binaries are validly
+# signed by SOMEBODY ELSE — which is exactly what shipped: Sparkle's own Autoupdate kept the Sparkle project's
+# certificate, `--verify` was happy, and Apple rejected the submission ten minutes later. This asks the question
+# Apple asks: our team, and a secure timestamp (an un-timestamped signature stops verifying the day the
+# certificate expires). Seconds locally against a round trip to the notary service.
+step "checking every binary is ours"
+notmine=0
+while IFS= read -r f; do
+  file -b "$f" | grep -q "Mach-O" || continue
+  info="$(codesign -dv --verbose=4 "$f" 2>&1 || true)"
+  case "$info" in
+    *"TeamIdentifier=$TEAM_ID"*) : ;;
+    *) echo "   NOT OURS: $f"; echo "$info" | grep -E "TeamIdentifier|Authority" | head -2 | sed 's/^/      /'
+       notmine=$((notmine + 1)); continue ;;
+  esac
+  case "$info" in
+    *"Timestamp="*) : ;;
+    *) echo "   NO TIMESTAMP: $f"; notmine=$((notmine + 1)) ;;
+  esac
+done < <(find "$APP" -type f)
+[ "$notmine" -eq 0 ] || die "$notmine binary/binaries are not signed by team $TEAM_ID with a secure timestamp.
+   Apple would reject this submission — fix the signing loop, do not upload."
+echo "   every Mach-O in the bundle is signed by $TEAM_ID with a timestamp"
 
 # ── 4. notarise the app, staple it ──────────────────────────────────────────────────────────────────────────
 ZIP="$OUT_DIR/Terminator-${VERSION}-mac.zip"
