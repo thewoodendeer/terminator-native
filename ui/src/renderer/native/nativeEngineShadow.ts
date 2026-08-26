@@ -1097,7 +1097,15 @@ class NativeEngineShadow {
           const s6 = this.latestSnapshot;
           if (s6?.countInPending) { sawCountIn = true; downbeatSample = Number(s6.countInDownbeatSample ?? 0) || downbeatSample; }
         }
-        await new Promise((res) => setTimeout(res, 150));
+        // WAIT FOR THE CLICKS, DO NOT SLEEP AND HOPE. This used to be a flat 150 ms pause before one final
+        // snapshot read, and the count is the DIFFERENCE of two such reads — so on a machine whose snapshot is
+        // itself ~150 ms stale (a loaded CI runner: 58 xruns and 245 ms of transport drift in the same report)
+        // the last click had happened but was not in the snapshot yet, and at 240 BPM one beat is 250 ms, so
+        // the count came back exactly one short. The count-in was perfect — countInExact true, offset 0 — and
+        // the probe called it a failure. Poll for the expected count instead, bounded: a healthy machine
+        // returns on the first look, and a real miss still fails after the timeout.
+        for (let t = 0; t < 30 && Number(this.latestSnapshot?.metronomeClicks ?? 0) - clicks1 < 4; t++)
+          await new Promise((res) => setTimeout(res, 50));
         const s7 = this.latestSnapshot;
         r.countInRan = sawCountIn && downbeatSample > 0;
         r.countInClicks = Number(s7?.metronomeClicks ?? 0) - clicks1; // 4 count-in + ≥ 1 beat
