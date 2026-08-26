@@ -65,6 +65,25 @@ framework carries its own `Updater.app` and two XPC services, and signing the ex
 file-by-file leaves each bundle's own seal inconsistent: `codesign --verify --deep --strict` then fails and
 Sparkle refuses to launch its updater. Versioned frameworks are signed at `Versions/B`, not at the wrapper.
 
+### The DMG window, and the one permission it needs
+A fresh DMG opens as a plain LIST: the app and an `Applications` alias as two rows of text, with no hint that
+one is meant to be dragged onto the other. That is the first thing somebody sees after paying, so the script
+lays the window out — icon view, 128 px icons, app on the left, Applications on the right — on a read-write
+image, then converts it (the layout lives in the volume's own `.DS_Store`, and a compressed image cannot be
+written to).
+
+Scripting Finder needs **macOS Automation permission**, and without it `osascript` returns
+`Not authorized to send Apple events to Finder. (-1743)`. Grant it once: **System Settings → Privacy & Security
+→ Automation → (your terminal / Claude Code) → Finder**. A refusal is a WARNING, never a build failure — an
+unstyled DMG installs perfectly, and no release should hinge on a cosmetic step.
+
+### Quit Terminator before packaging
+The script refuses to run while a Terminator is open, for two separate reasons, both learned the hard way:
+- `release/mac/Terminator.app` is a real launchable bundle (it is what gets notarised and tested), so
+  re-staging over it while it runs **corrupts the app in front of whoever is using it**;
+- Terminator is **single-instance**, so a second launch hands its arguments to the running copy and exits — a
+  probe started that way writes nothing and proves NOTHING about the build, while looking like a broken app.
+
 ### The smoke test is the whole probe
 Building successfully proves nothing about whether the app RUNS, and **a crashed build cannot self-update** —
 the app dies before its updater runs, so shipping one means every user who takes it needs a manual reinstall.

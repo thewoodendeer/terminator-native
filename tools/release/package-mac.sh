@@ -102,6 +102,14 @@ lipo -info "$APP_SRC/Contents/MacOS/Terminator" | grep -q "x86_64" \
 # Clear the ARTEFACTS rather than the directory: `rm -rf release/mac` loses a race with Finder whenever that
 # folder is open in a window (Finder rewrites .DS_Store mid-delete and rm reports "Directory not empty"), and
 # it would also throw away an appcast generated beside them. What must be pristine is the app copy itself.
+# NEVER WRITE OVER A RUNNING APP. This staging path is a real, launchable bundle — the notarised copy gets
+# opened and tested from here — so `ditto`-ing a new build over it while it is running corrupts the app under
+# somebody's hands mid-session. Ask first.
+if pgrep -f "$OUT_DIR/Terminator.app/Contents/MacOS/Terminator" >/dev/null 2>&1; then
+  die "Terminator is RUNNING from $OUT_DIR/Terminator.app — quit it before packaging.
+   Re-staging over a running bundle corrupts the copy in front of whoever is using it."
+fi
+
 mkdir -p "$OUT_DIR"
 rm -rf "$OUT_DIR/Terminator.app" "$OUT_DIR/.dmg-stage" "$OUT_DIR/notarize-app.zip"
 find "$OUT_DIR" -maxdepth 1 \( -name 'Terminator-*.dmg' -o -name 'Terminator-*.zip' -o -name 'notary-*.log' \) -delete
@@ -270,10 +278,58 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 step "building the DMG"
 DMG="$OUT_DIR/Terminator-${VERSION}.dmg"
 STAGE="$OUT_DIR/.dmg-stage"
-rm -rf "$STAGE"; mkdir -p "$STAGE"
+RW="$OUT_DIR/.rw.dmg"
+VOLNAME="Terminator ${VERSION}"
+rm -rf "$STAGE" "$RW"; mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/Terminator.app"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Terminator ${VERSION}" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+
+# A DMG opens into whatever Finder last decided, which for a fresh image is a plain list — the app and an
+# `Applications` alias as two rows of text, with no hint that one is meant to be dragged onto the other. That is
+# the first thing somebody sees after paying, so the window is laid out here: icon view, both icons positioned,
+# app on the left, Applications on the right.
+# It is done on a READ-WRITE image and then converted, because the layout lives in the volume's own .DS_Store
+# and a compressed image cannot be written to. Scripting Finder needs macOS Automation permission, which a
+# fresh machine will PROMPT for and a CI runner will refuse — so a failure here is a WARNING, never a build
+# failure: an unstyled DMG still installs perfectly, and a release must not hinge on a cosmetic step.
+hdiutil create -volname "$VOLNAME" -srcfolder "$STAGE" -ov -format UDRW "$RW" >/dev/null
+MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" | grep -Eo '/Volumes/.*$' | tail -1)"
+if [ -n "$MOUNT" ]; then
+  if osascript >/dev/null 2>&1 <<APPLESCRIPT
+    tell application "Finder"
+      tell disk "$VOLNAME"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 160, 740, 540}
+        set theViewOptions to the icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 128
+        set position of item "Terminator.app" of container window to {140, 170}
+        set position of item "Applications" of container window to {400, 170}
+        close
+        open
+        update without registering applications
+        delay 1
+        close
+      end tell
+    end tell
+APPLESCRIPT
+  then
+    echo "   window laid out (icon view, app left, Applications right)"
+  else
+    echo "   NOTE: could not lay out the DMG window (Finder automation refused or unavailable)."
+    echo "         The DMG is still correct — it just opens as a plain list. Cosmetic only."
+  fi
+  sync
+  hdiutil detach "$MOUNT" >/dev/null 2>&1 || hdiutil detach "$MOUNT" -force >/dev/null 2>&1 || true
+else
+  echo "   NOTE: could not mount the staging image — shipping an unstyled DMG"
+fi
+rm -f "$DMG"
+hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
+rm -f "$RW"
 rm -rf "$STAGE"
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 if [ "$DO_NOTARIZE" = 1 ]; then
@@ -295,6 +351,16 @@ fi
 # Building successfully proves nothing about whether the app RUNS. This is the SIGNED, STAPLED bundle — the
 # exact bytes a user gets — put through the full app probe: engine on a device, the page rendered, the
 # sequencers, the mixer, the licence bridge. The cheapest check in the cycle, against a rollback.
+# TERMINATOR IS SINGLE-INSTANCE, so a second launch hands its arguments to the copy already running and exits.
+# A probe started that way writes no file and proves NOTHING about the build being shipped — the failure it
+# produces looks like a broken app rather than a busy machine, which is exactly the kind of misleading gate this
+# repo keeps having to unlearn. Say what is actually wrong.
+if pgrep -x Terminator >/dev/null 2>&1 || pgrep -f "Terminator.app/Contents/MacOS/Terminator" >/dev/null 2>&1; then
+  die "another Terminator is already running, so the packaged app cannot be probed: a second launch hands off to
+   the running copy and exits without writing anything. Quit every Terminator and re-run (--no-build is fine —
+   the signed bundle is already staged)."
+fi
+
 step "smoke-testing the packaged app"
 # TERMINATOR_PROBE_UPDATER=1 only makes sense HERE: Sparkle refuses to start in an unsigned build, so this is
 # the one run that can prove the shipped bundle would actually update. Automatic checks are off in that mode —

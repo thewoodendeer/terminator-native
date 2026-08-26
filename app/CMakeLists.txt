@@ -338,6 +338,10 @@ if(APPLE)
                 "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
         COMMAND plutil -replace LSMinimumSystemVersion -string "${CMAKE_OSX_DEPLOYMENT_TARGET}"
                 "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
+        # The Finder / Launchpad / App Store category. The 2.x app declares it and 3.0 did not — a missing one
+        # shows up as "Other" wherever macOS groups apps by kind.
+        COMMAND plutil -replace LSApplicationCategoryType -string "public.app-category.music"
+                "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
         COMMENT "Stamping CFBundleVersion ${TERMINATOR_BUNDLE_VERSION} (${TERMINATOR_VERSION_STRING}), macOS ${CMAKE_OSX_DEPLOYMENT_TARGET}+"
         VERBATIM)
     add_dependencies(TerminatorStampVersion Terminator)
