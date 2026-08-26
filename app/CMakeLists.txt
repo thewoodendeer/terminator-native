@@ -65,6 +65,43 @@ set(TERMINATOR_APPCAST_URL
 set(TERMINATOR_SPARKLE_PUBLIC_KEY "qHRGkAicXqX+lOZgKNI4VnflnE3374jf1WCVWfxZFto="
     CACHE STRING "Public EdDSA key Sparkle verifies downloads against (the private half is keychain-only)")
 
+# THE BUILD NUMBER — what SPARKLE actually compares.
+# JUCE writes `project(VERSION)` (3.0.0) into BOTH CFBundleVersion and CFBundleShortVersionString, which means
+# every 3.0.0-alpha.N ships as "3.0.0": Sparkle compares CFBundleVersion, so no alpha would ever see the next
+# alpha as newer, and the updater would sit there doing nothing without anyone noticing. Nor can the pre-release
+# tag simply be pasted in — "3.0.0.7" (alpha.7) sorts ABOVE the final "3.0.0", so the release would look older
+# than the alpha it replaces.
+# So CFBundleVersion becomes one monotonic INTEGER derived from the one version string, and nothing else:
+#   major*1000000 + minor*10000 + patch*100 + rank, rank = alpha.N -> N | beta.N -> 50+N | rc.N -> 80+N | final -> 99
+# 3.0.0-alpha.0 = 3000000 · 3.0.0-alpha.1 = 3000001 · 3.0.0-beta.0 = 3000050 · 3.0.0 = 3000099 · 3.0.1 = 3000199.
+# CFBundleShortVersionString stays the HUMAN string ("3.0.0-alpha.0") — that is what a person reads in About.
+if(TERMINATOR_VERSION_STRING MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)(-(alpha|beta|rc)\\.([0-9]+))?$")
+    set(_v_major "${CMAKE_MATCH_1}")
+    set(_v_minor "${CMAKE_MATCH_2}")
+    set(_v_patch "${CMAKE_MATCH_3}")
+    set(_v_tag "${CMAKE_MATCH_5}")
+    set(_v_n "${CMAKE_MATCH_6}")
+    if(_v_tag STREQUAL "alpha")
+        math(EXPR _v_rank "${_v_n}")
+    elseif(_v_tag STREQUAL "beta")
+        math(EXPR _v_rank "50 + ${_v_n}")
+    elseif(_v_tag STREQUAL "rc")
+        math(EXPR _v_rank "80 + ${_v_n}")
+    else()
+        set(_v_rank 99) # a final release is newer than every pre-release of the same number
+    endif()
+    if(_v_rank GREATER 99)
+        message(FATAL_ERROR "TERMINATOR_VERSION_STRING '${TERMINATOR_VERSION_STRING}': the pre-release counter is "
+                            "too large — it would collide with the next patch version's build number")
+    endif()
+    math(EXPR TERMINATOR_BUNDLE_VERSION
+         "${_v_major} * 1000000 + ${_v_minor} * 10000 + ${_v_patch} * 100 + ${_v_rank}")
+else()
+    message(FATAL_ERROR "TERMINATOR_VERSION_STRING '${TERMINATOR_VERSION_STRING}' is not "
+                        "MAJOR.MINOR.PATCH[-alpha|beta|rc.N] — the updater's build number is derived from it")
+endif()
+message(STATUS "terminator ${TERMINATOR_VERSION_STRING} · CFBundleVersion ${TERMINATOR_BUNDLE_VERSION}")
+
 set(TERMINATOR_UPDATER_PLIST "")
 if(TERMINATOR_SPARKLE_FOUND)
     set(TERMINATOR_UPDATER_PLIST "  <key>SUFeedURL</key>
@@ -271,6 +308,25 @@ if(TERMINATOR_ORT_FOUND AND TERMINATOR_ORT_RUNTIME_LIB)
                     "${_terminator_ort_dest}/libonnxruntime.dylib"
             VERBATIM)
     endif()
+endif()
+
+# The two version keys, stamped onto the plist JUCE generated (juceaide writes it from `project(VERSION)`, and
+# there is no juce_add_gui_app argument for these two separately). POST_BUILD, so it happens after the plist
+# exists and before anything is signed.
+if(APPLE)
+    add_custom_command(TARGET Terminator POST_BUILD
+        # `plutil -replace` rather than PlistBuddy Set/Add: it inserts a key that is not there and overwrites one
+        # that is, so this is idempotent across incremental rebuilds either way.
+        # LSMinimumSystemVersion is not a nicety: without it Sparkle GUESSES the floor (it guesses 10.13) and
+        # offers the update to Macs that cannot launch it — a download, a restart, and a dead app.
+        COMMAND plutil -replace CFBundleVersion -string "${TERMINATOR_BUNDLE_VERSION}"
+                "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
+        COMMAND plutil -replace CFBundleShortVersionString -string "${TERMINATOR_VERSION_STRING}"
+                "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
+        COMMAND plutil -replace LSMinimumSystemVersion -string "${CMAKE_OSX_DEPLOYMENT_TARGET}"
+                "$<TARGET_BUNDLE_CONTENT_DIR:Terminator>/Info.plist"
+        COMMENT "Stamping CFBundleVersion ${TERMINATOR_BUNDLE_VERSION} (${TERMINATOR_VERSION_STRING}), macOS ${CMAKE_OSX_DEPLOYMENT_TARGET}+"
+        VERBATIM)
 endif()
 
 # SPARKLE (Phase 9.1) rides in Contents/Frameworks like any other embedded framework.

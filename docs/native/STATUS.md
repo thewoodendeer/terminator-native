@@ -1799,6 +1799,27 @@ and the app's Info.plist. **Lose it and no installed copy of 3.0 can ever be upd
 up — the how is in RELEASE-CYCLES-NATIVE.md, which is now a real runbook (the channel, every gate and why it
 exists, the upload order, the rollback rule, and what is still owed).
 
+**AND THE FEED — `tools/release/appcast-mac.sh`** (also uploads nothing). Two more bugs it forced out, both of
+which would have shipped an updater that quietly never worked:
+- **Every pre-release would have advertised the same version.** JUCE writes `project(VERSION)` into
+  CFBundleVersion, which is what Sparkle COMPARES — so `3.0.0-alpha.0` and `3.0.0-alpha.1` were both "3.0.0" and
+  no alpha could ever see the next one as newer. CFBundleVersion is now a monotonic integer derived from the one
+  version string (`major*1000000 + minor*10000 + patch*100 + rank`; alpha.N → N, beta.N → 50+N, rc.N → 80+N,
+  final → 99), so `3.0.0-alpha.0` = **3000000** and the final 3.0.0 = 3000099. Pasting the tag in would not have
+  worked either — "3.0.0.7" sorts ABOVE the final "3.0.0". No second number to keep in sync; the packaging
+  script asserts the stamp landed.
+- **The bundle declared no minimum macOS, so Sparkle GUESSED 10.13** against a build that needs 12.0 — it would
+  have offered old Macs a download, a restart and a dead app. `LSMinimumSystemVersion` is stamped from the
+  deployment target, and the appcast script asserts the feed matches it.
+The script also refuses to regress the LIVE feed (fetched, not remembered), puts only the zip in the feed (the
+DMG is the human download), and asserts the EdDSA signature, the enclosure URL and that the URL is not in the
+Electron channel. Generated locally for `3.0.0-alpha.0`: one signed item, `sparkle:version 3000000`,
+`minimumSystemVersion 12.0`.
+
+**NOTHING HAS BEEN PUBLISHED** (2026-08-25, his instruction). No R2 upload, no push. The feed URL returns 404 —
+the appcast script checked and said so. Notarisation is a submission to Apple that stamps the local artefact; it
+puts nothing in front of anyone. `release/` is gitignored.
+
 **Gates:** mac-debug 0 new warnings · ctest **419/419** (1 skipped: the htdemucs fixture) · clang-format clean ·
 mac-release-universal lipo `x86_64 arm64` · the PACKAGED, notarised app PROBE OK.
 **Still owed at Phase 9:** Windows (no installer, no WinSparkle, no `appcast-win.xml`), 9.2's Windows signing

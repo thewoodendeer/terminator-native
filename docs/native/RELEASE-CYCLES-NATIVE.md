@@ -80,6 +80,35 @@ can prove the shipped bundle would ever update anybody.
 (`pluginHosted: true` — the entitlement doing its job) and `updater: {started: true}`;
 zip **160,741,583 B**, DMG **179,435,184 B**.
 
+## Mac — the appcast
+
+```
+tools/release/appcast-mac.sh
+```
+
+Run it AFTER the packaging script. It writes `release/mac/appcast-mac.xml` and **uploads nothing**.
+
+- The version it advertises comes out of the PACKAGED BUNDLE, never out of a variable: what a user's copy
+  compares against is the `CFBundleVersion` in the app they already have.
+- **`CFBundleVersion` is a monotonic integer, not the marketing version.** JUCE writes `project(VERSION)` into
+  it, which would make every `3.0.0-alpha.N` ship as "3.0.0" — an updater that can never see one alpha as newer
+  than another, silently. `app/CMakeLists.txt` derives
+  `major*1000000 + minor*10000 + patch*100 + rank` (alpha.N → N · beta.N → 50+N · rc.N → 80+N · final → 99)
+  from the ONE version string and stamps it POST_BUILD, so there is no second number to drift. The pre-release
+  tag cannot simply be pasted in: "3.0.0.7" sorts ABOVE the final "3.0.0". `CFBundleShortVersionString` stays
+  the human string, which is what the update dialog shows.
+  3.0.0-alpha.0 = **3000000** · alpha.1 = 3000001 · beta.0 = 3000050 · 3.0.0 = 3000099 · 3.0.1 = 3000199.
+- **It refuses to regress the live feed**, checked by fetching the feed itself rather than trusting memory: a
+  build number the live feed has already passed reaches nobody, and neither does a repeated one.
+- **Only the zip goes into the feed.** The DMG is the human download from the website; a DMG in the same folder
+  would give Sparkle a second enclosure for the same version.
+- It then asserts the generated XML says what it must: the right `sparkle:version`, the human
+  `shortVersionString`, an `edSignature` (without one every client refuses the download and none says why), the
+  right enclosure URL, that the URL is NOT in the Electron channel, that `minimumSystemVersion` matches the
+  bundle's own `LSMinimumSystemVersion` — Sparkle GUESSES that floor when the plist omits it, and it guessed
+  **10.13** against a build that needs 12.0, i.e. it would have offered old Macs a download, a restart and a
+  dead app — and that the file parses.
+
 ## Before any build reaches a user
 - **A SOAK**: `TERMINATOR_PROBE_SOAK=600 tools/ci/probe-app.sh <the PACKAGED binary>` — ten minutes of the app
   PLAYING, reporting what resident memory did (it fails past 20 MB/min of sustained growth). A leak in the play

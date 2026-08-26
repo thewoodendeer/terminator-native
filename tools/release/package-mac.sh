@@ -67,6 +67,20 @@ case "$VERSION" in
    will not swap it in (plan 9.4b). Re-configure with -DTERMINATOR_BUNDLE_ID=com.terminator.audio." ;;
 esac
 
+# THE BUILD NUMBER SPARKLE COMPARES. JUCE writes `project(VERSION)` into CFBundleVersion, which makes every
+# 3.0.0-alpha.N identical ("3.0.0") — an updater that can never see one alpha as newer than another, silently.
+# app/CMakeLists.txt derives a monotonic integer instead and stamps it POST_BUILD; this is the check that it
+# actually landed on the bundle being shipped.
+BUILD_NUM="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_SRC/Contents/Info.plist")"
+SHORT_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_SRC/Contents/Info.plist")"
+case "$BUILD_NUM" in
+  *.*) die "CFBundleVersion is '$BUILD_NUM' — the POST_BUILD stamp did not run, so this build advertises the
+   same number as every other pre-release of $VERSION and no user would ever be offered it" ;;
+esac
+[ "$SHORT_VER" = "$VERSION" ] || die "CFBundleShortVersionString is '$SHORT_VER' but the build is '$VERSION' —
+   the update dialog would name the wrong version"
+echo "   CFBundleVersion $BUILD_NUM · CFBundleShortVersionString $SHORT_VER"
+
 # BOTH ARCHITECTURES (BUILD-RULES gate 4) — a release that is arm64-only bricks every Intel Mac it reaches.
 lipo -info "$APP_SRC/Contents/MacOS/Terminator" | grep -q "x86_64" \
   && lipo -info "$APP_SRC/Contents/MacOS/Terminator" | grep -q "arm64" \
