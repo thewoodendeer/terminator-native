@@ -74,14 +74,20 @@ if (-not $SkipProbe) {
 
 # ── the installer ─────────────────────────────────────────────────────────────────────────────────────────────
 Step "compiling the installer"
-if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-  Die "makensis is not on PATH — install NSIS (choco install nsis) and reopen the shell"
+# NSIS's installer does not put makensis on PATH, so look where it actually lives before giving up.
+$Nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+if (-not $Nsis) {
+  foreach ($c in @("$env:ProgramFiles\NSIS\makensis.exe", "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) {
+    if (Test-Path $c) { $Nsis = $c; break }
+  }
 }
+if (-not $Nsis) { Die "makensis not found — install NSIS (choco install nsis) or put it on PATH" }
+Write-Host "   makensis: $Nsis"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $Payload = (Resolve-Path $AppDir).Path
 $OutFile = Join-Path (Resolve-Path $OutDir).Path "Terminator-Setup-$Version.exe"
 if (Test-Path $OutFile) { Remove-Item $OutFile }
-makensis /DVERSION="$Version" /DPAYLOAD="$Payload" /DOUTFILE="$OutFile" "tools\release\installer\terminator.nsi"
+& $Nsis /DVERSION="$Version" /DPAYLOAD="$Payload" /DOUTFILE="$OutFile" "tools\release\installer\terminator.nsi"
 if ($LASTEXITCODE -ne 0) { Die "makensis failed" }
 if (-not (Test-Path $OutFile)) { Die "makensis reported success but produced no installer" }
 

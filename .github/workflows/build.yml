@@ -306,7 +306,18 @@ jobs:
           $payload = (Resolve-Path "build/win-release/app/Terminator_artefacts/Release").Path
           New-Item -ItemType Directory -Force -Path "build/installer" | Out-Null
           $out = (Resolve-Path "build/installer").Path + "\Terminator-Setup-$ver.exe"
-          & makensis /DVERSION="$ver" /DPAYLOAD="$payload" /DOUTFILE="$out" "tools/release/installer/terminator.nsi"
+          # NSIS ships on the runner image but is NOT on PATH. Look for it where it actually lives before
+          # falling back to installing it — the same resolution tools/release/package-win.ps1 does.
+          $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $nsis) {
+            foreach ($c in @("$env:ProgramFiles\NSIS\makensis.exe", "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) {
+              if (Test-Path $c) { $nsis = $c; break }
+            }
+          }
+          if (-not $nsis) { choco install nsis -y --no-progress | Out-Null; $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          if (-not (Test-Path $nsis)) { Write-Host "::error::could not find or install makensis"; exit 1 }
+          Write-Host "makensis: $nsis"
+          & $nsis /DVERSION="$ver" /DPAYLOAD="$payload" /DOUTFILE="$out" "tools/release/installer/terminator.nsi"
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed to compile the installer"; exit 1 }
           if (-not (Test-Path $out)) { Write-Host "::error::makensis reported success but produced no installer"; exit 1 }
           Write-Host "installer: $out ($((Get-Item $out).Length) bytes)"
