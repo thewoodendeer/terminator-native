@@ -257,10 +257,16 @@ void LicenseHub::handle(const juce::var& req, Completion complete)
     if (verb == "buy" || verb == "account")
     {
         // Two different destinations for two different people: somebody who does not own it yet goes to the
-        // product page, somebody who does goes to their KCC account. Both open in the OS browser — the session
-        // cookie lives there, and the app must never navigate away from itself.
-        const auto path = verb == "account" ? "/account" : "/terminator";
-        juce::URL(baseUrl() + path).launchInDefaultBrowser();
+        // DOWNLOAD page — it sells it AND hands an owner the DMG/EXE, which is what a person pressing GET
+        // TERMINATOR inside the app actually wants; somebody who does own it goes to their KCC account. Both
+        // open in the OS browser — the session cookie lives there, and the app must never navigate away from
+        // itself.
+        const auto path = verb == "account" ? "/account" : "/terminator/download";
+        // A probe must never open a browser (the `signIn` verb already works this way), but these two URLs are
+        // exactly the kind of thing that rots silently — nobody notices a wrong link until a customer clicks it
+        // — so the verb still ANSWERS with the URL it would have opened, and the self-test checks both.
+        if (fakeMode().isEmpty())
+            juce::URL(baseUrl() + path).launchInDefaultBrowser();
         auto o = obj();
         put(o, "ok", true);
         put(o, "url", baseUrl() + path);

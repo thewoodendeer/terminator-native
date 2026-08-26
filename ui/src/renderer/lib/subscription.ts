@@ -129,7 +129,10 @@ export function goToDesktopDownload(): void { navTopUrl(TERMINATOR_DOWNLOAD_URL)
 /** Buy the $40 lifetime license: same-origin checkout API (cookie session).
  *  401 → sign-in first, back to /terminator after. Resolves to an error text
  *  (or null when the browser is being redirected). */
-export const TERMINATOR_BUY_URL = 'https://killaviccheatcodes.app/terminator';
+// ON DESKTOP "get it" means the DOWNLOAD page, not the product page (his call, 2026-08-25). That page both
+// sells it and hands an owner the DMG/EXE, which is the whole of what somebody pressing GET TERMINATOR inside
+// the app is after — the product page would sell it to them and then leave them looking for the app.
+export const TERMINATOR_BUY_URL = TERMINATOR_DOWNLOAD_URL;
 
 export async function buyLifetime(): Promise<string | null> {
   // DESKTOP: there is no same-origin `/api/...` to POST to — the app is served from the shell, not from KCC —

@@ -76,8 +76,16 @@ export function installLicenseProbe(): void {
         const cloud = await native.cloud({ verb: 'list' }).catch(() => null);
         out.cloudRefusesSignedOut = cloud?.ok === false && cloud?.status === 401;
         out.cloudBridgeOk = typeof t?.cloudPresetsList === 'function' && typeof t?.cloudPresetsSave === 'function';
+        // WHERE THE TWO BUTTONS GO. With the seam armed neither opens a browser, they just answer — so the
+        // destinations are checked rather than trusted. GET TERMINATOR goes to the DOWNLOAD page (it sells it
+        // and hands an owner the DMG/EXE); MY ACCOUNT goes to the KCC account page.
+        if (out.seamArmed) {
+          out.buyUrl = String((await native.license({ verb: 'buy' }).catch(() => null))?.url ?? '');
+          out.accountUrl = String((await native.license({ verb: 'account' }).catch(() => null))?.url ?? '');
+          out.urlsOk = out.buyUrl.endsWith('/terminator/download') && out.accountUrl.endsWith('/account');
+        }
         out.ok = out.bridgeOk === true && out.statusAnswers === true && out.deepLinkRefused !== false
-          && out.cloudBridgeOk === true && out.cloudRefusesSignedOut === true;
+          && out.cloudBridgeOk === true && out.cloudRefusesSignedOut === true && out.urlsOk !== false;
         return out;
       } catch (e: any) {
         out.error = String(e?.message ?? e);

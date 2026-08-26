@@ -1762,6 +1762,15 @@ customer would have hit within a minute of seeing the paywall:
 - **Preferences → ACCOUNT still said the app "runs UNLOCKED whether you sign in or not"** — true yesterday, a
   lie today. It says what the tiers are now.
 
+**GET TERMINATOR GOES TO THE DOWNLOAD PAGE** (his call, 2026-08-25, seen on the real sign-in modal):
+`killaviccheatcodes.app/terminator/download`, not `/terminator`. That page both sells it AND hands an owner the
+DMG/EXE, which is the whole of what somebody pressing GET TERMINATOR *inside the app* is after — the product
+page would sell it to them and then leave them looking for the app. One constant (`TERMINATOR_BUY_URL` is now
+`TERMINATOR_DOWNLOAD_URL`) and one path in the shell's `buy` verb, so the modal, the paywall and Preferences all
+move together. **Both destinations are gated now:** with the seam armed the `buy` / `account` verbs no longer
+open a browser (the `signIn` verb already worked this way) and simply ANSWER with the URL, so the self-test
+asserts `.../terminator/download` and `.../account`. A wrong link is invisible until a customer clicks it.
+
 **ACCOUNT vs BUY are two buttons now** (his call: the KCC account page is `killaviccheatcodes.app/account`). One
 button sending everybody to the product page told an existing owner nothing: signed in → **MY ACCOUNT**
 (`/account`), signed out → **GET TERMINATOR** (`/terminator`). New shell verb `account` beside `buy`, so the URL

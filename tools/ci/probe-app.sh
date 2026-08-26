@@ -210,6 +210,11 @@ if grep -Eq '"uiMode": ?"react"' "$OUT"; then
   grep -Eq '"nonceIsSingleUse": ?true' "$OUT" || { echo "::error::licence self-test: a consumed nonce could be replayed"; exit 1; }
   grep -Eq '"cloudRefusesSignedOut": ?true' "$OUT" || { echo "::error::cloud presets: a call made while signed out was not refused locally — an unauthenticated request went to the KCC endpoint"; exit 1; }
   grep -Eq '"signedOutLocked": ?true' "$OUT" || { echo "::error::licence self-test: SIGN OUT left the device token in place"; exit 1; }
+  LICOBJ="$(grep -Eo '"license": ?\{[^}]*\}' "$OUT" || true)"
+  case "$LICOBJ" in
+    *'"urlsOk"'*) echo "$LICOBJ" | grep -Eq '"urlsOk": ?true' || {
+        echo "::error::GET TERMINATOR / MY ACCOUNT point somewhere unexpected — a wrong link is invisible until a customer clicks it: $LICOBJ"; exit 1; } ;;
+  esac
   echo "licence OK: $(grep -Eo '"licenseSeam": ?\{[^}]*\}' "$OUT")"
   # the Sample Library: tree loaded (4 system folders), /lib/b64/ refuses paths outside the registered roots, and
   # when the library already holds a file the shell served it byte-complete
