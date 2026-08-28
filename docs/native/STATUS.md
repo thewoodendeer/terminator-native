@@ -2047,6 +2047,27 @@ device" from a warning that skipped half the gate into an error.
   all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
   itself at a second rate.
 
+## 8.5d — A TEST RUN NEVER TOUCHES THE KEYCHAIN, 2026-08-25 (found by building the plugin)
+
+Building the plugin meant running the probe against a SECOND, differently-signed binary of the same app — and
+that turned up a real flaw in the licence gate's own test seam.
+
+- **What happened.** A Keychain item belongs to the SIGNATURE that wrote it. The universal-release probe found
+  the item the debug probe had left, could not delete it, and measured the leftover: `probeUnlock` reported
+  `lockedWithoutAccount: false` — i.e. **"this build ships free to everybody"**, about a build that does no such
+  thing. Worse, the next debug run tried to READ that foreign item and macOS raised its "allow access?" dialog,
+  which in a headless run blocks until something kills it: the probe hung twice and left a dialog on screen.
+- **The fix, in the right place.** Giving the seam its own ACCOUNT NAME was never enough — the STORE is shared.
+  A run with `TERMINATOR_LICENSE_FAKE` armed now keeps its credential in a **file in temp** and never opens the
+  Keychain at all. A seam has no business in a real keychain.
+- **And a genuine erase failure now names itself.** `signOut` reports `cleared`, and probe-app.sh turns an
+  uncleared credential into "the OS store refused to erase a credential left by another build — run it again",
+  instead of the terrifying and wrong "this build ships free to everybody". The answer comes from the DELETE's
+  own status, never from a read-back: reading is what raises the dialog.
+- Verified: debug probe **PROBE OK** with `probeUnlock.ok true`, universal-release probe **PROBE OK** with
+  `credentialCleared: true`, ctest **419/419**, RTSan **420/420**, and the Keychain left with no Terminator item
+  at all (his real account was never involved — the seam uses a different one).
+
 ## Phase 11 — PREVIEW: TERMINATOR LOADS IN A DAW (AU + VST3), 2026-08-25 nineteenth session
 
 He asked for a stripped-down plugin to film in Ableton ("it doesn't have to actually work — just look like the

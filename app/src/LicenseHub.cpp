@@ -52,6 +52,20 @@ const char* account()
 {
     return fakeMode().isNotEmpty() ? kAccountProbe : kAccountReal;
 }
+
+/// A TEST RUN KEEPS ITS CREDENTIAL OUT OF THE KEYCHAIN ENTIRELY. Its own account name was not enough: the OS
+/// store is shared, an item belongs to the SIGNATURE that wrote it, and a differently-signed build of this app
+/// reading one it does not own raises the system's "allow access?" dialog — which in a headless run blocks the
+/// process until something kills it (it hung the probe on 2026-08-25, twice, and left a dialog on screen).
+/// A seam has no business in a real keychain, so it gets a file in temp instead.
+juce::File fakeStoreFile()
+{
+    return juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile("terminator-license-probe.json");
+}
+bool usingFakeStore()
+{
+    return fakeMode().isNotEmpty();
+}
 } // namespace
 
 LicenseHub::LicenseHub() = default;
@@ -69,7 +83,7 @@ juce::String LicenseHub::baseUrl()
 
 std::optional<LicenseHub::Stored> LicenseHub::readStored()
 {
-    const auto raw = secretstore::read(account());
+    const auto raw = usingFakeStore() ? fakeStoreFile().loadFileAsString() : secretstore::read(account());
     if (raw.isEmpty())
         return std::nullopt;
     const auto v = juce::JSON::parse(raw);
@@ -85,17 +99,25 @@ std::optional<LicenseHub::Stored> LicenseHub::readStored()
 
 bool LicenseHub::writeStored(const Stored& s)
 {
-    if (!secretstore::available())
+    if (!usingFakeStore() && !secretstore::available())
         return false; // fail closed — the Electron rule, and the reason there is no plaintext fallback
     auto o = obj();
     put(o, "token", s.token);
     put(o, "email", s.email);
     put(o, "lastValidatedAt", static_cast<double>(s.lastValidatedAt));
-    return secretstore::store(account(), juce::JSON::toString(o, true));
+    const auto json = juce::JSON::toString(o, true);
+    if (usingFakeStore())
+        return fakeStoreFile().replaceWithText(json);
+    return secretstore::store(account(), json);
 }
 
 void LicenseHub::clearStored()
 {
+    if (usingFakeStore())
+    {
+        fakeStoreFile().deleteFile();
+        return;
+    }
     secretstore::erase(account());
 }
 
@@ -248,9 +270,15 @@ void LicenseHub::handle(const juce::var& req, Completion complete)
     if (verb == "signOut")
     {
         pendingNonce_.clear();
-        clearStored();
+        const auto cleared = usingFakeStore() ? (fakeStoreFile().deleteFile(), !fakeStoreFile().existsAsFile())
+                                              : secretstore::erase(account());
         auto o = obj();
         put(o, "ok", true);
+        // …and whether the credential is really GONE — the STORE's answer, never a read-back (reading a
+        // foreign item can raise the OS's access dialog and hang a headless run). It can survive when the store
+        // holds one written by a differently-signed build of this app, and a caller that assumed "signed out"
+        // would then be measuring that leftover instead of this build.
+        put(o, "cleared", cleared);
         complete(o);
         return;
     }
@@ -321,7 +349,7 @@ void LicenseHub::handle(const juce::var& req, Completion complete)
             [alive, done]
             {
                 const auto r = checkNow();
-                const auto storeOk = secretstore::available();
+                const auto storeOk = usingFakeStore() || secretstore::available();
                 juce::MessageManager::callAsync(
                     [alive, done, r, storeOk]
                     {

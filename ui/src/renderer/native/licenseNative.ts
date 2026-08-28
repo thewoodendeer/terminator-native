@@ -106,7 +106,11 @@ export function installLicenseProbe(): void {
         // probe token and came up already unlocked, which is the same "gate depends on the machine" mistake as
         // the old mixerPdcPlan and prefsWindow checks. So: sign out, re-run THE LAUNCH-TIME GATE DECISION
         // itself, and assert both halves of what a person without an account sees.
-        await native.license({ verb: 'signOut' });
+        const cleared = await native.license({ verb: 'signOut' });
+        // A credential written by a DIFFERENTLY SIGNED build of this app (debug vs the universal release) can
+        // survive an erase, and everything below would then measure the leftover rather than this build. Report
+        // it so a failure names the real cause instead of "this build ships free to everybody".
+        out.credentialCleared = cleared?.cleared !== false;
         await refreshLicense();
         out.lockedWithoutAccount = isSubscribed() === false;
         const recheck = (window as any).__terminatorProbeCheckGate;

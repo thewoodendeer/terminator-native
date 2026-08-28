@@ -79,6 +79,9 @@ fi
 # unreachable server keeps a paying user unlocked while a REFUSED entitlement locks and puts the gate back.
 if grep -q '"probeUnlock"' "$OUT"; then
   PU="$(grep -o '"probeUnlock": {[^}]*}' "$OUT" || true)"
+  # A credential the OS store would not let this binary delete means the run is measuring a LEFTOVER, not this
+  # build — a different failure entirely, and one that clears itself on the next run.
+  echo "$PU" | grep -Eq '"credentialCleared": ?false' && { echo "::error::the OS store refused to erase a credential left by another build of this app — this run measured that leftover, not this build. Run the probe again: $PU"; exit 1; }
   echo "$PU" | grep -Eq '"lockedWithoutAccount": ?true' || { echo "::error::with NO account the app was still unlocked — this build ships free to everybody: $PU"; exit 1; }
   echo "$PU" | grep -Eq '"gatedBeforeSignIn": ?true' || { echo "::error::with no account the sign-in gate did not appear: $PU"; exit 1; }
   echo "$PU" | grep -Eq '"ok": ?true' || { echo "::error::signing in did not unlock the app — a paying customer could not get in: $PU"; exit 1; }

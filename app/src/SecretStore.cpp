@@ -96,14 +96,20 @@ juce::String read(const juce::String& account)
 
 bool erase(const juce::String& account)
 {
+    // A Keychain item is owned by the SIGNATURE that created it, so a differently-signed build of the same app
+    // (debug vs the universal release, say) can find one it is not allowed to delete — and the caller has to be
+    // told, because everything it measures afterwards would be about that leftover. What it must NOT do is
+    // READ BACK to check: reading a foreign item can raise the OS's own "allow access?" dialog, which in a
+    // headless run (a probe, a CI job) blocks the process until something kills it. The delete's own status is
+    // the answer: only errSecSuccess and errSecItemNotFound mean the credential is gone.
     const void* keys[] = {kSecClass, kSecAttrService, kSecAttrAccount};
     const auto service = cfString(kService);
     const auto accountRef = cfString(account.toRawUTF8());
     const void* values[] = {kSecClassGenericPassword, service.get(), accountRef.get()};
     CFRef<CFDictionaryRef> query(
         CFDictionaryCreate(nullptr, keys, values, 3, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
-    const auto s = SecItemDelete(query.get());
-    return s == errSecSuccess || s == errSecItemNotFound;
+    const auto st = SecItemDelete(query.get());
+    return st == errSecSuccess || st == errSecItemNotFound;
 }
 
 #elif JUCE_WINDOWS
