@@ -48,17 +48,24 @@ juce::File ShellServices::bundledDrumsDir()
                                : juce::File::getCurrentWorkingDirectory().getChildFile(env));
         return d.isDirectory() ? d : juce::File();
     }
+    // Beside THIS BINARY (see WebShell::resolveUiDir): in a plugin the running application is the host.
+    const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
 #if JUCE_MAC
-    const auto d = juce::File::getSpecialLocation(juce::File::currentApplicationFile)
-                       .getChildFile("Contents")
-                       .getChildFile("Resources")
-                       .getChildFile("drums-flac");
+    const juce::File candidates[] = {
+        exe.getParentDirectory().getParentDirectory().getChildFile("Resources").getChildFile("drums-flac"),
+        juce::File::getSpecialLocation(juce::File::currentApplicationFile)
+            .getChildFile("Contents")
+            .getChildFile("Resources")
+            .getChildFile("drums-flac"),
+    };
 #else
-    const auto d = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-                       .getParentDirectory()
-                       .getChildFile("drums-flac");
+    const juce::File candidates[] = {exe.getParentDirectory().getChildFile("drums-flac"),
+                                     exe.getParentDirectory().getChildFile("Resources").getChildFile("drums-flac")};
 #endif
-    return d.isDirectory() ? d : juce::File();
+    for (const auto& d : candidates)
+        if (d.isDirectory())
+            return d;
+    return {};
 }
 
 juce::File ShellServices::dataDir() const

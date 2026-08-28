@@ -12,3 +12,6 @@ target_link_libraries(terminator-render PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags)
 terminator_set_warnings(terminator-render)
+
+# This target IS the process (see engine/CMakeLists.txt — the engine no longer says so for its consumers).
+target_compile_definitions(terminator-render PRIVATE JUCE_STANDALONE_APPLICATION=1)

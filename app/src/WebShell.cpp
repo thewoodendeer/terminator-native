@@ -746,16 +746,27 @@ juce::File WebShell::resolveUiDir()
         const auto d = juce::File::getCurrentWorkingDirectory().getChildFile(env);
         return d.getChildFile("index.html").existsAsFile() ? d : juce::File();
     }
+    // Beside THIS BINARY, not beside the running application: in a plugin the "application" is the host, so
+    // asking for it would send Ableton looking for Terminator's UI inside Ableton. The executable's own bundle
+    // is the right answer for both — Terminator.app/Contents/MacOS/Terminator and
+    // Terminator.vst3/Contents/MacOS/Terminator both sit two levels under Contents.
+    const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
 #if JUCE_MAC
-    const auto d = juce::File::getSpecialLocation(juce::File::currentApplicationFile)
-                       .getChildFile("Contents")
-                       .getChildFile("Resources")
-                       .getChildFile("ui");
+    const juce::File candidates[] = {
+        exe.getParentDirectory().getParentDirectory().getChildFile("Resources").getChildFile("ui"),
+        juce::File::getSpecialLocation(juce::File::currentApplicationFile)
+            .getChildFile("Contents")
+            .getChildFile("Resources")
+            .getChildFile("ui"),
+    };
 #else
-    const auto d =
-        juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory().getChildFile("ui");
+    const juce::File candidates[] = {exe.getParentDirectory().getChildFile("ui"),
+                                     exe.getParentDirectory().getChildFile("Resources").getChildFile("ui")};
 #endif
-    return d.getChildFile("index.html").existsAsFile() ? d : juce::File();
+    for (const auto& d : candidates)
+        if (d.getChildFile("index.html").existsAsFile())
+            return d;
+    return {};
 }
 
 juce::var WebShell::deviceInfoVar() const

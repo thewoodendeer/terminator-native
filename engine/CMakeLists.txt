@@ -116,8 +116,12 @@ target_compile_definitions(terminator_engine PUBLIC
     # MP3 export: JUCE's LAME encoder drives a `lame` EXECUTABLE (it does not link liblame), so the app stays clear
     # of LAME's LGPL and the binary is a packaging concern, not a linking one.
     JUCE_USE_LAME_AUDIO_FORMAT=1
-    JUCE_STANDALONE_APPLICATION=1
     $<$<BOOL:${TERMINATOR_HAS_ASIO}>:JUCE_ASIO=1>)
+# JUCE_STANDALONE_APPLICATION belongs to the THING BEING BUILT, not to this library: a plugin target gets its
+# own `=0` from JUCE, and a PUBLIC `=1` here collided with it (-Wmacro-redefined, and the plugin would have
+# compiled as if it owned the process). The library itself needs it defined to compile juce_events, so it stays
+# PRIVATE and every executable that links this says what it is.
+target_compile_definitions(terminator_engine PRIVATE JUCE_STANDALONE_APPLICATION=1)
 if(TERMINATOR_HAS_ASIO)
     target_include_directories(terminator_engine PUBLIC "${TERMINATOR_ASIO_SDK_DIR}/common")
 endif()

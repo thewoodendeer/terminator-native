@@ -86,13 +86,19 @@ juce::var ProcessHub::ok(bool okFlag, const juce::String& error)
 
 juce::File ProcessHub::bundledBinDir()
 {
+    // Beside THIS BINARY (see WebShell::resolveUiDir): in a plugin the running application is the host, and
+    // yt-dlp/lame do not live inside Ableton.
+    const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
 #if JUCE_MAC
+    const auto own = exe.getParentDirectory().getParentDirectory().getChildFile("Resources").getChildFile("bin");
+    if (own.isDirectory())
+        return own;
     return juce::File::getSpecialLocation(juce::File::currentApplicationFile)
         .getChildFile("Contents")
         .getChildFile("Resources")
         .getChildFile("bin");
 #else
-    return juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory().getChildFile("bin");
+    return exe.getParentDirectory().getChildFile("bin");
 #endif
 }
 

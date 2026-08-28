@@ -63,6 +63,12 @@ if(TERMINATOR_BUILD_TOOLS)
 endif()
 if(TERMINATOR_BUILD_APP)
     add_subdirectory(app)
+    # Terminator inside a DAW (Phase 11 preview) — OFF by default: it is a second full build of the shell, and
+    # nothing about the shipping app depends on it. -DTERMINATOR_BUILD_PLUGIN=ON to build AU + VST3.
+    option(TERMINATOR_BUILD_PLUGIN "Build the VST3/AU plugin (Phase 11 preview)" OFF)
+    if(TERMINATOR_BUILD_PLUGIN)
+        add_subdirectory(plugin)
+    endif()
 endif()
 if(TERMINATOR_BUILD_TESTS)
     enable_testing()

@@ -390,3 +390,6 @@ if(TERMINATOR_SPARKLE_FOUND)
         COMMENT "Embedding Sparkle ${TERMINATOR_SPARKLE_VERSION} (the updater)"
         VERBATIM)
 endif()
+
+# This target IS the process (see engine/CMakeLists.txt — the engine no longer says so for its consumers).
+target_compile_definitions(Terminator PRIVATE JUCE_STANDALONE_APPLICATION=1)

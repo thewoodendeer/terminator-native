@@ -2047,6 +2047,34 @@ device" from a warning that skipped half the gate into an error.
   all true, and the PDC plan at **288 samples = exactly 6 ms at 48 kHz** — the rate-dependent assertion proving
   itself at a second rate.
 
+## Phase 11 — PREVIEW: TERMINATOR LOADS IN A DAW (AU + VST3), 2026-08-25 nineteenth session
+
+He asked for a stripped-down plugin to film in Ableton ("it doesn't have to actually work — just look like the
+main page"). It does rather more than that: **the audio is real**. `-DTERMINATOR_BUILD_PLUGIN=ON` builds
+`TerminatorPlugin` in **AU + VST3 + Standalone**, off by default.
+
+- **One engine, one UI.** `TerminatorProcessor` owns the same `Engine` the app owns and drives it from the
+  host's `processBlock` — the same call `AudioIO` makes from the device callback — so pads, drums, bass and the
+  mixer render into Ableton's track. The editor hosts the **same `WebShell`**, so it is the real UI over the
+  real bridge, not a mock.
+- **What it is NOT yet** (all Phase 11 proper, and stated in PluginProcessor.h so nobody is misled): no HOST
+  SYNC (Terminator's transport is its own, so its grid does not follow the host's), no parameters/automation,
+  no state saved with the host's set, one stereo bus, and MIDI still arrives through Terminator's own CoreMIDI
+  inputs rather than the host's routing.
+- **Three real bugs it forced out, all fixed in the shared code:**
+  1. `JUCE_STANDALONE_APPLICATION=1` was PUBLIC on `terminator_engine`, so it collided with the `=0` JUCE gives
+     a plugin target (`-Wmacro-redefined`, and the plugin would have compiled believing it owned the process).
+     It is PRIVATE now, and each executable declares what it is.
+  2. **Every bundle lookup asked for the running APPLICATION** — `resolveUiDir`, `bundledDrumsDir`,
+     `bundledBinDir`. Inside a plugin the application is Ableton, so the UI, the drums and yt-dlp would have
+     been looked for inside the host. They all look beside THIS BINARY now, which is right for both.
+  3. JUCE's `COPY_PLUGIN_AFTER_BUILD` runs before our own POST_BUILD steps, so the INSTALLED bundle was the one
+     without the UI in it. The install is ours now, and happens last.
+- **Evidence:** `auval -v aumu Trmn Kllv` → **AU VALIDATION SUCCEEDED**; the Standalone wrapper (the same
+  processor + editor) ran 12 s with the WebView up; the app's own gates are unmoved (ctest **419/419**,
+  PROBE OK).
+- Both bundles carry the UI and the 80 MB drum library, and install to `~/Library/Audio/Plug-Ins/{VST3,Components}`.
+
 ## Phase 8 — 8.6c DONE (DRAG A PAD OUT INTO YOUR DAW), 2026-08-25 nineteenth session
 
 A chop only existed inside the app: to get one into Ableton you exported a folder of stems and went looking for

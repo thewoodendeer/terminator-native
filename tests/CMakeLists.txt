@@ -95,3 +95,6 @@ if(TARGET terminator-render)
     add_test(NAME cli.render.usage COMMAND terminator-render)
     set_tests_properties(cli.render.usage PROPERTIES WILL_FAIL TRUE)
 endif()
+
+# This target IS the process (see engine/CMakeLists.txt — the engine no longer says so for its consumers).
+target_compile_definitions(terminator-tests PRIVATE JUCE_STANDALONE_APPLICATION=1)
